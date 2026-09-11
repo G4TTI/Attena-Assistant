@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Sessão WhatsApp</h1>
+<p class="sub">Conexão do WAHA com a conta do WhatsApp.</p>
+
+<div class="card" hx-get="/ui/session" hx-trigger="load, every 5s" hx-swap="innerHTML">
+  {% include "_session.html" %}
+</div>
+
+<p class="muted">
+  Dashboard nativo do WAHA: <a href="http://localhost:3000/dashboard" target="_blank">localhost:3000/dashboard</a>
+</p>
+
+{% endblock %}

@@ -1,0 +1,19 @@
+{% if hist.error and not hist.messages %}
+  <div class="alert err">Não consegui buscar o histórico: {{ hist.error }}</div>
+{% elif not hist.messages %}
+  <p class="muted">Nenhuma mensagem nesta conversa (ou o WhatsApp ainda não sincronizou o histórico).</p>
+{% else %}
+  {% if hist.error %}
+    <div class="alert err">Mostrando o cache local — falha ao atualizar: {{ hist.error }}</div>
+  {% endif %}
+  {% for m in hist.messages %}
+    <div class="bubble {{ 'me' if m.from_me else 'them' }}">
+      <div>{{ m.text or '—' }}</div>
+      <div class="meta">{{ m.when }}</div>
+    </div>
+  {% endfor %}
+  <div class="muted" style="text-align:center;margin-top:6px">
+    {% if hist.from_cache %}cache local · {{ synced_local }}{% else %}atualizado · {{ synced_local }}{% endif %}
+  </div>
+{% endif %}
+<script>(function(){var c=document.getElementById('chat-scroll');if(c)c.scrollTop=c.scrollHeight;})();</script>

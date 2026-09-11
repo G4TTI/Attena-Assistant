@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="chatwrap">
+  <div class="chat-list-pane">
+    <div class="chat-list-head">
+      <strong>Conversas</strong>
+      <button class="icon-btn ghost" title="Atualizar lista"
+              hx-get="/ui/chats?refresh=1" hx-target="#chat-list" hx-swap="innerHTML">↻</button>
+    </div>
+    <div class="chat-search">
+      <span class="chat-search-icon">🔍</span>
+      <input id="chat-search-input" type="search" placeholder="Pesquisar contato ou conversa"
+             oninput="filterChats(this.value)" autocomplete="off">
+    </div>
+    <div id="chat-list" class="chat-list-scroll"
+         hx-get="/ui/chats" hx-trigger="load">
+      <p class="muted" style="padding:16px">carregando conversas…</p>
+    </div>
+  </div>
+
+  <div id="chat-view" class="chat-pane">
+    <div class="chat-empty">
+      💬<br>
+      Selecione uma conversa à esquerda para ver o histórico<br>
+      e enviar ou agendar uma mensagem.
+    </div>
+  </div>
+</div>
+{% endblock %}

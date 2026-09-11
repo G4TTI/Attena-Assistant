@@ -1,0 +1,45 @@
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: waha-scheduler
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WHATSAPP_DEFAULT_ENGINE: ${WHATSAPP_DEFAULT_ENGINE:-WEBJS}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-admin}
+      # Reinicia a sessão automaticamente quando o container sobe
+      WHATSAPP_RESTART_ALL_SESSIONS: "true"
+    volumes:
+      - ./waha/sessions:/app/.sessions
+
+  app:
+    build: ./app
+    container_name: whatsapp-scheduler
+    restart: unless-stopped
+    ports:
+      - "8090:8000"
+    environment:
+      WAHA_BASE_URL: http://waha:3000
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WAHA_SESSION: ${WAHA_SESSION:-default}
+      TICK_SECONDS: ${TICK_SECONDS:-30}
+      MAX_OVERDUE_MINUTES: ${MAX_OVERDUE_MINUTES:-120}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-America/Sao_Paulo}
+      SEND_JITTER_SECONDS: ${SEND_JITTER_SECONDS:-1.5}
+      DB_PATH: /app/data/app.db
+      TZ: ${DEFAULT_TIMEZONE:-America/Sao_Paulo}
+    volumes:
+      - ./data:/app/data
+      # Codigo montado do host: reiniciar o container aplica mudancas sem rebuild.
+      - ./app/whatsapp_scheduler:/srv/whatsapp_scheduler:ro
+    depends_on:
+      - waha
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -1,0 +1,58 @@
+<div id="schedules-table">
+{% if not rows %}
+  <p class="muted">Nenhum agendamento ainda.</p>
+{% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Destinatário</th>
+        <th>Mensagem</th>
+        <th>Próximo envio</th>
+        <th>Recorrência</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set s = r.s %}
+      <tr>
+        <td>{{ s.recipient_input }}<br><span class="muted">{{ s.chat_id }}</span></td>
+        <td>{{ s.text[:80] }}{% if s.text|length > 80 %}…{% endif %}</td>
+        <td>
+          {% if r.next_dispatch %}
+            {{ r.next_dispatch.scheduled_at_utc | localtime(s.timezone) }}
+            <span class="muted">({{ s.timezone }})</span>
+          {% elif not s.enabled %}
+            <span class="muted">—</span>
+          {% else %}
+            <span class="muted">calculando…</span>
+          {% endif %}
+        </td>
+        <td>{% if s.recurrence %}<code>{{ s.recurrence }}</code>{% else %}<span class="muted">uma vez</span>{% endif %}</td>
+        <td>
+          {% if r.last_dispatch %}
+            <span class="pill {{ r.last_dispatch.status }}">{{ r.last_dispatch.status }}</span>
+            {% if r.last_dispatch.attempts %}<span class="muted"> {{ r.last_dispatch.attempts }}x</span>{% endif %}
+            {% if r.last_dispatch.last_error %}<br><span class="muted" title="{{ r.last_dispatch.last_error }}">{{ r.last_dispatch.last_error[:70] }}…</span>{% endif %}
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td style="white-space:nowrap">
+          {% if s.enabled %}
+          <button class="ghost" title="Enviar agora (teste)"
+                  hx-post="/ui/schedules/{{ s.id }}/run-now" hx-target="#schedules-table" hx-swap="outerHTML">▶</button>
+          <button class="danger" title="Cancelar"
+                  hx-post="/ui/schedules/{{ s.id }}/cancel" hx-target="#schedules-table" hx-swap="outerHTML"
+                  hx-confirm="Cancelar este agendamento?">✕</button>
+          {% else %}
+          <span class="muted">cancelado</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+</div>

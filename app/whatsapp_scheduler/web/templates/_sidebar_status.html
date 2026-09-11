@@ -1,0 +1,10 @@
+{% set status = (session.status if session else None) %}
+{% if session_error %}
+  <span class="dot err"></span> <a href="/sessao">WAHA offline</a>
+{% elif status == "WORKING" %}
+  <span class="dot ok"></span> conectado
+{% elif status in ("SCAN_QR_CODE", "STARTING") %}
+  <span class="dot warn"></span> <a href="/sessao">parear ({{ status|lower }})</a>
+{% else %}
+  <span class="dot err"></span> <a href="/sessao">{{ status or "sessão parada" }}</a>
+{% endif %}

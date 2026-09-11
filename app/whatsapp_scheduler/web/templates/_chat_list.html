@@ -1,0 +1,21 @@
+{% if chats_error %}
+  <div class="alert err" style="margin:12px">{{ chats_error }}</div>
+  <p class="muted" style="padding:0 16px">A sessão precisa estar <b>conectada</b>. Veja em <a href="/sessao">Sessão</a>.</p>
+{% elif not chats %}
+  <p class="muted" style="padding:16px">Nenhuma conversa encontrada.</p>
+{% else %}
+  {% for c in chats %}
+  <button class="chat-item" data-search="{{ (c.name ~ ' ' ~ (c.last_preview or '')) | lower }}"
+          hx-get="/ui/chats/view?chat={{ c.id | urlencode }}"
+          hx-target="#chat-view" hx-swap="innerHTML">
+    <span class="avatar">{{ (c.name or '?')[0] | upper }}{% if c.picture %}<img src="{{ c.picture }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}</span>
+    <span style="min-width:0;flex:1">
+      <span style="display:flex;justify-content:space-between;gap:8px">
+        <span class="name">{{ c.name }}{% if c.is_group %} <span class="muted">· grupo</span>{% endif %}</span>
+        <span class="muted" style="flex-shrink:0">{{ c.last_when }}</span>
+      </span>
+      <span class="muted preview" style="display:block">{% if c.last_from_me %}Você: {% endif %}{{ c.last_preview or '—' }}</span>
+    </span>
+  </button>
+  {% endfor %}
+{% endif %}

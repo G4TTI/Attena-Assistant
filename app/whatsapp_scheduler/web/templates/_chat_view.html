@@ -1,0 +1,56 @@
+{% set is_err = ok and ok.startswith('erro:') %}
+<div class="chat-header">
+  <span class="avatar avatar-md">{{ (chat.name or '?')[0] | upper }}{% if chat.picture %}<img src="{{ chat.picture }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}</span>
+  <div style="min-width:0;flex:1">
+    <strong>{{ chat.name }}</strong>
+    <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78rem">{{ chat_id }}</div>
+  </div>
+  <button class="icon-btn ghost" title="Atualizar histórico"
+          hx-get="/ui/chats/messages?chat={{ chat_id | urlencode }}&refresh=1"
+          hx-target="#chat-scroll" hx-swap="innerHTML">
+    <span class="hide-loading">↻</span><span class="spin">…</span>
+  </button>
+</div>
+
+{% if is_err %}<div class="alert err" style="margin:10px 16px 0">{{ ok[5:] }}</div>
+{% elif ok %}<div class="alert ok" style="margin:10px 16px 0">{{ ok }}</div>{% endif %}
+
+<div id="chat-scroll" class="chat-scroll"
+     hx-get="/ui/chats/messages?chat={{ chat_id | urlencode }}" hx-trigger="load">
+  <p class="muted center-note">Buscando o histórico no WhatsApp… a primeira vez pode levar até 1 minuto.</p>
+</div>
+
+<div class="composer">
+  <form id="form-now" class="composer-row" hx-post="/ui/chats/send" hx-target="#chat-view" hx-swap="innerHTML">
+    <input type="hidden" name="chat" id="composer-chat" value="{{ chat_id }}">
+    <button type="button" class="icon-btn round" title="Agendar esta mensagem" onclick="toggleSchedule()">🕐</button>
+    <textarea id="composer-text" name="text" rows="1" placeholder="Mensagem" required
+              onkeydown="composerKeydown(event)" oninput="autoGrow(this)"></textarea>
+    <button type="submit" class="icon-btn round send" title="Enviar">➤</button>
+  </form>
+
+  <div id="schedule-pop" class="schedule-pop" hidden>
+    <div class="schedule-pop-head">
+      <strong>🕐 Agendar esta mensagem</strong>
+      <button type="button" class="icon-btn ghost" onclick="toggleSchedule()">✕</button>
+    </div>
+    <form hx-post="/ui/chats/schedule" hx-target="#chat-view" hx-swap="innerHTML"
+          hx-include="#composer-text,#composer-chat">
+      <div class="row">
+        <div>
+          <label for="cv_send_at">Quando</label>
+          <input id="cv_send_at" type="datetime-local" name="send_at" required>
+        </div>
+        <div>
+          <label for="cv_rec">Recorrência</label>
+          <input id="cv_rec" name="recurrence" list="reclist" placeholder="vazio = uma vez">
+          <datalist id="reclist">
+            <option value="daily 09:00"><option value="weekly mon 08:30"><option value="hourly">
+          </datalist>
+        </div>
+      </div>
+      <button type="submit">Confirmar agendamento</button>
+      <span class="muted"> · fuso {{ default_timezone }}</span>
+    </form>
+  </div>
+</div>

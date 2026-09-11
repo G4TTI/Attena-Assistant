@@ -1,0 +1,25 @@
+{% set status = (session.status if session else None) %}
+<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+  <div style="flex:1 1 260px">
+    <h2>Sessão WhatsApp</h2>
+    {% if session_error %}
+      <p><span class="pill failed_status">indisponível</span></p>
+      <p class="muted">{{ session_error }}</p>
+      <button class="ghost" hx-post="/api/session/start" hx-swap="none">Iniciar sessão</button>
+    {% elif status == "WORKING" %}
+      <p><span class="pill working">conectado</span></p>
+      <p class="muted">Pronto para enviar. Número: {{ session.me.id if session.me else "—" }}</p>
+    {% elif status in ("SCAN_QR_CODE", "STARTING") %}
+      <p><span class="pill {{ status|lower }}">{{ status }}</span></p>
+      <p class="muted">Escaneie o QR ao lado no WhatsApp &rarr; Aparelhos conectados.</p>
+    {% else %}
+      <p><span class="pill {{ (status or 'stopped')|lower }}">{{ status or "parada" }}</span></p>
+      <button class="ghost" hx-post="/api/session/start" hx-swap="none">Iniciar sessão</button>
+    {% endif %}
+  </div>
+  {% if status in ("SCAN_QR_CODE", "STARTING") %}
+  <div>
+    <img class="qr" alt="QR code" src="/api/session/qr?ts={{ range(100000)|random }}">
+  </div>
+  {% endif %}
+</div>
