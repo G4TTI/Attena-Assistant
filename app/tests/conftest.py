@@ -50,6 +50,8 @@ class FakeWaha:
         self.messages: list[dict] = []
         self.chats_error: Exception | None = None
         self.messages_error: Exception | None = None
+        self.restart_error: Exception | None = None
+        self.restart_calls = 0
 
     async def get_session_status(self, session: str) -> dict:
         if self.status_error:
@@ -66,6 +68,13 @@ class FakeWaha:
         return b"PNGDATA", "image/png"
 
     async def start_session(self, session: str) -> dict:
+        return {"name": session, "status": "STARTING"}
+
+    async def restart_session(self, session: str) -> dict:
+        self.restart_calls += 1
+        if self.restart_error:
+            raise self.restart_error
+        self.status = "STARTING"
         return {"name": session, "status": "STARTING"}
 
     async def get_chats_overview(

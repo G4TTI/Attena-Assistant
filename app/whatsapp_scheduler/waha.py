@@ -70,6 +70,27 @@ class WahaClient:
         data = resp.json()
         return data if isinstance(data, dict) else {"raw": data}
 
+    async def restart_session(self, session: str) -> dict[str, Any]:
+        """Recupera uma sessão travada (ex: status FAILED após o WhatsApp desconectar).
+
+        Um simples `start` costuma não fazer nada numa sessão já existente em
+        estado ruim — é preciso parar e iniciar de novo (ou usar o endpoint
+        `/restart`, quando o WAHA o suporta) para o engine gerar um QR novo.
+        """
+        try:
+            resp = await self._request("POST", f"/api/sessions/{session}/restart")
+            data = resp.json()
+            return data if isinstance(data, dict) else {"raw": data}
+        except WahaError:
+            pass  # WAHA mais antigo não tem /restart — cai para stop + start
+
+        try:
+            await self._request("POST", f"/api/sessions/{session}/stop")
+        except WahaError:
+            pass  # já parada, ou nunca existiu — segue para o start mesmo assim
+
+        return await self.start_session(session)
+
     async def send_text(self, session: str, chat_id: str, text: str) -> dict[str, Any]:
         resp = await self._request(
             "POST",

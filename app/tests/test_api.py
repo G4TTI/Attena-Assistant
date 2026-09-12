@@ -3,14 +3,17 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeWaha
 from whatsapp_scheduler.main import app
+from whatsapp_scheduler.waha import WahaError
 
 FUTURE = "2999-01-01T09:00:00"
 
 
 @pytest.fixture
 def client():
+    waha = FakeWaha()
     with TestClient(app) as c:
-        c.app.state.waha = FakeWaha()
+        c.app.state.waha = waha
+        c.waha = waha
         yield c
 
 
@@ -79,6 +82,35 @@ def test_session_status_and_qr(client):
     qr = client.get("/api/session/qr")
     assert qr.status_code == 200
     assert qr.content == b"PNGDATA"
+
+
+def test_session_start_restarts_a_failed_session(client):
+    client.waha.status = "FAILED"
+
+    resp = client.post("/api/session/start")
+    assert resp.status_code == 202
+    assert client.waha.restart_calls == 1
+    # o status "no lado do WAHA" já reflete a tentativa de reconexão
+    assert client.get("/api/session").json()["status"] == "STARTING"
+
+
+def test_ui_session_start_renders_updated_panel_with_feedback(client):
+    client.waha.status = "FAILED"
+
+    resp = client.post("/ui/session/start")
+    assert resp.status_code == 200
+    assert client.waha.restart_calls == 1
+    # depois do restart o painel já deve mostrar o novo estado, não a tela travada
+    assert "FAILED" not in resp.text
+    assert "starting" in resp.text.lower()
+
+
+def test_ui_session_start_shows_error_when_waha_unreachable(client):
+    client.waha.restart_error = WahaError("conexão recusada")
+
+    resp = client.post("/ui/session/start")
+    assert resp.status_code == 200
+    assert "conexão recusada" in resp.text
 
 
 def test_index_page_renders(client):

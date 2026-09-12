@@ -124,6 +124,24 @@ async def ui_session(request: Request) -> HTMLResponse:
     )
 
 
+@router.post("/ui/session/start", response_class=HTMLResponse)
+async def ui_session_start(request: Request) -> HTMLResponse:
+    start_error = None
+    try:
+        await request.app.state.waha.restart_session(settings.waha_session)
+    except WahaError as exc:
+        start_error = str(exc)
+    return templates.TemplateResponse(
+        "_session.html",
+        {
+            "request": request,
+            "waha_session": settings.waha_session,
+            "start_error": start_error,
+            **(await _session_ctx(request)),
+        },
+    )
+
+
 @router.get("/ui/schedules", response_class=HTMLResponse)
 async def ui_schedules(request: Request, db: Session = Depends(get_session)) -> HTMLResponse:
     return templates.TemplateResponse("_table.html", _table_ctx(request, db))

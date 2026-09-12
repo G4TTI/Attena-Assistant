@@ -35,6 +35,9 @@ async def session_qr(request: Request) -> Response:
 @router.post("/start", status_code=202)
 async def session_start(request: Request) -> dict:
     try:
-        return await _waha(request).start_session(settings.waha_session)
+        # restart_session cobre tanto "nunca foi iniciada" quanto "travada em
+        # FAILED depois que o WhatsApp desconectou" — um simples start não
+        # recupera uma sessão já existente em estado ruim.
+        return await _waha(request).restart_session(settings.waha_session)
     except WahaError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

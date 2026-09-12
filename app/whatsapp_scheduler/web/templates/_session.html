@@ -5,7 +5,9 @@
     {% if session_error %}
       <p><span class="pill failed_status">indisponível</span></p>
       <p class="muted">{{ session_error }}</p>
-      <button class="ghost" hx-post="/api/session/start" hx-swap="none">Iniciar sessão</button>
+      <button class="ghost" hx-post="/ui/session/start" hx-target="closest .card" hx-swap="innerHTML">
+        <span class="hide-loading">Iniciar sessão</span><span class="spin">iniciando…</span>
+      </button>
     {% elif status == "WORKING" %}
       <p><span class="pill working">conectado</span></p>
       <p class="muted">Pronto para enviar. Número: {{ session.me.id if session.me else "—" }}</p>
@@ -14,7 +16,12 @@
       <p class="muted">Escaneie o QR ao lado no WhatsApp &rarr; Aparelhos conectados.</p>
     {% else %}
       <p><span class="pill {{ (status or 'stopped')|lower }}">{{ status or "parada" }}</span></p>
-      <button class="ghost" hx-post="/api/session/start" hx-swap="none">Iniciar sessão</button>
+      <button class="ghost" hx-post="/ui/session/start" hx-target="closest .card" hx-swap="innerHTML">
+        <span class="hide-loading">Iniciar sessão</span><span class="spin">iniciando…</span>
+      </button>
+    {% endif %}
+    {% if start_error %}
+      <p class="muted" style="color:#c0392b">Não consegui reiniciar a sessão: {{ start_error }}</p>
     {% endif %}
   </div>
   {% if status in ("SCAN_QR_CODE", "STARTING") %}

@@ -38,3 +38,39 @@ async def test_connection_error_becomes_waha_error(waha):
     respx.post(f"{BASE}/api/sendText").mock(side_effect=httpx.ConnectError("no route"))
     with pytest.raises(WahaError):
         await waha.send_text("default", "1@c.us", "x")
+
+
+@respx.mock
+async def test_restart_session_uses_restart_endpoint_when_available(waha):
+    route = respx.post(f"{BASE}/api/sessions/default/restart").mock(
+        return_value=httpx.Response(200, json={"name": "default", "status": "STARTING"})
+    )
+    out = await waha.restart_session("default")
+    assert route.called
+    assert out["status"] == "STARTING"
+
+
+@respx.mock
+async def test_restart_session_falls_back_to_stop_then_start(waha):
+    respx.post(f"{BASE}/api/sessions/default/restart").mock(return_value=httpx.Response(404))
+    stop = respx.post(f"{BASE}/api/sessions/default/stop").mock(return_value=httpx.Response(200, json={}))
+    start = respx.post(f"{BASE}/api/sessions/default/start").mock(
+        return_value=httpx.Response(200, json={"name": "default", "status": "STARTING"})
+    )
+    out = await waha.restart_session("default")
+    assert stop.called
+    assert start.called
+    assert out["status"] == "STARTING"
+
+
+@respx.mock
+async def test_restart_session_recovers_even_if_stop_fails(waha):
+    """Sessão que nunca existiu: /stop falha (404), mas o /start ainda deve rodar."""
+    respx.post(f"{BASE}/api/sessions/default/restart").mock(return_value=httpx.Response(404))
+    respx.post(f"{BASE}/api/sessions/default/stop").mock(return_value=httpx.Response(404))
+    start = respx.post(f"{BASE}/api/sessions/default/start").mock(
+        return_value=httpx.Response(200, json={"name": "default", "status": "STARTING"})
+    )
+    out = await waha.restart_session("default")
+    assert start.called
+    assert out["status"] == "STARTING"
