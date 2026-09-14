@@ -1,58 +1,66 @@
-<div id="schedules-table">
-{% if not rows %}
-  <p class="muted">Nenhum agendamento ainda.</p>
-{% else %}
-  <table>
-    <thead>
-      <tr>
-        <th>Destinatário</th>
-        <th>Mensagem</th>
-        <th>Próximo envio</th>
-        <th>Recorrência</th>
-        <th>Status</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
+<div id="schedules-table" style="display:flex;flex-direction:column;gap:10px">
+  <div class="list-head">
+    <h2 class="section-label" style="margin:0">Lista{% if rows %} · {{ rows | selectattr('s.enabled') | list | length }} ativos{% endif %}</h2>
+    <button class="ghost" hx-get="/ui/schedules" hx-target="#schedules-table" hx-swap="outerHTML">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+      Atualizar
+    </button>
+  </div>
+
+  {% if not rows %}
+    <p class="muted">Nenhum agendamento ainda.</p>
+  {% else %}
+    <div class="sched-list">
       {% for r in rows %}
       {% set s = r.s %}
-      <tr>
-        <td>{{ s.recipient_input }}<br><span class="muted">{{ s.chat_id }}</span></td>
-        <td>{{ s.text[:80] }}{% if s.text|length > 80 %}…{% endif %}</td>
-        <td>
-          {% if r.next_dispatch %}
-            {{ r.next_dispatch.scheduled_at_utc | localtime(s.timezone) }}
-            <span class="muted">({{ s.timezone }})</span>
-          {% elif not s.enabled %}
-            <span class="muted">—</span>
-          {% else %}
-            <span class="muted">calculando…</span>
+      <article class="sched-card">
+        <div class="sc-main">
+          <div class="sc-name">
+            {{ s.recipient_input }}{% if s.chat_id.endswith('@g.us') %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}
+          </div>
+          <div class="sc-id">{{ s.chat_id }}</div>
+          <div class="sc-text">{{ s.text[:80] }}{% if s.text|length > 80 %}…{% endif %}</div>
+          {% if r.last_dispatch and r.last_dispatch.status == "failed" and r.last_dispatch.last_error %}
+          <div class="sc-error">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4.5M12 16h.01"></path></svg>
+            <span>{{ r.last_dispatch.attempts }} tentativa{{ 's' if r.last_dispatch.attempts != 1 }} · {{ r.last_dispatch.last_error }}</span>
+          </div>
           {% endif %}
-        </td>
-        <td>{% if s.recurrence %}<code>{{ s.recurrence }}</code>{% else %}<span class="muted">uma vez</span>{% endif %}</td>
-        <td>
+        </div>
+        <div class="sc-when">
+          <div class="row2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
+            {% if r.next_dispatch %}
+              {{ r.next_dispatch.scheduled_at_utc | localtime(s.timezone) }}
+            {% elif not s.enabled %}
+              <span class="muted">—</span>
+            {% else %}
+              <span class="muted">calculando…</span>
+            {% endif %}
+          </div>
+          <div class="tz">{{ s.timezone }}</div>
+          <div class="rec">{% if s.recurrence %}<code>{{ s.recurrence }}</code>{% else %}<span class="muted">uma vez</span>{% endif %}</div>
+        </div>
+        <div class="sc-actions">
           {% if r.last_dispatch %}
-            <span class="pill {{ r.last_dispatch.status }}">{{ r.last_dispatch.status }}</span>
-            {% if r.last_dispatch.attempts %}<span class="muted"> {{ r.last_dispatch.attempts }}x</span>{% endif %}
-            {% if r.last_dispatch.last_error %}<br><span class="muted" title="{{ r.last_dispatch.last_error }}">{{ r.last_dispatch.last_error[:70] }}…</span>{% endif %}
-          {% else %}
-            <span class="muted">—</span>
+            <span class="pill {{ r.last_dispatch.status }}">{{ r.last_dispatch.status | status_label }}</span>
           {% endif %}
-        </td>
-        <td style="white-space:nowrap">
           {% if s.enabled %}
-          <button class="ghost" title="Enviar agora (teste)"
-                  hx-post="/ui/schedules/{{ s.id }}/run-now" hx-target="#schedules-table" hx-swap="outerHTML">▶</button>
-          <button class="danger" title="Cancelar"
+          <button class="icon-btn sq" title="Enviar agora (teste)"
+                  hx-post="/ui/schedules/{{ s.id }}/run-now" hx-target="#schedules-table" hx-swap="outerHTML">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l12 7.5-12 7.5z"></path></svg>
+          </button>
+          <button class="icon-btn sq cancel" title="Cancelar"
                   hx-post="/ui/schedules/{{ s.id }}/cancel" hx-target="#schedules-table" hx-swap="outerHTML"
-                  hx-confirm="Cancelar este agendamento?">✕</button>
+                  hx-confirm="Cancelar este agendamento?">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          </button>
           {% else %}
           <span class="muted">cancelado</span>
           {% endif %}
-        </td>
-      </tr>
+        </div>
+      </article>
       {% endfor %}
-    </tbody>
-  </table>
-{% endif %}
+    </div>
+  {% endif %}
 </div>

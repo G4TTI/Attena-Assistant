@@ -3,12 +3,16 @@
 <div class="chatwrap">
   <div class="chat-list-pane">
     <div class="chat-list-head">
-      <strong>Conversas</strong>
+      <strong style="font-size:15px">Conversas</strong>
       <button class="icon-btn ghost" title="Atualizar lista"
-              hx-get="/ui/chats?refresh=1" hx-target="#chat-list" hx-swap="innerHTML">↻</button>
+              hx-get="/ui/chats?refresh=1" hx-target="#chat-list" hx-swap="innerHTML">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+      </button>
     </div>
     <div class="chat-search">
-      <span class="chat-search-icon">🔍</span>
+      <span class="chat-search-icon">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+      </span>
       <input id="chat-search-input" type="search" placeholder="Pesquisar contato ou conversa"
              oninput="filterChats(this.value)" autocomplete="off">
     </div>
@@ -20,7 +24,7 @@
 
   <div id="chat-view" class="chat-pane">
     <div class="chat-empty">
-      💬<br>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
       Selecione uma conversa à esquerda para ver o histórico<br>
       e enviar ou agendar uma mensagem.
     </div>

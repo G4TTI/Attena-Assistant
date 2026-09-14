@@ -1,68 +1,96 @@
 {% extends "base.html" %}
 {% block content %}
 
-<h1>Agendamentos</h1>
-<p class="sub">Mensagens que serão enviadas automaticamente no horário marcado.</p>
+<div class="page-head">
+  <div>
+    <h1>Agendamentos</h1>
+    <p class="sub">Mensagens que serão enviadas automaticamente no horário marcado.</p>
+  </div>
+  <div class="meta-live" id="updated-ago">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+    <span data-relative-time>atualizado agora</span>
+  </div>
+</div>
 
 {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
 {% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
 
 <div class="card">
-  <h2>Novo agendamento</h2>
+  <div class="card-hd">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+    <h2>Novo agendamento</h2>
+  </div>
   <form method="post" action="/ui/schedules">
-    <div class="row">
-      <div>
+    <div class="card-bd form-grid">
+      <div class="field">
         <label for="recipient">Destinatário</label>
         <input id="recipient" name="recipient" required placeholder="+55 11 99999-8888 ou 5511...@c.us">
       </div>
-      <div>
+      <div class="field">
         <label for="send_at">Primeiro envio</label>
         <input id="send_at" name="send_at" type="datetime-local" required>
       </div>
+      <div class="field full">
+        <label for="text">Mensagem</label>
+        <textarea id="text" name="text" required maxlength="4096" placeholder="Texto que será enviado..."></textarea>
+      </div>
+      <div class="subgrid">
+        <div class="field">
+          <label for="timezone">Timezone</label>
+          <input id="timezone" name="timezone" list="tzlist" value="{{ default_timezone }}">
+          <datalist id="tzlist">
+            <option value="America/Sao_Paulo"><option value="America/Manaus">
+            <option value="America/Recife"><option value="America/Cuiaba">
+            <option value="UTC"><option value="Europe/Lisbon"><option value="America/New_York">
+          </datalist>
+        </div>
+        <div class="field">
+          <label for="recurrence">Recorrência <b>(vazio = uma vez)</b></label>
+          <input id="recurrence" name="recurrence" list="reclist" placeholder="ex: daily 09:00">
+          <datalist id="reclist">
+            <option value="daily 09:00"><option value="weekly mon 08:30">
+            <option value="monthly 1 12:00"><option value="hourly">
+            <option value="0 9 * * 1-5">
+          </datalist>
+        </div>
+        <div class="field">
+          <label for="max_attempts">Tentativas</label>
+          <input id="max_attempts" name="max_attempts" type="number" min="1" max="10" value="3">
+        </div>
+      </div>
     </div>
-    <label for="text">Mensagem</label>
-    <textarea id="text" name="text" required maxlength="4096" placeholder="Texto que será enviado..."></textarea>
-    <div class="row">
-      <div>
-        <label for="timezone">Timezone</label>
-        <input id="timezone" name="timezone" list="tzlist" value="{{ default_timezone }}">
-        <datalist id="tzlist">
-          <option value="America/Sao_Paulo"><option value="America/Manaus">
-          <option value="America/Recife"><option value="America/Cuiaba">
-          <option value="UTC"><option value="Europe/Lisbon"><option value="America/New_York">
-        </datalist>
-      </div>
-      <div>
-        <label for="recurrence">Recorrência <span class="muted">(vazio = uma vez)</span></label>
-        <input id="recurrence" name="recurrence" list="reclist" placeholder="ex: daily 09:00">
-        <datalist id="reclist">
-          <option value="daily 09:00"><option value="weekly mon 08:30">
-          <option value="monthly 1 12:00"><option value="hourly">
-          <option value="0 9 * * 1-5">
-        </datalist>
-      </div>
-      <div>
-        <label for="max_attempts">Tentativas</label>
-        <input id="max_attempts" name="max_attempts" type="number" min="1" max="10" value="3">
-      </div>
+    <div class="card-ft">
+      <p class="hint">
+        Recorrência aceita <code>cron</code> de 5 campos ou os atalhos
+        <code>daily HH:MM</code>, <code>weekly &lt;dia&gt; HH:MM</code>,
+        <code>monthly &lt;D&gt; HH:MM</code>, <code>hourly</code>.
+      </p>
+      <button type="submit">Agendar</button>
     </div>
-    <p class="muted">
-      Recorrência aceita <code>cron</code> de 5 campos ou os atalhos
-      <code>daily HH:MM</code>, <code>weekly &lt;dia&gt; HH:MM</code>,
-      <code>monthly &lt;D&gt; HH:MM</code>, <code>hourly</code>.
-    </p>
-    <button type="submit">Agendar</button>
   </form>
 </div>
 
-<div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center">
-    <h2 style="margin:0">Lista</h2>
-    <button class="ghost" hx-get="/ui/schedules" hx-target="#schedules-table" hx-swap="outerHTML">Atualizar</button>
-  </div>
-  <div hx-get="/ui/schedules" hx-trigger="every 15s" hx-target="#schedules-table" hx-swap="outerHTML">
-    {% include "_table.html" %}
-  </div>
+<div hx-get="/ui/schedules" hx-trigger="every 15s" hx-target="#schedules-table" hx-swap="outerHTML">
+  {% include "_table.html" %}
 </div>
+
+<script>
+  (function(){
+    var lastUpdate = Date.now();
+    var label = document.querySelector('#updated-ago [data-relative-time]');
+    function tick(){
+      if(!label) return;
+      var s = Math.max(0, Math.round((Date.now() - lastUpdate) / 1000));
+      label.textContent = s < 1 ? 'atualizado agora' : (s < 60 ? 'atualizado há ' + s + 's' : 'atualizado há ' + Math.round(s/60) + ' min');
+    }
+    setInterval(tick, 1000);
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      if(e.target && e.target.id === 'schedules-table'){
+        lastUpdate = Date.now();
+        tick();
+      }
+    });
+  })();
+</script>
 
 {% endblock %}

@@ -32,6 +32,37 @@ def _localtime(dt: datetime | None, tz: str) -> str:
 templates.env.filters["localtime"] = _localtime
 
 
+_STATUS_LABELS = {
+    "pending": "pendente",
+    "processing": "processando",
+    "sent": "enviado",
+    "failed": "falhou",
+    "canceled": "cancelado",
+    "skipped": "ignorado",
+}
+
+
+def _status_label(status: str) -> str:
+    return _STATUS_LABELS.get(status, status)
+
+
+templates.env.filters["status_label"] = _status_label
+
+
+def _engine_label(session: dict | None) -> str:
+    if not isinstance(session, dict):
+        return "—"
+    engine = session.get("engine")
+    if isinstance(engine, dict):
+        return str(engine.get("engine") or engine.get("name") or "—")
+    if isinstance(engine, str) and engine:
+        return engine
+    return "—"
+
+
+templates.env.filters["engine_label"] = _engine_label
+
+
 # --------------------------------------------------------------------------- #
 # Contextos compartilhados
 # --------------------------------------------------------------------------- #
