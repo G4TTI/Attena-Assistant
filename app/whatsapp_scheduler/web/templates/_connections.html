@@ -1,0 +1,77 @@
+{% if missing_config %}
+<div class="notice">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l8.5 15h-17z"></path><path d="M12 10v4M12 17h.01"></path></svg>
+  <span>
+    Integração com Google Agenda não configurada. Defina no <code>.env</code> do servidor:
+    {% for name in missing_config %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+    Veja o <code>.env.example</code> na raiz do projeto para o passo a passo.
+  </span>
+</div>
+{% else %}
+<form method="post" action="/configuracoes/google/connect">
+  <button type="submit">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+    Conectar Google Agenda
+  </button>
+</form>
+{% endif %}
+
+{% if connections %}
+<div style="display:flex;flex-direction:column;gap:16px;margin-top:20px">
+  {% for item in connections %}
+  {% set connection = item.connection %}
+  <div class="card card-pad connection-card">
+    <div class="connection-row">
+      <span class="dot {{ 'ok' if connection.status == 'active' else 'err' }}"></span>
+      <span class="connection-name">Google Agenda{% if connection.account_identifier %} · {{ connection.account_identifier }}{% endif %}</span>
+      <span class="pill {{ 'working' if connection.status == 'active' else 'failed_status' }}" style="margin-left:auto">
+        {{ 'conectado' if connection.status == 'active' else connection.status }}
+      </span>
+    </div>
+
+    {% if connection.status == 'error' and connection.last_sync_error %}
+      <p class="muted" style="color:var(--err);margin:0">{{ connection.last_sync_error }}</p>
+    {% endif %}
+    <p class="muted" style="margin:0">
+      {% if connection.last_sync_at %}Última sincronização: {{ connection.last_sync_at | localtime(default_timezone) }}
+      {% else %}Ainda não sincronizado.{% endif %}
+    </p>
+    {% if not item.has_write_scope %}
+    <div class="notice">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l8.5 15h-17z"></path><path d="M12 10v4M12 17h.01"></path></svg>
+      <span>Esta conta está conectada só com acesso de leitura — criar/editar/excluir eventos no Google Agenda pelo app exige reconectar. Desconecte e conecte de novo (um clique, sem precisar voltar ao Google Cloud Console).</span>
+    </div>
+    {% endif %}
+
+    {% if item.calendars %}
+    <div class="calendar-checklist">
+      {% for cal in item.calendars %}
+      <label class="calendar-check-item">
+        <input type="checkbox" {{ 'checked' if cal.enabled }}
+               hx-post="/ui/configuracoes/calendars/{{ cal.id }}/toggle?enabled={{ 'false' if cal.enabled else 'true' }}"
+               hx-target="#connections" hx-swap="innerHTML">
+        <span class="calendar-dot" style="background:{{ cal.color or 'var(--mut)' }}"></span>
+        {{ cal.name }}
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted" style="margin:0">Nenhum calendário encontrado nesta conta.</p>
+    {% endif %}
+
+    <div style="display:flex;gap:10px">
+      <button class="ghost" hx-post="/ui/configuracoes/connections/{{ connection.id }}/sync"
+              hx-target="#connections" hx-swap="innerHTML">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+        <span class="hide-loading">Sincronizar agora</span><span class="spin">sincronizando…</span>
+      </button>
+      <button class="danger" hx-post="/ui/configuracoes/connections/{{ connection.id }}/disconnect"
+              hx-target="#connections" hx-swap="innerHTML"
+              hx-confirm="Desconectar esta conta? Mensagens futuras ainda pendentes ligadas a eventos dela serão canceladas — o histórico já enviado é preservado.">
+        Desconectar
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

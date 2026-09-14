@@ -1,0 +1,50 @@
+<div id="calendar-grid"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="month-nav">
+    <button type="button" class="icon-btn ghost" title="Mês anterior"
+            hx-get="/ui/calendario/grid?year={{ prev_year }}&month={{ prev_month }}"
+            hx-target="#calendar-grid" hx-swap="outerHTML" hx-push-url="/calendario?year={{ prev_year }}&month={{ prev_month }}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+    </button>
+    <button type="button" class="ghost"
+            hx-get="/ui/calendario/grid?year={{ today_year }}&month={{ today_month }}"
+            hx-target="#calendar-grid" hx-swap="outerHTML" hx-push-url="/calendario?year={{ today_year }}&month={{ today_month }}">Hoje</button>
+    <button type="button" class="icon-btn ghost" title="Próximo mês"
+            hx-get="/ui/calendario/grid?year={{ next_year }}&month={{ next_month }}"
+            hx-target="#calendar-grid" hx-swap="outerHTML" hx-push-url="/calendario?year={{ next_year }}&month={{ next_month }}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg>
+    </button>
+    <h2 class="month-nav-label">{{ month_label }}</h2>
+  </div>
+
+  <div class="month-grid">
+    {% for wd in ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'] %}
+    <div class="month-grid-hd">{{ wd }}</div>
+    {% endfor %}
+    {% for week in weeks %}
+      {% for day in week %}
+      <div class="month-day {{ 'out' if not day.in_month }} {{ 'today' if day.is_today }}"
+           hx-get="/ui/calendario/events/new?date={{ day.date.isoformat() }}&year={{ year }}&month={{ month }}"
+           hx-target="#modal-root">
+        <span class="day-num">{{ day.date.day }}</span>
+        <div class="day-events">
+          {% for chip in day.chips %}
+          <button type="button" class="event-chip {{ 'external' if chip.is_external }}" data-calendar="{{ chip.calendar_key }}"
+                  title="{{ chip.event.title }}"
+                  hx-get="/ui/calendario/events/{{ chip.event.id }}?year={{ year }}&month={{ month }}"
+                  hx-target="#modal-root" onclick="event.stopPropagation()">
+            <span class="chip-time">{{ chip.start_local.strftime('%H:%M') }}</span>
+            <span class="chip-title">{{ chip.event.title }}</span>
+            {% if chip.automation_count %}
+            <svg class="chip-auto" width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
+            {% endif %}
+          </button>
+          {% endfor %}
+        </div>
+        {% if day.chips|length > 3 %}
+        <button type="button" class="day-more" onclick="event.stopPropagation(); toggleDayOverflow(this)">+{{ day.chips|length - 3 }} mais</button>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% endfor %}
+  </div>
+</div>

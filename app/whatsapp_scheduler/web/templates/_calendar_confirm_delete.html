@@ -1,0 +1,30 @@
+<div class="modal-backdrop">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-hd">
+      <h2>Excluir evento</h2>
+      <button type="button" class="icon-btn ghost sm" onclick="closeModal()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <div class="modal-bd">
+      <p style="margin:0">Tem certeza que deseja excluir <strong>{{ event.title }}</strong>?</p>
+      <p class="muted" style="margin:8px 0 0">Automações ligadas a este evento serão canceladas. Mensagens já enviadas continuam no histórico de Agendamentos.</p>
+      {% if is_linked %}
+      <p class="muted" style="margin:8px 0 0">Este evento está sincronizado com o Google Agenda{{ ' — ' ~ linked_calendar.name if linked_calendar }}. "Excluir só da aplicação" deixa o evento no Google (ele volta a aparecer aqui, como somente-leitura, na próxima sincronização).</p>
+      {% endif %}
+    </div>
+    <form hx-post="/ui/calendario/events/{{ event.id }}/delete" hx-target="#modal-root" hx-swap="innerHTML">
+      <input type="hidden" name="year" value="{{ year }}">
+      <input type="hidden" name="month" value="{{ month }}">
+      <div class="modal-ft" style="flex-wrap:wrap">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        {% if is_linked %}
+        <button type="submit" name="also_delete_google" value="false" class="ghost" hx-disabled-elt="this">Excluir só da aplicação</button>
+        <button type="submit" name="also_delete_google" value="true" class="danger" style="background:var(--err);color:#fff;border-color:var(--err)" hx-disabled-elt="this">Excluir dos dois</button>
+        {% else %}
+        <button type="submit" name="also_delete_google" value="false" class="danger" style="background:var(--err);color:#fff;border-color:var(--err)" hx-disabled-elt="this">Excluir evento</button>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>

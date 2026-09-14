@@ -1,4 +1,6 @@
-# WhatsApp Scheduler
+# Attena Assistant
+
+_Versão alfa 1.1_
 
 Agendador de mensagens de WhatsApp com **WAHA** como motor de envio.
 Você cria agendamentos numa página web (ou pela API REST) e um _poller_ interno
@@ -55,13 +57,15 @@ restart`.
 
 ## Usando
 
-A interface tem uma barra lateral com três telas:
+A interface tem uma barra lateral com cinco telas:
 
 | Tela | O que faz |
 |---|---|
 | **📅 Agendamentos** | Cria e lista os agendamentos. Botão ▶ dispara na hora (teste); ✕ cancela. |
 | **💬 Conversas** | Lista as conversas do WhatsApp; abre o histórico de cada uma e permite **enviar agora** ou **agendar** uma mensagem para aquele contato/grupo sem sair da tela. |
 | **🔌 Sessão** | Status da conexão + QR de pareamento. |
+| **🗓️ Calendário** | Agenda de eventos internos e sincronizados do Google Agenda; permite associar uma automação de WhatsApp a qualquer evento. |
+| **⚙️ Configurações** | "Calendários conectados" — conectar/desconectar o Google Agenda, escolher quais calendários sincronizar, sincronizar manualmente. |
 
 ### Conversas
 
@@ -131,6 +135,39 @@ curl http://localhost:8000/api/session                    # status da sessão WA
 - **Reinício abrupto:** dispatches presas em `processing` são recuperadas
   automaticamente.
 
+## Calendário (Google Agenda)
+
+Integração opcional e desligada por padrão — o app funciona normalmente sem
+ela. Quando configurada, permite:
+
+1. Conectar uma conta Google (OAuth oficial, só leitura — escopo
+   `calendar.readonly`; a senha do Google **nunca** passa pelo app).
+2. Escolher quais calendários da conta sincronizar.
+3. Ver os eventos desses calendários na tela **Calendário**, junto com
+   eventos internos.
+4. Associar uma automação de WhatsApp a qualquer evento: destinatário(s),
+   mensagem e uma regra de tempo ("2 horas antes", "30 minutos depois" etc.) —
+   isso cria um agendamento normal na tela **Agendamentos**, usando o mesmo
+   sistema de disparo/retentativa já existente.
+
+A sincronização de um evento **nunca** envia mensagem sozinha — só cria uma
+automação quando o usuário pede explicitamente. Se o evento mudar de horário
+no Google, o agendamento já criado é **recalculado no mesmo lugar** (sem
+duplicar); se o evento for cancelado, qualquer mensagem ainda pendente é
+cancelada, preservando o histórico do que já foi enviado.
+
+Arquitetura preparada para outros provedores (Outlook, Apple/iCloud) via uma
+camada de abstração (`calendar_providers/`), mas só o Google está
+implementado por enquanto.
+
+**Para ativar:** crie um OAuth Client em
+[console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
+(tipo "Web application", redirect URI = `GOOGLE_OAUTH_REDIRECT_URI` abaixo) e
+preencha as variáveis da seção "Google Calendar" no `.env` — veja
+`.env.example` para o passo a passo completo, incluindo o comando para gerar
+`TOKEN_ENCRYPTION_KEY`. Sem essas variáveis, a tela **Configurações** mostra
+exatamente o que falta configurar, em vez de quebrar.
+
 ## Configuração (`.env`)
 
 | Variável | Padrão | Efeito |
@@ -142,6 +179,10 @@ curl http://localhost:8000/api/session                    # status da sessão WA
 | `MAX_OVERDUE_MINUTES` | `120` | Atraso máximo antes de `skipped` |
 | `DEFAULT_TIMEZONE` | `America/Sao_Paulo` | Fuso quando o agendamento não informa um |
 | `SEND_JITTER_SECONDS` | `1.5` | Pausa (com jitter) entre envios consecutivos |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Credenciais OAuth do Google Calendar (opcional) |
+| `GOOGLE_OAUTH_REDIRECT_URI` | `http://localhost:8090/calendario/oauth/callback` | Precisa bater com o registrado no Google Cloud Console |
+| `TOKEN_ENCRYPTION_KEY` | — | Chave Fernet para cifrar os tokens salvos (obrigatória para conectar o Google) |
+| `CALENDAR_SYNC_SECONDS` | `300` | Intervalo da sincronização automática com o Google Calendar |
 
 ## Riscos e limites
 
@@ -210,6 +251,11 @@ whatsapp-scheduler/
         ├── scheduler.py        # materialize_due / dispatch_due / loop
         ├── service.py          # regras de agendamento (API + UI)
         ├── chatsvc.py          # conversas: lista + histórico com cache
-        ├── api/                # /api/schedules, /api/session, /api/chats
-        └── web/                # UI (Jinja2 + htmx): agendamentos, conversas, sessão
+        ├── crypto.py           # cifra (Fernet) dos tokens OAuth salvos
+        ├── calendar_providers/ # abstração de provedor de calendário (base.py + google.py)
+        ├── calendar_service.py # regras de calendário (conectar, automações)
+        ├── calendar_sync.py    # sincronização com o provedor + loop de background
+        ├── calendar_schemas.py # DTOs de leitura (nunca expõem token)
+        ├── api/                # /api/schedules, /api/session, /api/chats, /api/calendar
+        └── web/                # UI (Jinja2 + htmx): agendamentos, conversas, sessão, calendário, configurações
 ```

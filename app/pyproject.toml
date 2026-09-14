@@ -1,7 +1,7 @@
 [project]
-name = "whatsapp-scheduler"
-version = "0.1.0"
-description = "Agendador de mensagens WhatsApp sobre o WAHA"
+name = "attena-assistant"
+version = "1.1.0-alpha"
+description = "Attena Assistant — agendador de mensagens WhatsApp sobre o WAHA, com calendário e automações"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

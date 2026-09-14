@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Configurações</h1>
+    <p class="sub">Calendários conectados e outras preferências.</p>
+  </div>
+</div>
+
+{% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+{% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
+
+<div class="card">
+  <div class="card-hd">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"></path><path d="M13 6.7l1.8-1.8a3.6 3.6 0 0 1 5.1 5.1L18.1 11.8"></path><path d="M11 17.3l-1.8 1.8a3.6 3.6 0 0 1-5.1-5.1L5.9 12.2"></path></svg>
+    <h2>WhatsApp</h2>
+  </div>
+  <div id="session-panel" class="card-bd" hx-get="/ui/session" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    {% include "_session.html" %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hd">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
+    <h2>Calendários</h2>
+  </div>
+  <div class="card-bd" id="connections">
+    {% include "_connections.html" %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hd">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
+    <h2>Preferências</h2>
+  </div>
+  <div class="card-bd">
+    {% include "_preferences.html" %}
+  </div>
+</div>
+
+{% endblock %}

@@ -31,6 +31,11 @@ services:
       SEND_JITTER_SECONDS: ${SEND_JITTER_SECONDS:-1.5}
       DB_PATH: /app/data/app.db
       TZ: ${DEFAULT_TIMEZONE:-America/Sao_Paulo}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8090/calendario/oauth/callback}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      CALENDAR_SYNC_SECONDS: ${CALENDAR_SYNC_SECONDS:-300}
     volumes:
       - ./data:/app/data
       # Codigo montado do host: reiniciar o container aplica mudancas sem rebuild.

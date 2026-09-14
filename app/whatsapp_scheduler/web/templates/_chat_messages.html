@@ -8,7 +8,7 @@
   {% endif %}
   {% for m in hist.messages %}
     <div class="bubble {{ 'me' if m.from_me else 'them' }}">
-      <div>{{ m.text or '—' }}</div>
+      <div class="text">{{ m.text or '—' }}</div>
       <div class="meta">{{ m.when }}</div>
     </div>
   {% endfor %}

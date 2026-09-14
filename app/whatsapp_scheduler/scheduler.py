@@ -21,7 +21,7 @@ from sqlmodel import Session, col, select
 from . import clock
 from .config import settings
 from .db import get_engine
-from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule
+from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule, ScheduleDependency
 from .recurrence import local_to_utc, next_run_utc, normalize_recurrence
 from .waha import WahaClient, WahaError, extract_message_id
 
@@ -31,6 +31,44 @@ logger = logging.getLogger("whatsapp_scheduler.scheduler")
 # --------------------------------------------------------------------------- #
 # Materialização (passo 1)
 # --------------------------------------------------------------------------- #
+def _dependency_gate(db: Session, sch: Schedule) -> str:
+    """"wait" | "proceed" | "abort" — trava genérica de ordem entre schedules
+    encadeados (mensagens de uma automação). Sem dependência = "proceed"
+    sempre (comportamento de hoje, intocado para todo schedule "normal").
+
+    A trava é pelo ESTADO CONFIRMADO da predecessora, não por horário
+    pré-calculado: só libera quando a última dispatch dela chegou a `sent`;
+    se ela terminou (não está mais `enabled`) sem ter sido enviada — falhou,
+    foi pulada por atraso, foi cancelada, ou sua própria cadeia já abortou
+    sem nunca despachar — a cadeia aborta aqui também, em vez de disparar
+    fora de ordem. Isso resolve a cadeia inteira em no máximo N ticks (um
+    elo por tick), porque uma dependência abortada sem nunca ter tido
+    dispatch (`last is None`) ainda cai no ramo `not dep.enabled` assim que
+    ela própria for desativada pelo auto-disable que `_materialize_schedule`
+    já faz hoje para todo schedule de disparo único.
+    """
+    dep = db.exec(
+        select(ScheduleDependency).where(col(ScheduleDependency.schedule_id) == sch.id)
+    ).first()
+    if dep is None:
+        return "proceed"
+
+    dependency = db.get(Schedule, dep.depends_on_schedule_id)
+    if dependency is None:
+        return "abort"  # referência solta, não deveria acontecer — falha segura
+
+    last = db.exec(
+        select(Dispatch)
+        .where(col(Dispatch.schedule_id) == dependency.id)
+        .order_by(col(Dispatch.scheduled_at_utc).desc())
+    ).first()
+    if last is not None and last.status == DispatchStatus.sent:
+        return "proceed"
+    if not dependency.enabled:
+        return "abort"
+    return "wait"
+
+
 def _compute_next_utc(sch: Schedule, last: Dispatch | None, now: datetime) -> datetime | None:
     """Quando deve acontecer a próxima ocorrência desta regra? None = nunca mais."""
     if last is None:
@@ -53,6 +91,15 @@ def _materialize_schedule(db: Session, sch: Schedule, now: datetime) -> Dispatch
         .where(col(Dispatch.status).in_(list(OPEN_STATUSES)))
     ).first()
     if already_open is not None:
+        return None
+
+    gate = _dependency_gate(db, sch)
+    if gate == "wait":
+        return None
+    if gate == "abort":
+        sch.enabled = False
+        sch.updated_at = now
+        db.add(sch)
         return None
 
     last = db.exec(

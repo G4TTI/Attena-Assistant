@@ -1,0 +1,63 @@
+<div class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <h2>{{ 'Editar evento' if mode == 'edit' else 'Novo evento' }}</h2>
+        <p class="sub">{{ 'Evento interno — os campos abaixo são salvos direto no app.' if mode == 'edit' else 'Criado direto no calendário interno, ou também no Google Agenda se você escolher um calendário abaixo.' }}</p>
+      </div>
+      <button type="button" class="icon-btn ghost sm" onclick="closeModal()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <form hx-post="{{ '/ui/calendario/events/' ~ event.id if mode == 'edit' else '/ui/calendario/events' }}"
+          hx-target="#modal-root" hx-swap="innerHTML">
+      <input type="hidden" name="year" value="{{ year }}">
+      <input type="hidden" name="month" value="{{ month }}">
+      <div class="modal-bd">
+        {% if form_error %}<div class="alert err" style="margin-bottom:14px">{{ form_error }}</div>{% endif %}
+        <div class="form-grid">
+          <div class="field full">
+            <label for="ev_title">Título</label>
+            <input id="ev_title" name="title" required value="{{ title_value }}" placeholder="Consulta Leonardo">
+          </div>
+          <div class="field full">
+            <label for="ev_desc">Descrição <b>(opcional)</b></label>
+            <textarea id="ev_desc" name="description" placeholder="Detalhes do evento…">{{ description_value }}</textarea>
+          </div>
+          <div class="field">
+            <label for="ev_date">Data</label>
+            <input id="ev_date" name="date" type="date" required value="{{ date_value }}">
+          </div>
+          <div class="field">
+            <label for="ev_cal">Calendário</label>
+            {% if mode == 'edit' %}
+            <select id="ev_cal" disabled>
+              <option>{{ ('Google Agenda — ' ~ linked_calendar.name) if linked_calendar else 'Calendário interno' }}</option>
+            </select>
+            {% if linked_calendar %}<p class="hint" style="margin-top:4px">Sincronizado com o Google Agenda — não dá pra trocar de calendário depois de criado.</p>{% endif %}
+            {% else %}
+            <select id="ev_cal" name="target_calendar_id">
+              <option value="" {{ 'selected' if not target_calendar_value }}>Calendário interno</option>
+              {% for cal in google_calendars %}
+              <option value="{{ cal.id }}" {{ 'selected' if cal.id == target_calendar_value }}>Google Agenda — {{ cal.name }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+          </div>
+          <div class="field">
+            <label for="ev_start">Horário inicial</label>
+            <input id="ev_start" name="start_time" type="time" required value="{{ start_value }}">
+          </div>
+          <div class="field">
+            <label for="ev_end">Horário final</label>
+            <input id="ev_end" name="end_time" type="time" required value="{{ end_value }}">
+          </div>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button type="submit" hx-disabled-elt="this">{{ 'Salvar alterações' if mode == 'edit' else 'Criar evento' }}</button>
+      </div>
+    </form>
+  </div>
+</div>

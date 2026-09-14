@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     # Banco
     db_path: str = "./data/app.db"
 
+    # Calendários externos — Google Calendar (vazio = integração desligada)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_oauth_redirect_uri: str = "http://localhost:8090/calendario/oauth/callback"
+    # Chave Fernet para cifrar tokens OAuth em repouso. Gerar uma vez com:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # NÃO trocar depois de conectar uma conta — tokens já salvos ficam ilegíveis.
+    token_encryption_key: str = ""
+    calendar_sync_seconds: int = 300
+    calendar_sync_window_past_days: int = 90
+    calendar_sync_window_future_days: int = 365
+    # Quantos dias a partir de hoje a tela de Calendário mostra por padrão
+    # (independente de quanto é sincronizado/guardado).
+    calendar_agenda_default_days: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:

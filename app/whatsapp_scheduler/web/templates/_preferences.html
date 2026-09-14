@@ -1,0 +1,31 @@
+<div id="preferences-panel">
+  {% if pref_ok %}<div class="alert ok">{{ pref_ok }}</div>{% endif %}
+  {% if pref_error %}<div class="alert err">{{ pref_error }}</div>{% endif %}
+  <form hx-post="/configuracoes/preferencias/timezone" hx-target="#preferences-panel" hx-swap="outerHTML">
+    <div class="form-grid">
+      <div class="field">
+        <label for="pref_tz">Fuso horário</label>
+        <select id="pref_tz" name="timezone_name">
+          {% set common_values = common_timezones | map(attribute=0) | list %}
+          {% for value, label in common_timezones %}
+          <option value="{{ value }}" {{ 'selected' if value == current_timezone else '' }}>{{ label }}</option>
+          {% endfor %}
+          {% if current_timezone not in common_values %}
+          <option value="{{ current_timezone }}" selected>{{ current_timezone }}</option>
+          {% endif %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="pref_tz_custom">Outro fuso (IANA) <b>(opcional)</b></label>
+        <input id="pref_tz_custom" name="custom_timezone" placeholder="ex.: Europe/Lisbon">
+      </div>
+    </div>
+    <p class="hint" style="margin-top:10px">
+      Horário atual do app:
+      <strong id="app-clock" hx-get="/ui/configuracoes/relogio" hx-trigger="load, every 5s" hx-target="this" hx-swap="innerHTML">{{ now_local.strftime('%d/%m/%Y — %H:%M:%S') }}</strong>
+    </p>
+    <div style="margin-top:14px">
+      <button type="submit" hx-disabled-elt="this">Salvar fuso horário</button>
+    </div>
+  </form>
+</div>

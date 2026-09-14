@@ -9,7 +9,7 @@ from sqlmodel import Session, col, select
 
 from .clock import utcnow
 from .config import settings
-from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule
+from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule, ScheduleDependency
 from .recipients import normalize_recipient
 from .recurrence import RecurrenceError, normalize_recurrence
 from .scheduler import materialize_one
@@ -35,6 +35,7 @@ def create_schedule(
     recurrence: str | None = None,
     session: str | None = None,
     max_attempts: int = 3,
+    depends_on_schedule_id: str | None = None,
 ) -> Schedule:
     text = (text or "").strip()
     if not text:
@@ -75,7 +76,13 @@ def create_schedule(
     db.commit()
     db.refresh(schedule)
 
-    # Cria já a primeira dispatch para aparecer na lista imediatamente.
+    if depends_on_schedule_id is not None:
+        db.add(ScheduleDependency(schedule_id=schedule.id, depends_on_schedule_id=depends_on_schedule_id))
+        db.commit()
+
+    # Cria já a primeira dispatch para aparecer na lista imediatamente —
+    # se houver dependência ainda não resolvida, materialize_one() não faz
+    # nada este tick (ver scheduler._dependency_gate) e tenta de novo depois.
     materialize_one(db, schedule)
     return schedule
 

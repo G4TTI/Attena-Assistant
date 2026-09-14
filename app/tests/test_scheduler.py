@@ -4,7 +4,7 @@ import pytest
 from sqlmodel import Session, select
 
 from whatsapp_scheduler.db import get_engine
-from whatsapp_scheduler.models import Dispatch, DispatchStatus, Schedule
+from whatsapp_scheduler.models import Dispatch, DispatchStatus, Schedule, ScheduleDependency
 from whatsapp_scheduler.recurrence import utc_to_local
 from whatsapp_scheduler.scheduler import dispatch_due, materialize_due
 from whatsapp_scheduler.waha import WahaError
@@ -152,3 +152,78 @@ def test_recover_stuck_processing(frozen_clock):
     (d,) = dispatches_of(sid)
     assert d.status == DispatchStatus.pending
     assert "presa" in d.last_error
+
+
+# --------------------------------------------------------------------------- #
+# Encadeamento de schedules (ScheduleDependency) — usado por automações de
+# várias mensagens em sequência (calendar_service). Genérico: o scheduler não
+# sabe o que é uma "automação", só que um schedule pode depender de outro.
+# --------------------------------------------------------------------------- #
+def link_dependency(schedule_id: str, depends_on: str) -> None:
+    with Session(get_engine()) as db:
+        db.add(ScheduleDependency(schedule_id=schedule_id, depends_on_schedule_id=depends_on))
+        db.commit()
+
+
+async def test_dependency_gate_holds_successor_until_predecessor_sent(fake_waha, frozen_clock):
+    a_id = make_schedule(minutes_from_now=-5)
+    b_id = make_schedule(minutes_from_now=-5)
+    link_dependency(b_id, a_id)
+
+    materialize_due()
+    sent = await dispatch_due(fake_waha)
+    assert sent == 1
+    assert dispatches_of(b_id) == []  # ainda esperando a predecessora confirmar envio
+
+    materialize_due()
+    sent = await dispatch_due(fake_waha)
+    assert sent == 1
+    (b_dispatch,) = dispatches_of(b_id)
+    assert b_dispatch.status == DispatchStatus.sent
+
+
+async def test_dependency_gate_aborts_successor_when_predecessor_fails_permanently(fake_waha, frozen_clock):
+    fake_waha.send_error = WahaError("permanent")
+    a_id = make_schedule(minutes_from_now=-5, max_attempts=1)
+    b_id = make_schedule(minutes_from_now=-5)
+    link_dependency(b_id, a_id)
+
+    materialize_due()
+    await dispatch_due(fake_waha)  # A falha e esgota (max_attempts=1) -> failed
+    (a_dispatch,) = dispatches_of(a_id)
+    assert a_dispatch.status == DispatchStatus.failed
+
+    # 2 ticks: 1 pra A se auto-desativar (disparo único já terminou), outro
+    # pra B enxergar a predecessora desativada-sem-sucesso e abortar a
+    # cadeia — determinístico independente da ordem de iteração da query.
+    materialize_due()
+    materialize_due()
+
+    with Session(get_engine()) as db:
+        a = db.get(Schedule, a_id)
+        b = db.get(Schedule, b_id)
+        assert a.enabled is False
+        assert b.enabled is False
+    assert dispatches_of(b_id) == []  # nunca chegou a ser despachada, fora de ordem
+
+
+async def test_dependency_gate_cascade_aborts_two_levels_deep(fake_waha, frozen_clock):
+    fake_waha.send_error = WahaError("permanent")
+    a_id = make_schedule(minutes_from_now=-5, max_attempts=1)
+    b_id = make_schedule(minutes_from_now=-5)
+    c_id = make_schedule(minutes_from_now=-5)
+    link_dependency(b_id, a_id)
+    link_dependency(c_id, b_id)
+
+    materialize_due()
+    await dispatch_due(fake_waha)  # só A é despachada (B e C esperam)
+
+    for _ in range(3):  # ticks suficientes pra cascata resolver A -> B -> C
+        materialize_due()
+
+    with Session(get_engine()) as db:
+        assert db.get(Schedule, a_id).enabled is False
+        assert db.get(Schedule, b_id).enabled is False
+        assert db.get(Schedule, c_id).enabled is False
+    assert dispatches_of(b_id) == []
+    assert dispatches_of(c_id) == []

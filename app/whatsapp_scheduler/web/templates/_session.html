@@ -5,7 +5,7 @@
       <div class="status-row"><span class="dot err"></span><strong style="font-size:15px">Indisponível</strong></div>
       <p class="muted" style="margin:12px 0 0">{{ session_error }}</p>
       <div style="margin-top:20px">
-        <button class="ghost" hx-post="/ui/session/start" hx-target="closest .card" hx-swap="innerHTML">
+        <button class="ghost" hx-post="/ui/session/start" hx-target="#session-panel" hx-swap="innerHTML">
           <span class="hide-loading">Iniciar sessão</span><span class="spin">iniciando…</span>
         </button>
       </div>
@@ -19,7 +19,7 @@
         <dt>Status</dt><dd>{{ status }}</dd>
       </dl>
       <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
-        <button class="ghost" hx-post="/ui/session/start" hx-target="closest .card" hx-swap="innerHTML">
+        <button class="ghost" hx-post="/ui/session/start" hx-target="#session-panel" hx-swap="innerHTML">
           <span class="hide-loading">Reiniciar sessão</span><span class="spin">reiniciando…</span>
         </button>
         <a class="ghost-link" href="http://localhost:3000/dashboard" target="_blank" rel="noopener">
@@ -37,7 +37,7 @@
     {% else %}
       <div class="status-row"><span class="dot err"></span><strong style="font-size:15px">{{ status or "Parada" }}</strong></div>
       <div style="margin-top:20px">
-        <button class="ghost" hx-post="/ui/session/start" hx-target="closest .card" hx-swap="innerHTML">
+        <button class="ghost" hx-post="/ui/session/start" hx-target="#session-panel" hx-swap="innerHTML">
           <span class="hide-loading">Iniciar sessão</span><span class="spin">iniciando…</span>
         </button>
       </div>

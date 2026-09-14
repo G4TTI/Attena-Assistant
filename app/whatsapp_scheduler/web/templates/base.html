@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WhatsApp Scheduler</title>
+  <title>Attena Assistant</title>
   <script>
     (function(){
       try{
@@ -161,6 +161,104 @@
     .sched-card .sc-actions { display:flex; align-items:center; gap:8px; justify-self:end; }
     @media (max-width:720px){ .sched-card{ grid-template-columns:1fr; } .sched-card .sc-actions{ justify-self:start; } }
 
+    /* ---------------- Calendário: grade mensal ---------------- */
+    .cal-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .month-nav { display:flex; align-items:center; gap:6px; margin-bottom:14px; }
+    .month-nav-label { margin:0 0 0 8px; font-size:17px; font-weight:600; text-transform:capitalize; }
+    .cal-filter-wrap { position:relative; }
+    .cal-filter-panel { position:absolute; top:calc(100% + 6px); left:0; z-index:20; width:220px; background:var(--card); border:1px solid var(--bd); border-radius:12px; box-shadow:0 12px 34px rgba(11,20,26,.18); padding:8px 10px; }
+
+    .month-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--bd); border:1px solid var(--bd); border-radius:12px; overflow:hidden; }
+    .month-grid-hd { background:var(--head); padding:8px 0; text-align:center; font-size:11px; font-weight:600; color:var(--mut); text-transform:uppercase; letter-spacing:.05em; }
+    .month-day { background:var(--card); min-height:112px; padding:6px 6px 8px; display:flex; flex-direction:column; gap:4px; cursor:pointer; }
+    .month-day:hover { background:var(--bg); }
+    .month-day.out { background:var(--bg); }
+    .month-day.out .day-num { color:var(--mut); }
+    .day-num { font-size:12.5px; font-weight:600; color:var(--fg); align-self:flex-start; width:22px; height:22px; display:flex; align-items:center; justify-content:center; border-radius:50%; flex-shrink:0; }
+    .month-day.today .day-num { background:var(--accent); color:#fff; }
+    .day-events { display:flex; flex-direction:column; gap:2px; flex:1; min-width:0; }
+    .event-chip { display:flex; align-items:center; gap:4px; padding:2px 6px; border-radius:5px; background:var(--soft); border:0; border-left:3px solid var(--accent-d); font:inherit; font-size:11px; line-height:1.5; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; text-align:left; width:100%; }
+    .event-chip:hover { filter:brightness(0.96); }
+    .event-chip.external { border-left-color:#6f8fae; background:color-mix(in oklab, #6f8fae 14%, transparent); }
+    .event-chip:nth-child(n+4) { display:none; }
+    .month-day.expanded .event-chip:nth-child(n+4) { display:flex; }
+    .chip-time { font-weight:600; flex-shrink:0; }
+    .chip-title { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+    .chip-auto { flex-shrink:0; color:var(--accent-d); }
+    .day-more { border:0; background:none; padding:1px 6px; font-size:10.5px; color:var(--mut); cursor:pointer; text-align:left; }
+    .day-more:hover { color:var(--fg); background:none; }
+    @media (max-width:720px){
+      .month-day { min-height:72px; padding:4px; }
+      .chip-title { display:none; }
+      .month-grid-hd { font-size:9.5px; }
+    }
+
+    .badge-source { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; color:var(--accent-d); background:var(--soft); flex-shrink:0; }
+    .badge-source.external { color:#6f8fae; background:color-mix(in oklab, #6f8fae 14%, transparent); }
+    .automation-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:10px 0; border-top:1px solid var(--bd); font-size:13px; }
+    .automation-chip { display:inline-flex; align-items:center; gap:6px; color:var(--fg); }
+    .automation-chip svg { color:var(--mut); flex-shrink:0; }
+
+    /* ---------------- Modal genérico ---------------- */
+    .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:20px; z-index:100; overflow-y:auto; }
+    .modal { background:var(--card); border-radius:14px; box-shadow:0 24px 64px rgba(0,0,0,.4); width:100%; max-width:520px; max-height:90vh; overflow-y:auto; margin:auto; }
+    .modal.modal-lg { max-width:620px; }
+    .modal-hd { padding:18px 22px; border-bottom:1px solid var(--bd); display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .modal-hd h2 { margin:0; font-size:16px; font-weight:600; }
+    .modal-hd .sub { margin-top:4px; }
+    .modal-bd { padding:22px; }
+    .modal-ft { padding:16px 22px; border-top:1px solid var(--bd); display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
+    .modal-ft.spread { justify-content:space-between; }
+
+    /* ---------------- Automação: seletor de contatos (popover flutuante) ---------------- */
+    .contact-picker { display:flex; flex-direction:column; gap:8px; }
+    .contact-search-wrap { position:relative; }
+    .contact-search { position:relative; }
+    .contact-search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--mut); display:flex; pointer-events:none; }
+    .contact-search input { padding-left:34px; }
+    .contact-popover { position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:20; background:var(--card); border:1px solid var(--bd); border-radius:12px; box-shadow:0 12px 34px rgba(11,20,26,.22); max-height:260px; overflow-y:auto; }
+    .contact-option { display:flex; align-items:center; gap:10px; padding:8px 10px; font-size:13.5px; border-bottom:1px solid var(--bd); cursor:pointer; }
+    .contact-option:last-child { border-bottom:0; }
+    .contact-option:hover { background:var(--bg); }
+    .contact-option input[type=checkbox] { width:16px; height:16px; flex-shrink:0; accent-color:var(--accent); }
+    .contact-option .avatar { width:30px; height:30px; font-size:.78rem; }
+    .contact-option-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
+    .contact-option-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .contact-option-phone { color:var(--mut); font-size:11.5px; }
+    .contact-empty { padding:14px 10px; color:var(--mut); font-size:13px; margin:0; }
+    .chip-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .contact-chip { display:inline-flex; align-items:center; gap:4px; padding:4px 6px 4px 10px; border-radius:999px; background:var(--soft); color:var(--accent-d); font-size:12.5px; font-weight:600; }
+    .contact-chip button { background:none; border:0; color:inherit; font-size:15px; line-height:1; padding:0 2px; cursor:pointer; }
+    .automation-preview { background:var(--soft); border-radius:9px; padding:12px 14px; font-size:13px; display:flex; flex-direction:column; gap:4px; }
+    .automation-preview-value { font-weight:600; color:var(--accent-d); }
+    .automation-preview-summary { color:var(--mut); font-size:12px; }
+
+    /* ---------------- Automação: lista de mensagens ---------------- */
+    .message-list { display:flex; flex-direction:column; gap:10px; }
+    .message-block { border:1px solid var(--bd2); border-radius:10px; padding:12px 14px; background:var(--bg); }
+    .message-block-hd { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+    .msg-num { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-size:11px; font-weight:700; flex-shrink:0; }
+    .message-block-hd .field-label { flex:1; font-weight:600; font-size:12px; color:var(--mut); }
+    .message-block textarea { min-height:56px; }
+    .automation-message-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+    .automation-message-list li { display:flex; align-items:baseline; gap:8px; font-size:13px; padding:6px 10px; background:var(--bg); border-radius:8px; }
+    .automation-message-list .msg-num { background:var(--mut); }
+    .automation-message-list .msg-text { white-space:pre-wrap; }
+
+    /* ---------------- Evento: status de sincronização com o Google ---------------- */
+    .sync-status { margin:6px 0 0; font-size:12px; color:var(--mut); }
+    .sync-status.err { color:var(--err); }
+
+    /* ---------------- Configurações ---------------- */
+    .connection-card { display:flex; flex-direction:column; gap:14px; }
+    .connection-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    .connection-name { font-size:14px; font-weight:600; }
+    .calendar-checklist { display:flex; flex-direction:column; gap:2px; }
+    .calendar-check-item { display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid var(--bd); font-size:13.5px; }
+    .calendar-check-item:last-child { border-bottom:0; }
+    .calendar-check-item input[type=checkbox] { width:16px; height:16px; flex-shrink:0; accent-color:var(--accent); }
+    .calendar-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
     /* ---------------- Conversas ---------------- */
     .chatwrap { flex:1; display:flex; min-width:0; height:100vh; }
 
@@ -200,9 +298,10 @@
       background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Cg fill='%238696a0' fill-opacity='0.14'%3E%3Ccircle cx='6' cy='6' r='1.4'/%3E%3Ccircle cx='32' cy='16' r='1.4'/%3E%3Ccircle cx='48' cy='44' r='1.4'/%3E%3Ccircle cx='16' cy='48' r='1.4'/%3E%3Ccircle cx='52' cy='4' r='1.4'/%3E%3C/g%3E%3C/svg%3E");
     }
     .center-note { margin:auto; text-align:center; }
-    .bubble { max-width:min(65%, 480px); padding:7px 10px 8px; font-size:14px; white-space:pre-wrap; word-wrap:break-word; box-shadow:0 1px 1px rgba(0,0,0,.15); border-radius:9px; }
+    .bubble { max-width:min(65%, 480px); padding:7px 10px 8px; font-size:14px; box-shadow:0 1px 1px rgba(0,0,0,.15); border-radius:9px; }
     .bubble.them { align-self:flex-start; background:var(--bub-them); border-top-left-radius:2px; }
     .bubble.me { align-self:flex-end; background:var(--bub-me); border-top-right-radius:2px; }
+    .bubble .text { white-space:pre-wrap; word-wrap:break-word; }
     .bubble .meta { font-size:11px; color:var(--mut); margin-top:2px; text-align:right; }
 
     .composer { border-top:1px solid var(--bd); padding:12px 16px; background:var(--head); position:relative; }
@@ -239,22 +338,26 @@
 <body>
   <div class="layout">
     <nav class="rail">
-      <div class="rail-brand" title="WhatsApp Scheduler">
+      <div class="rail-brand" title="Attena Assistant">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.3 7.3L4 21l1.7-5.7A8 8 0 1 1 21 12z"></path><path d="M12 8.5V12l2.3 1.4"></path></svg>
       </div>
-      <a class="rail-btn {{ 'active' if nav == 'agendamentos' }}" href="/" title="Agendamentos">
+      <a class="rail-btn {{ 'active' if nav == 'calendario' }}" href="/calendario" title="Calendário">
         <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
+      </a>
+      <a class="rail-btn {{ 'active' if nav == 'agendamentos' }}" href="/" title="Agendamentos">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12L19 4.5l-5 15-3-7-7-2.5z"></path><circle cx="17.5" cy="17.5" r="4.7" fill="var(--rail)" stroke-width="1.5"></circle><path d="M17.5 15.6V17.6l1.3.9" stroke-width="1.5"></path></svg>
       </a>
       <a class="rail-btn {{ 'active' if nav == 'conversas' }}" href="/conversas" title="Conversas">
         <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
       </a>
-      <a class="rail-btn {{ 'active' if nav == 'sessao' }}" href="/sessao" title="Sessão">
-        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"></path><path d="M13 6.7l1.8-1.8a3.6 3.6 0 0 1 5.1 5.1L18.1 11.8"></path><path d="M11 17.3l-1.8 1.8a3.6 3.6 0 0 1-5.1-5.1L5.9 12.2"></path></svg>
-      </a>
       <div class="rail-spacer"></div>
       <button type="button" class="rail-btn" title="Alternar tema claro/escuro" onclick="toggleTheme()">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a7 7 0 0 0 10.7 10.7z"></path></svg>
+        <svg id="theme-icon-dark" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a7 7 0 0 0 10.7 10.7z"></path></svg>
+        <svg id="theme-icon-light" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" hidden><circle cx="12" cy="12" r="4.3"></circle><path d="M12 3v2.2M12 18.8V21M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M3 12h2.2M18.8 12H21M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"></path></svg>
       </button>
+      <a class="rail-btn {{ 'active' if nav == 'configuracoes' }}" href="/configuracoes" title="Configurações">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="10" y2="6"></line><circle cx="13" cy="6" r="2"></circle><line x1="16" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="7" y2="12"></line><circle cx="10" cy="12" r="2"></circle><line x1="13" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="13" y2="18"></line><circle cx="16" cy="18" r="2"></circle><line x1="19" y1="18" x2="20" y2="18"></line></svg>
+      </a>
       <div class="rail-status" hx-get="/ui/sidebar-status" hx-trigger="load, every 8s" hx-swap="innerHTML">
         <span class="dot"></span>
       </div>
@@ -264,6 +367,7 @@
       {% block content %}{% endblock %}
     </main>
     {% endblock %}
+    <div id="modal-root"></div>
   </div>
   <script>
     function systemDark(){ return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches; }
@@ -272,10 +376,222 @@
       if(t === 'light' || t === 'dark') return t;
       return systemDark() ? 'dark' : 'light';
     }
+    function updateThemeIcon(){
+      var dark = effectiveTheme() === 'dark';
+      var iconDark = document.getElementById('theme-icon-dark');   // lua: mostrado quando o modo escuro está ativo
+      var iconLight = document.getElementById('theme-icon-light'); // sol: mostrado quando o modo claro está ativo
+      if(iconDark) iconDark.hidden = !dark;
+      if(iconLight) iconLight.hidden = dark;
+    }
     function toggleTheme(){
       var next = effectiveTheme() === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', next);
       try{ localStorage.setItem('theme', next); }catch(e){}
+      updateThemeIcon();
+    }
+    updateThemeIcon();
+
+    /* ---------------- Modal genérico ---------------- */
+    function closeModal(){
+      var root = document.getElementById('modal-root');
+      if(root) root.innerHTML = '';
+    }
+    document.body.addEventListener('click', function(e){
+      if(e.target && e.target.classList && e.target.classList.contains('modal-backdrop')) closeModal();
+    });
+    document.addEventListener('keydown', function(e){
+      if(e.key !== 'Escape') return;
+      var openPopover = document.querySelector('.contact-popover:not([hidden])');
+      if(openPopover){ openPopover.hidden = true; return; }
+      closeModal();
+    });
+
+    /* ---------------- Calendário: expandir dia com muitos eventos ---------------- */
+    function toggleDayOverflow(btn){
+      var cell = btn.closest('.month-day');
+      if(!cell) return;
+      var expanded = cell.classList.toggle('expanded');
+      var hiddenCount = cell.querySelectorAll('.event-chip').length - 3;
+      btn.textContent = expanded ? 'ver menos' : ('+' + hiddenCount + ' mais');
+    }
+
+    /* ---------------- Calendário: filtro de calendários (client-side, localStorage) ---------------- */
+    function toggleCalFilter(){
+      var p = document.getElementById('cal-filter-panel');
+      if(p) p.hidden = !p.hidden;
+    }
+    function applyCalendarFilter(){
+      var hiddenKeys = [];
+      document.querySelectorAll('.cal-filter-checkbox').forEach(function(cb){
+        if(!cb.checked) hiddenKeys.push(cb.getAttribute('data-calendar-key'));
+      });
+      try{ localStorage.setItem('calFilterHidden', JSON.stringify(hiddenKeys)); }catch(e){}
+      document.querySelectorAll('.event-chip').forEach(function(chip){
+        chip.hidden = hiddenKeys.indexOf(chip.getAttribute('data-calendar')) !== -1;
+      });
+    }
+    function restoreCalendarFilterCheckboxes(){
+      var hidden = [];
+      try{ hidden = JSON.parse(localStorage.getItem('calFilterHidden') || '[]'); }catch(e){}
+      document.querySelectorAll('.cal-filter-checkbox').forEach(function(cb){
+        cb.checked = hidden.indexOf(cb.getAttribute('data-calendar-key')) === -1;
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function(){
+      restoreCalendarFilterCheckboxes();
+      applyCalendarFilter();
+    });
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      if(e.target && e.target.id === 'calendar-grid') applyCalendarFilter();
+    });
+
+    /* ---------------- Automação: seletor de contatos (popover + busca + chips) ---------------- */
+    function contactPopoverOpen(input){
+      var wrap = input.closest('.contact-search-wrap');
+      var pop = wrap && wrap.querySelector('.contact-popover');
+      if(pop) pop.hidden = false;
+    }
+    document.addEventListener('click', function(e){
+      document.querySelectorAll('.contact-search-wrap').forEach(function(wrap){
+        if(wrap.contains(e.target)) return;
+        var pop = wrap.querySelector('.contact-popover');
+        if(pop) pop.hidden = true;
+      });
+    });
+    function contactPickerFilter(input){
+      var q = input.value.trim().toLowerCase();
+      var picker = input.closest('.contact-picker');
+      var rows = picker.querySelectorAll('.contact-option');
+      var anyVisible = false;
+      rows.forEach(function(row){
+        var name = (row.getAttribute('data-name') || '').toLowerCase();
+        var phone = (row.getAttribute('data-phone') || '').toLowerCase();
+        var match = !q || name.indexOf(q) !== -1 || phone.indexOf(q) !== -1;
+        row.hidden = !match;
+        if(match) anyVisible = true;
+      });
+      var empty = picker.querySelector('.contact-empty');
+      if(empty) empty.hidden = anyVisible || rows.length === 0;
+    }
+    function contactPickerToggle(checkbox){
+      syncContactChips(checkbox.closest('.contact-picker'));
+    }
+    function contactPickerAddManual(input, evt){
+      if(evt.key !== 'Enter') return;
+      evt.preventDefault();
+      var value = input.value.trim();
+      if(!value) return;
+      addManualChip(input.closest('.contact-picker'), value);
+      input.value = '';
+    }
+    function addManualChip(picker, value, label){
+      var existing = picker.querySelectorAll('.recipients-hidden input[name="recipients"]');
+      for(var i = 0; i < existing.length; i++){ if(existing[i].value === value) return; }
+      var el = document.createElement('input');
+      el.type = 'hidden'; el.name = 'recipients'; el.value = value;
+      if(label) el.setAttribute('data-label', label);
+      picker.querySelector('.recipients-hidden').appendChild(el);
+      renderChips(picker);
+    }
+    function syncContactChips(picker){
+      picker.querySelectorAll('.recipients-hidden input[data-from-contact]').forEach(function(el){ el.remove(); });
+      picker.querySelectorAll('.contact-option input[type=checkbox]:checked').forEach(function(cb){
+        var el = document.createElement('input');
+        el.type = 'hidden'; el.name = 'recipients'; el.value = cb.value;
+        el.setAttribute('data-from-contact', '1');
+        el.setAttribute('data-label', cb.getAttribute('data-name'));
+        picker.querySelector('.recipients-hidden').appendChild(el);
+      });
+      renderChips(picker);
+    }
+    function renderChips(picker){
+      var wrap = picker.querySelector('.chip-list');
+      wrap.innerHTML = '';
+      picker.querySelectorAll('.recipients-hidden input[name="recipients"]').forEach(function(el){
+        var label = el.getAttribute('data-label') || el.value;
+        var chip = document.createElement('span');
+        chip.className = 'contact-chip';
+        chip.textContent = label + ' ';
+        var x = document.createElement('button');
+        x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'remover');
+        x.onclick = function(){ removeChip(picker, el); };
+        chip.appendChild(x);
+        wrap.appendChild(chip);
+      });
+      refreshAutomationPreview(picker);
+    }
+    function removeChip(picker, hiddenInput){
+      if(hiddenInput.hasAttribute('data-from-contact')){
+        var cb = picker.querySelector('.contact-option input[value="' + CSS.escape(hiddenInput.value) + '"]');
+        if(cb) cb.checked = false;
+      }
+      hiddenInput.remove();
+      renderChips(picker);
+    }
+
+    /* ---------------- Automação: lista de mensagens (adicionar/remover/reordenar) ---------------- */
+    function addMessageBlock(btn){
+      var list = btn.closest('.message-composer').querySelector('.message-list');
+      var tpl = document.getElementById('message-block-template');
+      list.appendChild(tpl.content.cloneNode(true));
+      renumberMessages(list);
+      var last = list.querySelector('.message-block:last-child textarea');
+      if(last) last.focus();
+      refreshAutomationPreview(list);
+    }
+    function removeMessageBlock(btn){
+      var list = btn.closest('.message-list');
+      if(list.querySelectorAll('.message-block').length <= 1) return; // sempre ao menos 1 mensagem
+      btn.closest('.message-block').remove();
+      renumberMessages(list);
+      refreshAutomationPreview(list);
+    }
+    function moveMessageBlock(btn, dir){
+      var block = btn.closest('.message-block');
+      var sib = dir < 0 ? block.previousElementSibling : block.nextElementSibling;
+      if(!sib) return;
+      if(dir < 0) block.parentNode.insertBefore(block, sib);
+      else block.parentNode.insertBefore(sib, block);
+      renumberMessages(block.closest('.message-list'));
+    }
+    function renumberMessages(list){
+      var blocks = list.querySelectorAll('.message-block');
+      blocks.forEach(function(block, i){
+        var num = block.querySelector('.msg-num');
+        if(num) num.textContent = i + 1;
+        var up = block.querySelector('.msg-move-up');
+        var down = block.querySelector('.msg-move-down');
+        if(up) up.disabled = (i === 0);
+        if(down) down.disabled = (i === blocks.length - 1);
+      });
+    }
+
+    /* ---------------- Automação: prévia do horário calculado ---------------- */
+    function refreshAutomationPreview(el){
+      var form = el.closest ? el.closest('form.automation-form') : null;
+      if(form) updateAutomationPreview(form);
+    }
+    function updateAutomationPreview(form){
+      var startIso = form.getAttribute('data-event-start');
+      var out = form.querySelector('.automation-preview-value');
+      if(startIso && out){
+        var base = new Date(startIso);
+        var direction = form.querySelector('[name=offset_direction]').value;
+        var interval = form.querySelector('[name=offset_interval]').value.split(':');
+        var amount = parseInt(interval[0], 10);
+        var unitMs = {minutes: 60000, hours: 3600000, days: 86400000, weeks: 604800000}[interval[1]] || 0;
+        var deltaMs = amount * unitMs;
+        var target = new Date(base.getTime() + (direction === 'before' ? -deltaMs : direction === 'after' ? deltaMs : 0));
+        out.textContent = target.toLocaleDateString('pt-BR') + ' às ' + target.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
+      }
+      var summary = form.querySelector('.automation-preview-summary');
+      if(summary){
+        var recipCount = form.querySelectorAll('.recipients-hidden input[name="recipients"]').length;
+        var msgCount = form.querySelectorAll('.message-block textarea').length;
+        summary.textContent = recipCount + ' destinatário' + (recipCount === 1 ? '' : 's') + ' · ' +
+          msgCount + ' mensage' + (msgCount === 1 ? 'm' : 'ns') +
+          (msgCount > 1 ? ' (a cada ' + (form.getAttribute('data-message-gap') || '3') + 's)' : '');
+      }
     }
     function toggleSchedule(){
       var p = document.getElementById('schedule-pop');

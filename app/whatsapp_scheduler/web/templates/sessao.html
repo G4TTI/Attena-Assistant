@@ -9,7 +9,7 @@
   </div>
 </div>
 
-<div class="card card-pad" hx-get="/ui/session" hx-trigger="load, every 5s" hx-swap="innerHTML">
+<div id="session-panel" class="card card-pad" hx-get="/ui/session" hx-trigger="load, every 5s" hx-swap="innerHTML">
   {% include "_session.html" %}
 </div>
 
