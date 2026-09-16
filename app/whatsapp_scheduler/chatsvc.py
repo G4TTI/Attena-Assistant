@@ -35,7 +35,13 @@ _MEDIA_LABEL = {
     "call_log": "[chamada]",
 }
 
-_chat_cache: dict = {"at": 0.0, "data": []}
+# Cache em memória por sessão WAHA (cada usuário tem a sua) — mesma
+# limitação de sempre: por processo, reseta a cada restart.
+_chat_cache: dict[str, dict] = {}
+
+
+def _cache_for(session: str) -> dict:
+    return _chat_cache.setdefault(session, {"at": 0.0, "data": []})
 
 
 def _fmt_ts(ts: int) -> str:
@@ -72,16 +78,15 @@ def _normalize_chat(c: dict) -> dict:
     }
 
 
-async def list_chats(waha: WahaClient, *, force: bool = False) -> list[dict]:
+async def list_chats(waha: WahaClient, session: str, *, force: bool = False) -> list[dict]:
+    cache = _cache_for(session)
     now = time.monotonic()
-    if not force and _chat_cache["data"] and now - _chat_cache["at"] < settings.chat_list_cache_seconds:
-        return _chat_cache["data"]
-    raw = await waha.get_chats_overview(
-        settings.waha_session, settings.chat_list_limit, timeout=settings.chat_list_timeout
-    )
+    if not force and cache["data"] and now - cache["at"] < settings.chat_list_cache_seconds:
+        return cache["data"]
+    raw = await waha.get_chats_overview(session, settings.chat_list_limit, timeout=settings.chat_list_timeout)
     chats = [_normalize_chat(c) for c in raw if c.get("id")]
     chats.sort(key=lambda c: c["last_ts"], reverse=True)
-    _chat_cache.update(at=now, data=chats)
+    cache.update(at=now, data=chats)
     return chats
 
 
@@ -108,10 +113,11 @@ class ChatHistory:
     error: str | None = None
 
 
-def _cached_rows(db: Session, chat_id: str) -> list[CachedMessage]:
+def _cached_rows(db: Session, user_id: str, chat_id: str) -> list[CachedMessage]:
     return list(
         db.exec(
             select(CachedMessage)
+            .where(col(CachedMessage.user_id) == user_id)
             .where(col(CachedMessage.chat_id) == chat_id)
             .order_by(col(CachedMessage.ts))
         ).all()
@@ -119,9 +125,9 @@ def _cached_rows(db: Session, chat_id: str) -> list[CachedMessage]:
 
 
 async def get_history(
-    db: Session, waha: WahaClient, chat_id: str, *, force: bool = False
+    db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, *, force: bool = False
 ) -> ChatHistory:
-    rows = _cached_rows(db, chat_id)
+    rows = _cached_rows(db, user_id, chat_id)
     last_sync = max((r.synced_at for r in rows), default=None)
     fresh = last_sync is not None and (
         (utcnow() - last_sync).total_seconds() < settings.chat_messages_cache_seconds
@@ -131,7 +137,7 @@ async def get_history(
 
     try:
         raw = await waha.get_messages(
-            settings.waha_session,
+            session,
             chat_id,
             settings.chat_messages_limit,
             timeout=settings.history_timeout,
@@ -149,7 +155,8 @@ async def get_history(
         mid = _msg_id(m)
         if not mid:
             continue
-        row = db.get(CachedMessage, mid) or CachedMessage(message_id=mid, chat_id=chat_id)
+        row = db.get(CachedMessage, mid) or CachedMessage(message_id=mid, user_id=user_id, chat_id=chat_id)
+        row.user_id = user_id
         row.chat_id = chat_id
         row.ts = int(m.get("timestamp") or 0)
         row.from_me = bool(m.get("fromMe"))
@@ -160,17 +167,18 @@ async def get_history(
         row.synced_at = now
         db.add(row)
     db.commit()
-    rows = _cached_rows(db, chat_id)
+    rows = _cached_rows(db, user_id, chat_id)
     return ChatHistory([_row_to_msg(r) for r in rows], from_cache=False, synced_at=now)
 
 
-async def send_now(db: Session, waha: WahaClient, chat_id: str, text: str) -> dict:
-    payload = await waha.send_text(settings.waha_session, chat_id, text)
+async def send_now(db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, text: str) -> dict:
+    payload = await waha.send_text(session, chat_id, text)
     mid = extract_message_id(payload)
     if mid and not db.get(CachedMessage, mid):
         db.add(
             CachedMessage(
                 message_id=mid,
+                user_id=user_id,
                 chat_id=chat_id,
                 ts=int(time.time()),
                 from_me=True,
@@ -179,7 +187,7 @@ async def send_now(db: Session, waha: WahaClient, chat_id: str, text: str) -> di
             )
         )
         db.commit()
-    _chat_cache["at"] = 0.0  # força a lista a atualizar no próximo load
+    _cache_for(session)["at"] = 0.0  # força a lista a atualizar no próximo load
     return payload
 
 

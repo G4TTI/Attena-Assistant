@@ -1,0 +1,21 @@
+{% extends "auth_base.html" %}
+{% block title %}Criar conta — Attena Assistant{% endblock %}
+{% block card_title %}Criar sua conta{% endblock %}
+{% block card_sub %}Leva menos de um minuto{% endblock %}
+{% block form %}
+<form method="post" action="/cadastro">
+  <label for="name">Nome</label>
+  <input id="name" name="name" type="text" placeholder="Seu nome" required autofocus value="{{ name_value or '' }}">
+  <label for="email">E-mail</label>
+  <input id="email" name="email" type="email" placeholder="seu@email.com" required value="{{ email_value or '' }}">
+  <label for="password">Senha</label>
+  <input id="password" name="password" type="password" placeholder="Crie uma senha" required minlength="8">
+  <label for="password_confirm">Confirmar senha</label>
+  <input id="password_confirm" name="password_confirm" type="password" placeholder="Digite sua senha novamente" required minlength="8">
+  <button class="primary" type="submit">Criar conta</button>
+</form>
+<div class="auth-foot">
+  Já tenho uma conta<br>
+  <a href="/login">Entrar</a>
+</div>
+{% endblock %}

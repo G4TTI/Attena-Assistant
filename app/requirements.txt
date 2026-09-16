@@ -9,3 +9,4 @@ python-multipart>=0.0.9
 pydantic-settings>=2.4,<3
 tzdata>=2024.1  # base de fusos IANA (Windows e imagens slim não têm a do sistema)
 cryptography>=42,<44  # cifra os tokens OAuth do Google Calendar em repouso
+argon2-cffi>=23,<24  # hash de senha (Argon2id)

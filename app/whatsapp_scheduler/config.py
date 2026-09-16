@@ -10,6 +10,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # Ambiente — controla flags sensíveis a produção (cookie `Secure`, HSTS).
+    # "development" (padrão, ex.: localhost sem HTTPS) | "production".
+    app_env: str = "development"
+
+    # Autenticação
+    session_cookie_name: str = "attena_session"
+    session_ttl_days: int = 30
+    password_reset_ttl_minutes: int = 30
+    email_verification_ttl_hours: int = 48
+    # Tentativas por janela para login/cadastro/esqueci-senha (ver ratelimit.py).
+    rate_limit_max_attempts: int = 5
+    rate_limit_window_seconds: int = 300
+
     # WAHA
     waha_base_url: str = "http://localhost:3000"
     waha_api_key: str = ""
@@ -25,6 +38,12 @@ class Settings(BaseSettings):
     stuck_processing_minutes: int = 10
     # Backoff entre tentativas de envio (segundos), por tentativa.
     backoff_seconds: list[int] = [60, 300, 900]
+
+    # Sincronização do relógio com a internet (corrige o desvio do relógio do
+    # sistema — comum em VM/containers Docker Desktop depois de suspender/
+    # retomar a máquina host — sem isso, TODO agendamento dispara no horário
+    # errado, não só o relógio exibido na tela). Ver time_sync.py.
+    clock_sync_seconds: int = 900
 
     # Conversas (histórico do WhatsApp)
     chat_list_limit: int = 50

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from sqlmodel import Session, col, select
@@ -37,9 +37,10 @@ def frozen_clock(monkeypatch):
     return holder
 
 
-def make_internal_event(*, start=None) -> Event:
+def make_internal_event(*, user_id: str, start=None) -> Event:
     with Session(get_engine()) as db:
         event = Event(
+            user_id=user_id,
             source=EventSource.internal,
             title="Consulta com Leonardo",
             description="",
@@ -79,10 +80,11 @@ def dispatches_of_schedule(schedule_id: str) -> list[Dispatch]:
         )
 
 
-def make_google_calendar(db: Session) -> tuple[CalendarConnection, Calendar]:
+def make_google_calendar(db: Session, user_id: str) -> tuple[CalendarConnection, Calendar]:
     from whatsapp_scheduler import crypto
 
     conn = CalendarConnection(
+        user_id=user_id,
         provider="google",
         account_identifier="user@example.com",
         access_token_enc=crypto.encrypt("access"),
@@ -123,12 +125,14 @@ def test_start_connect_works_when_configured():
 # --------------------------------------------------------------------------- #
 # Criar automação (multi-mensagem, multi-destinatário)
 # --------------------------------------------------------------------------- #
-def test_create_event_automation_creates_one_message_one_schedule_and_link():
-    event = make_internal_event()
+def test_create_event_automation_creates_one_message_one_schedule_and_link(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
             db,
             event_id=event.id,
+            user_id=test_user.id,
+            waha_session=test_user.waha_session,
             recipients=["+55 11 99999-8888"],
             messages=["Olá Leonardo, passando para lembrar da nossa consulta."],
             offset_amount=2,
@@ -150,12 +154,14 @@ def test_create_event_automation_creates_one_message_one_schedule_and_link():
     assert dispatches[0].scheduled_at_utc == event.start_utc - timedelta(hours=2)
 
 
-def test_create_event_automation_multiple_recipients_creates_one_schedule_each():
-    event = make_internal_event()
+def test_create_event_automation_multiple_recipients_creates_one_schedule_each(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
             db,
             event_id=event.id,
+            user_id=test_user.id,
+            waha_session=test_user.waha_session,
             recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
             messages=["Lembrete"],
             offset_amount=30,
@@ -168,12 +174,14 @@ def test_create_event_automation_multiple_recipients_creates_one_schedule_each()
     assert {s.chat_id for s in schedules} == {"5511999998888@c.us", "5511988887777@c.us"}
 
 
-def test_create_event_automation_rejects_unknown_event():
+def test_create_event_automation_rejects_unknown_event(test_user):
     with Session(get_engine()) as db:
         with pytest.raises(ValidationError):
             calendar_service.create_event_automation(
                 db,
                 event_id="does-not-exist",
+                user_id=test_user.id,
+                waha_session=test_user.waha_session,
                 recipients=["+55 11 99999-8888"],
                 messages=["x"],
                 offset_amount=1,
@@ -182,26 +190,89 @@ def test_create_event_automation_rejects_unknown_event():
             )
 
 
-def test_create_event_automation_rejects_empty_messages():
-    event = make_internal_event()
+def test_create_event_automation_rejects_empty_messages(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         with pytest.raises(ValidationError):
             calendar_service.create_event_automation(
-                db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["   ", ""],
+                db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+                recipients=["+55 11 99999-8888"], messages=["   ", ""],
                 offset_amount=1, offset_unit="hours", offset_direction="before",
             )
 
 
 # --------------------------------------------------------------------------- #
-# Várias mensagens: ordem, encadeamento (depends_on_schedule_id) e recálculo
+# Horário personalizado ("custom") — horário absoluto, não offset.
 # --------------------------------------------------------------------------- #
-def test_multi_message_automation_chains_schedules_by_recipient_with_dependency():
-    from whatsapp_scheduler.models import ScheduleDependency
-
-    event = make_internal_event()
+def test_create_event_automation_custom_persists_time_and_computes_dispatch(test_user):
+    # evento às 20:00 local (America/Sao_Paulo) — FROZEN + 2h é fixado no topo do arquivo
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
+            db,
+            event_id=event.id,
+            user_id=test_user.id,
+            waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"],
+            messages=["Lembrete"],
+            offset_amount=0,
+            offset_unit="minutes",
+            offset_direction="custom",
+            custom_time_local="18:00",
+        )
+        automation_id = automation.id
+        assert automation.custom_time_local == "18:00"
+
+    schedule = schedules_of_automation(automation_id)[0]
+    assert schedule.first_run_local.strftime("%H:%M") == "18:00"
+    assert schedule.first_run_local.date() == date(2026, 6, 1)  # data local do evento (FROZEN + 2h, UTC-3)
+
+
+def test_create_event_automation_custom_requires_time(test_user):
+    event = make_internal_event(user_id=test_user.id)
+    with Session(get_engine()) as db:
+        with pytest.raises(ValidationError):
+            calendar_service.create_event_automation(
+                db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+                recipients=["+55 11 99999-8888"], messages=["x"],
+                offset_amount=0, offset_unit="minutes", offset_direction="custom", custom_time_local="",
+            )
+
+
+def test_create_event_automation_custom_rejects_malformed_time(test_user):
+    event = make_internal_event(user_id=test_user.id)
+    with Session(get_engine()) as db:
+        with pytest.raises(ValidationError):
+            calendar_service.create_event_automation(
+                db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+                recipients=["+55 11 99999-8888"], messages=["x"],
+                offset_amount=0, offset_unit="minutes", offset_direction="custom", custom_time_local="25:99",
+            )
+
+
+def test_create_event_automation_non_custom_ignores_stray_custom_time(test_user):
+    # se o front mandar custom_time por engano com uma direção relativa, é descartado.
+    event = make_internal_event(user_id=test_user.id)
+    with Session(get_engine()) as db:
+        automation = calendar_service.create_event_automation(
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["x"],
+            offset_amount=2, offset_unit="hours", offset_direction="before", custom_time_local="18:00",
+        )
+        assert automation.custom_time_local is None
+
+
+# --------------------------------------------------------------------------- #
+# Várias mensagens: ordem, encadeamento (depends_on_schedule_id) e recálculo
+# --------------------------------------------------------------------------- #
+def test_multi_message_automation_chains_schedules_by_recipient_with_dependency(test_user):
+    from whatsapp_scheduler.models import ScheduleDependency
+
+    event = make_internal_event(user_id=test_user.id)
+    with Session(get_engine()) as db:
+        automation = calendar_service.create_event_automation(
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
             messages=["um", "dois", "três"], offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id
@@ -232,14 +303,15 @@ def test_multi_message_automation_chains_schedules_by_recipient_with_dependency(
                 assert dep.depends_on_schedule_id == schedule_ids_in_order[i - 1]
 
 
-async def test_reschedule_preserves_per_message_gap(frozen_clock):
+async def test_reschedule_preserves_per_message_gap(frozen_clock, test_user):
     # timezone_name="UTC" força o schedule a usar UTC como sua própria
     # timezone — assim Schedule.first_run_local (hora LOCAL na timezone do
     # schedule) pode ser comparado direto com valores UTC sem ambiguidade.
-    event = make_internal_event(start=FROZEN + timedelta(hours=2))
+    event = make_internal_event(user_id=test_user.id, start=FROZEN + timedelta(hours=2))
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["um", "dois"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["um", "dois"],
             offset_amount=1, offset_unit="hours", offset_direction="before", timezone_name="UTC",
         )
         automation_id = automation.id
@@ -252,7 +324,7 @@ async def test_reschedule_preserves_per_message_gap(frozen_clock):
     new_start = FROZEN + timedelta(hours=6)
     with Session(get_engine()) as db:
         await calendar_service.update_internal_event(
-            db, event.id, title="Consulta com Leonardo", start_local=new_start,
+            db, event.id, user_id=test_user.id, title="Consulta com Leonardo", start_local=new_start,
             end_local=new_start + timedelta(hours=1), timezone_name="UTC",
         )
 
@@ -261,18 +333,19 @@ async def test_reschedule_preserves_per_message_gap(frozen_clock):
     assert schedules_after[0].first_run_local == new_start - timedelta(hours=1)
 
 
-def test_remove_event_automation_cancels_schedules_but_keeps_event():
-    event = make_internal_event()
+def test_remove_event_automation_cancels_schedules_but_keeps_event(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["x"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["x"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id
     schedule_id = schedules_of_automation(automation_id)[0].id
 
     with Session(get_engine()) as db:
-        assert calendar_service.remove_event_automation(db, automation_id) is True
+        assert calendar_service.remove_event_automation(db, automation_id, test_user.id) is True
 
     with Session(get_engine()) as db:
         sched = db.get(Schedule, schedule_id)
@@ -281,11 +354,12 @@ def test_remove_event_automation_cancels_schedules_but_keeps_event():
         assert ev is not None  # evento preservado
 
 
-def test_disconnect_cancels_pending_but_preserves_sent_history():
+def test_disconnect_cancels_pending_but_preserves_sent_history(test_user):
     with Session(get_engine()) as db:
-        conn, cal = make_google_calendar(db)
+        conn, cal = make_google_calendar(db, test_user.id)
         connection_id = conn.id
         event = Event(
+            user_id=test_user.id,
             source=EventSource.google,
             calendar_id=cal.id,
             external_id="ext-1",
@@ -299,11 +373,13 @@ def test_disconnect_cancels_pending_but_preserves_sent_history():
         db.refresh(event)
 
         pending_automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["a"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["a"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         sent_automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 98888-7777"], messages=["b"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 98888-7777"], messages=["b"],
             offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         pending_automation_id = pending_automation.id
@@ -319,7 +395,7 @@ def test_disconnect_cancels_pending_but_preserves_sent_history():
         db.commit()
 
     with Session(get_engine()) as db:
-        assert calendar_service.disconnect(db, connection_id) is True
+        assert calendar_service.disconnect(db, connection_id, test_user.id) is True
 
     with Session(get_engine()) as db:
         (pending_dispatch,) = db.exec(select(Dispatch).where(col(Dispatch.schedule_id) == pending_id)).all()
@@ -335,9 +411,9 @@ def test_disconnect_cancels_pending_but_preserves_sent_history():
 # --------------------------------------------------------------------------- #
 # month_grid
 # --------------------------------------------------------------------------- #
-def test_month_grid_always_has_42_cells(frozen_clock):
+def test_month_grid_always_has_42_cells(frozen_clock, test_user):
     with Session(get_engine()) as db:
-        weeks = calendar_service.month_grid(db, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
     assert len(weeks) == 6
     for week in weeks:
         assert len(week) == 7
@@ -347,10 +423,11 @@ def test_month_grid_always_has_42_cells(frozen_clock):
     assert any(day["in_month"] for week in weeks for day in week)
 
 
-def test_month_grid_places_event_on_correct_local_day(frozen_clock):
+def test_month_grid_places_event_on_correct_local_day(frozen_clock, test_user):
     # 2026-09-15 14:00 America/Sao_Paulo (UTC-3) = 2026-09-15 17:00 UTC
     with Session(get_engine()) as db:
         event = Event(
+            user_id=test_user.id,
             source=EventSource.internal,
             title="Consulta",
             start_utc=datetime(2026, 9, 15, 17, 0),
@@ -360,7 +437,7 @@ def test_month_grid_places_event_on_correct_local_day(frozen_clock):
         db.add(event)
         db.commit()
 
-        weeks = calendar_service.month_grid(db, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
 
     day15 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-09-15")
     assert [e.title for e in day15["events"]] == ["Consulta"]
@@ -368,13 +445,14 @@ def test_month_grid_places_event_on_correct_local_day(frozen_clock):
     assert all(e.title != "Consulta" for day in other_days for e in day["events"])
 
 
-def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock):
+def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock, test_user):
     # 2026-08-31 15:30 UTC = 2026-09-01 00:30 in Asia/Tokyo (UTC+9), but only
     # 2026-08-31 12:30 in America/Sao_Paulo (default_timezone, UTC-3). If the
     # grid bucketed by default_timezone instead of the event's own timezone,
     # this would land on Aug 31 instead of Sep 1.
     with Session(get_engine()) as db:
         event = Event(
+            user_id=test_user.id,
             source=EventSource.google,
             title="Tokyo meeting",
             start_utc=datetime(2026, 8, 31, 15, 30),
@@ -384,7 +462,7 @@ def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock):
         db.add(event)
         db.commit()
 
-        weeks = calendar_service.month_grid(db, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
 
     day1 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-09-01")
     assert [e.title for e in day1["events"]] == ["Tokyo meeting"]
@@ -395,25 +473,26 @@ def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock):
 # --------------------------------------------------------------------------- #
 # CRUD de evento interno
 # --------------------------------------------------------------------------- #
-async def test_create_internal_event_validates_fields():
+async def test_create_internal_event_validates_fields(test_user):
     with Session(get_engine()) as db:
         with pytest.raises(ValidationError):
             await calendar_service.create_internal_event(
-                db, title="", start_local=FROZEN, end_local=FROZEN + timedelta(hours=1),
+                db, user_id=test_user.id, title="", start_local=FROZEN, end_local=FROZEN + timedelta(hours=1),
                 timezone_name="America/Sao_Paulo",
             )
         with pytest.raises(ValidationError):
             await calendar_service.create_internal_event(
-                db, title="x", start_local=FROZEN, end_local=FROZEN,  # fim não é depois do início
+                db, user_id=test_user.id, title="x", start_local=FROZEN, end_local=FROZEN,  # fim não é depois do início
                 timezone_name="America/Sao_Paulo",
             )
 
 
-async def test_update_internal_event_reschedules_pending_dispatch_in_place(frozen_clock):
-    event = make_internal_event(start=FROZEN + timedelta(hours=2))
+async def test_update_internal_event_reschedules_pending_dispatch_in_place(frozen_clock, test_user):
+    event = make_internal_event(user_id=test_user.id, start=FROZEN + timedelta(hours=2))
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["x"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["x"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id
@@ -430,7 +509,7 @@ async def test_update_internal_event_reschedules_pending_dispatch_in_place(froze
         # puro — update_internal_event recebe hora LOCAL (naive) e converte
         # via local_to_utc, igual create_internal_event.
         await calendar_service.update_internal_event(
-            db, event.id, title="Consulta com Leonardo", start_local=new_start,
+            db, event.id, user_id=test_user.id, title="Consulta com Leonardo", start_local=new_start,
             end_local=new_start + timedelta(hours=1), timezone_name="UTC",
         )
 
@@ -441,11 +520,12 @@ async def test_update_internal_event_reschedules_pending_dispatch_in_place(froze
     assert dispatches[0].scheduled_at_utc == new_start - timedelta(hours=1)
 
 
-async def test_update_internal_event_does_not_touch_already_sent_dispatch(frozen_clock):
-    event = make_internal_event(start=FROZEN + timedelta(hours=2))
+async def test_update_internal_event_does_not_touch_already_sent_dispatch(frozen_clock, test_user):
+    event = make_internal_event(user_id=test_user.id, start=FROZEN + timedelta(hours=2))
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["x"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["x"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id
@@ -459,7 +539,7 @@ async def test_update_internal_event_does_not_touch_already_sent_dispatch(frozen
 
     with Session(get_engine()) as db:
         await calendar_service.update_internal_event(
-            db, event.id, title="Consulta com Leonardo", start_local=FROZEN + timedelta(hours=9),
+            db, event.id, user_id=test_user.id, title="Consulta com Leonardo", start_local=FROZEN + timedelta(hours=9),
             end_local=FROZEN + timedelta(hours=10), timezone_name="America/Sao_Paulo",
         )
 
@@ -469,10 +549,10 @@ async def test_update_internal_event_does_not_touch_already_sent_dispatch(frozen
         assert dispatch.scheduled_at_utc == original_scheduled_at  # histórico intocado
 
 
-async def test_update_internal_event_rejects_google_sourced_event():
+async def test_update_internal_event_rejects_google_sourced_event(test_user):
     with Session(get_engine()) as db:
         event = Event(
-            source=EventSource.google, calendar_id=None, title="x",
+            user_id=test_user.id, source=EventSource.google, calendar_id=None, title="x",
             start_utc=FROZEN, end_utc=FROZEN + timedelta(hours=1), timezone="America/Sao_Paulo",
         )
         db.add(event)
@@ -480,23 +560,24 @@ async def test_update_internal_event_rejects_google_sourced_event():
         db.refresh(event)
         with pytest.raises(ValidationError):
             await calendar_service.update_internal_event(
-                db, event.id, title="y", start_local=FROZEN, end_local=FROZEN + timedelta(hours=1),
+                db, event.id, user_id=test_user.id, title="y", start_local=FROZEN, end_local=FROZEN + timedelta(hours=1),
                 timezone_name="America/Sao_Paulo",
             )
 
 
-async def test_delete_internal_event_cancels_automations_and_preserves_schedule_history():
-    event = make_internal_event()
+async def test_delete_internal_event_cancels_automations_and_preserves_schedule_history(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["x"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["x"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id
     schedule_id = schedules_of_automation(automation_id)[0].id
 
     with Session(get_engine()) as db:
-        assert await calendar_service.delete_internal_event(db, event.id) is True
+        assert await calendar_service.delete_internal_event(db, event.id, user_id=test_user.id) is True
 
     with Session(get_engine()) as db:
         assert db.get(Event, event.id) is None
@@ -511,27 +592,28 @@ async def test_delete_internal_event_cancels_automations_and_preserves_schedule_
         assert dispatch.status == DispatchStatus.canceled
 
 
-async def test_delete_internal_event_rejects_google_sourced_event():
+async def test_delete_internal_event_rejects_google_sourced_event(test_user):
     with Session(get_engine()) as db:
         event = Event(
-            source=EventSource.google, title="x",
+            user_id=test_user.id, source=EventSource.google, title="x",
             start_utc=FROZEN, end_utc=FROZEN + timedelta(hours=1), timezone="America/Sao_Paulo",
         )
         db.add(event)
         db.commit()
         db.refresh(event)
         with pytest.raises(ValidationError):
-            await calendar_service.delete_internal_event(db, event.id)
+            await calendar_service.delete_internal_event(db, event.id, user_id=test_user.id)
 
 
 # --------------------------------------------------------------------------- #
 # Editar automação (remover + recriar, sem deixar linha fantasma)
 # --------------------------------------------------------------------------- #
-def test_update_event_automation_does_not_leave_ghost_row_and_keeps_old_schedule_untouched():
-    event = make_internal_event()
+def test_update_event_automation_does_not_leave_ghost_row_and_keeps_old_schedule_untouched(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         old_automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["mensagem antiga"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["mensagem antiga"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = old_automation.id
@@ -539,7 +621,8 @@ def test_update_event_automation_does_not_leave_ghost_row_and_keeps_old_schedule
 
     with Session(get_engine()) as db:
         new_automation = calendar_service.update_event_automation(
-            db, automation_id, recipients=["+55 11 99999-8888"], messages=["mensagem nova"],
+            db, automation_id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["mensagem nova"],
             offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         new_automation_id = new_automation.id
@@ -566,15 +649,17 @@ def test_update_event_automation_does_not_leave_ghost_row_and_keeps_old_schedule
 # --------------------------------------------------------------------------- #
 # Prevenção de duplicidade
 # --------------------------------------------------------------------------- #
-def test_create_event_automation_is_idempotent_for_identical_immediate_resubmit(frozen_clock):
-    event = make_internal_event()
+def test_create_event_automation_is_idempotent_for_identical_immediate_resubmit(frozen_clock, test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         first = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["oi"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["oi"],
             offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         second = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["oi"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["oi"],
             offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         assert first.id == second.id  # devolveu a mesma Automation, não criou outra
@@ -586,19 +671,21 @@ def test_create_event_automation_is_idempotent_for_identical_immediate_resubmit(
         assert len(schedules) == 1
 
 
-def test_duplicate_guard_multi_message_resubmit_does_not_violate_unique_constraint(frozen_clock):
+def test_duplicate_guard_multi_message_resubmit_does_not_violate_unique_constraint(frozen_clock, test_user):
     """Duplo-submit de uma automação com várias mensagens/destinatários não
     pode tentar religar um `Schedule` já usado a uma nova `AutomationSchedule`
     (isso violaria o UNIQUE de `schedule_id`) — a trava precisa agir no nível
     da `Automation` inteira, não por mensagem individual."""
-    event = make_internal_event()
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         first = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
             messages=["um", "dois", "três"], offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         second = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888", "+55 11 98888-7777"],
             messages=["um", "dois", "três"], offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         assert first.id == second.id
@@ -610,14 +697,15 @@ def test_duplicate_guard_multi_message_resubmit_does_not_violate_unique_constrai
         assert len(links) == 6  # 2 destinatários x 3 mensagens, sem duplicar
 
 
-def test_edit_flow_not_blocked_by_duplicate_guard_even_with_near_identical_values(frozen_clock):
+def test_edit_flow_not_blocked_by_duplicate_guard_even_with_near_identical_values(frozen_clock, test_user):
     """Editar cancela a antiga e cria uma quase idêntica logo em seguida — a
     trava de duplicidade não pode bloquear esse fluxo (ela é escopada em
     enabled=True, e a automação antiga já foi desativada nesse ponto)."""
-    event = make_internal_event()
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["oi"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["oi"],
             offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id
@@ -625,7 +713,8 @@ def test_edit_flow_not_blocked_by_duplicate_guard_even_with_near_identical_value
     with Session(get_engine()) as db:
         # "edita" mas mantém os mesmos valores — deve criar uma automação nova mesmo assim
         new_automation = calendar_service.update_event_automation(
-            db, automation_id, recipients=["+55 11 99999-8888"], messages=["oi"],
+            db, automation_id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["oi"],
             offset_amount=2, offset_unit="hours", offset_direction="before",
         )
         new_automation_id = new_automation.id
@@ -638,11 +727,12 @@ def test_edit_flow_not_blocked_by_duplicate_guard_even_with_near_identical_value
 # --------------------------------------------------------------------------- #
 # Migração do formato legado (EventAutomation -> Automation/.../.../)
 # --------------------------------------------------------------------------- #
-def test_migrate_legacy_automations_is_idempotent_and_preserves_schedule():
-    event = make_internal_event()
+def test_migrate_legacy_automations_is_idempotent_and_preserves_schedule(test_user):
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         schedule = create_schedule(
-            db, recipient="+55 11 99999-8888", text="legado",
+            db, user_id=test_user.id, session=test_user.waha_session,
+            recipient="+55 11 99999-8888", text="legado",
             send_at=event.start_utc - timedelta(hours=1), timezone="America/Sao_Paulo",
         )
         db.add(
@@ -677,12 +767,12 @@ def test_migrate_legacy_automations_is_idempotent_and_preserves_schedule():
 # --------------------------------------------------------------------------- #
 # Push pro Google Agenda (criar/editar/excluir vinculado)
 # --------------------------------------------------------------------------- #
-async def test_create_internal_event_pushes_to_google_and_links(monkeypatch, fake_google, frozen_clock):
+async def test_create_internal_event_pushes_to_google_and_links(monkeypatch, fake_google, frozen_clock, test_user):
     monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
     with Session(get_engine()) as db:
-        _, cal = make_google_calendar(db)
+        _, cal = make_google_calendar(db, test_user.id)
         event = await calendar_service.create_internal_event(
-            db, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
             end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
             target_calendar_id=cal.id,
         )
@@ -696,13 +786,13 @@ async def test_create_internal_event_pushes_to_google_and_links(monkeypatch, fak
         assert status.status == "synced"
 
 
-async def test_create_internal_event_survives_google_push_failure(monkeypatch, fake_google, frozen_clock):
+async def test_create_internal_event_survives_google_push_failure(monkeypatch, fake_google, frozen_clock, test_user):
     monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
     fake_google.create_event_error = CalendarProviderError("403 forbidden — escopo insuficiente")
     with Session(get_engine()) as db:
-        _, cal = make_google_calendar(db)
+        _, cal = make_google_calendar(db, test_user.id)
         event = await calendar_service.create_internal_event(
-            db, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
             end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
             target_calendar_id=cal.id,
         )
@@ -715,7 +805,7 @@ async def test_create_internal_event_survives_google_push_failure(monkeypatch, f
         assert status.status == "error"
 
 
-async def test_update_internal_event_rejects_local_change_when_google_push_fails(monkeypatch, fake_google, frozen_clock):
+async def test_update_internal_event_rejects_local_change_when_google_push_fails(monkeypatch, fake_google, frozen_clock, test_user):
     """Bug crítico encontrado na revisão de arquitetura: se o push falhasse
     DEPOIS de já ter gravado a mudança localmente, o próximo pull-sync
     reverteria o horário local sozinho (silenciosamente) e reagendaria a
@@ -723,9 +813,9 @@ async def test_update_internal_event_rejects_local_change_when_google_push_fails
     mudança local se o push falhar."""
     monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
     with Session(get_engine()) as db:
-        _, cal = make_google_calendar(db)
+        _, cal = make_google_calendar(db, test_user.id)
         event = await calendar_service.create_internal_event(
-            db, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
             end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
             target_calendar_id=cal.id,
         )
@@ -736,7 +826,7 @@ async def test_update_internal_event_rejects_local_change_when_google_push_fails
     with Session(get_engine()) as db:
         with pytest.raises(ValidationError):
             await calendar_service.update_internal_event(
-                db, event_id, title="Consulta", start_local=FROZEN + timedelta(hours=9),
+                db, event_id, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=9),
                 end_local=FROZEN + timedelta(hours=10), timezone_name="America/Sao_Paulo",
             )
 
@@ -745,12 +835,12 @@ async def test_update_internal_event_rejects_local_change_when_google_push_fails
         assert ev.start_utc == original_start  # nada mudou localmente
 
 
-async def test_delete_internal_event_keeps_local_row_when_google_delete_fails(monkeypatch, fake_google, frozen_clock):
+async def test_delete_internal_event_keeps_local_row_when_google_delete_fails(monkeypatch, fake_google, frozen_clock, test_user):
     monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
     with Session(get_engine()) as db:
-        _, cal = make_google_calendar(db)
+        _, cal = make_google_calendar(db, test_user.id)
         event = await calendar_service.create_internal_event(
-            db, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
             end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
             target_calendar_id=cal.id,
         )
@@ -759,25 +849,25 @@ async def test_delete_internal_event_keeps_local_row_when_google_delete_fails(mo
     fake_google.delete_event_error = CalendarProviderError("500 boom")
     with Session(get_engine()) as db:
         with pytest.raises(ValidationError):
-            await calendar_service.delete_internal_event(db, event_id, also_delete_google=True)
+            await calendar_service.delete_internal_event(db, event_id, user_id=test_user.id, also_delete_google=True)
 
     with Session(get_engine()) as db:
         assert db.get(Event, event_id) is not None  # não excluído localmente
 
 
-async def test_delete_internal_event_app_only_leaves_google_event_alone(monkeypatch, fake_google, frozen_clock):
+async def test_delete_internal_event_app_only_leaves_google_event_alone(monkeypatch, fake_google, frozen_clock, test_user):
     monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
     with Session(get_engine()) as db:
-        _, cal = make_google_calendar(db)
+        _, cal = make_google_calendar(db, test_user.id)
         event = await calendar_service.create_internal_event(
-            db, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
             end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
             target_calendar_id=cal.id,
         )
         event_id = event.id
 
     with Session(get_engine()) as db:
-        assert await calendar_service.delete_internal_event(db, event_id, also_delete_google=False) is True
+        assert await calendar_service.delete_internal_event(db, event_id, user_id=test_user.id, also_delete_google=False) is True
 
     assert fake_google.deleted_events == []  # não chamou o Google
     with Session(get_engine()) as db:
@@ -814,14 +904,15 @@ def test_set_timezone_rejects_invalid_and_leaves_setting_untouched():
         app_settings.default_timezone = original
 
 
-def test_set_timezone_does_not_touch_already_created_schedule_timezone(frozen_clock):
+def test_set_timezone_does_not_touch_already_created_schedule_timezone(frozen_clock, test_user):
     """Mudar o fuso padrão global nunca reescreve retroativamente o fuso já
     gravado em Schedule/Event existentes — só afeta o default de coisas
     criadas DEPOIS da mudança."""
-    event = make_internal_event()
+    event = make_internal_event(user_id=test_user.id)
     with Session(get_engine()) as db:
         automation = calendar_service.create_event_automation(
-            db, event_id=event.id, recipients=["+55 11 99999-8888"], messages=["x"],
+            db, event_id=event.id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["+55 11 99999-8888"], messages=["x"],
             offset_amount=1, offset_unit="hours", offset_direction="before",
         )
         automation_id = automation.id

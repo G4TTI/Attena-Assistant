@@ -11,10 +11,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, col, select
 
+from .. import auth
 from ..chatsvc import get_history, list_chats, send_now
 from ..config import settings
 from ..db import get_session
-from ..models import Dispatch, Schedule
+from ..models import Dispatch, Schedule, User
 from ..recurrence import utc_to_local
 from ..service import ValidationError, cancel_schedule, create_schedule, run_now
 from ..waha import WahaError
@@ -66,21 +67,23 @@ templates.env.filters["engine_label"] = _engine_label
 # --------------------------------------------------------------------------- #
 # Contextos compartilhados
 # --------------------------------------------------------------------------- #
-async def _session_ctx(request: Request) -> dict:
+async def _session_ctx(request: Request, current_user: User) -> dict:
     waha = request.app.state.waha
     try:
-        info = await waha.get_session_status(settings.waha_session)
+        info = await waha.get_session_status(current_user.waha_session)
         return {"session": info, "session_error": None}
     except WahaError as exc:
         return {"session": None, "session_error": str(exc)}
 
 
-def _base_ctx(request: Request, nav: str) -> dict:
-    return {"request": request, "nav": nav, "waha_session": settings.waha_session}
+def _base_ctx(request: Request, nav: str, current_user: User) -> dict:
+    return {"request": request, "nav": nav, "waha_session": current_user.waha_session, "current_user": current_user}
 
 
-def _rows(db: Session) -> list[dict]:
-    schedules = db.exec(select(Schedule).order_by(col(Schedule.created_at).desc())).all()
+def _rows(db: Session, user_id: str) -> list[dict]:
+    schedules = db.exec(
+        select(Schedule).where(col(Schedule.user_id) == user_id).order_by(col(Schedule.created_at).desc())
+    ).all()
     out: list[dict] = []
     for s in schedules:
         dispatches = list(
@@ -105,18 +108,20 @@ def _rows(db: Session) -> list[dict]:
     return out
 
 
-def _table_ctx(request: Request, db: Session) -> dict:
-    return {"request": request, "rows": _rows(db), "default_timezone": settings.default_timezone}
+def _table_ctx(request: Request, db: Session, user_id: str) -> dict:
+    return {"request": request, "rows": _rows(db, user_id), "default_timezone": settings.default_timezone}
 
 
 # --------------------------------------------------------------------------- #
 # Páginas
 # --------------------------------------------------------------------------- #
-@router.get("/", response_class=HTMLResponse)
-async def page_schedules(request: Request, db: Session = Depends(get_session)) -> HTMLResponse:
+@router.get("/agendamentos", response_class=HTMLResponse)
+async def page_schedules(
+    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
     ctx = {
-        **_base_ctx(request, "agendamentos"),
-        **_table_ctx(request, db),
+        **_base_ctx(request, "agendamentos", current_user),
+        **_table_ctx(request, db, current_user.id),
         "error": request.query_params.get("error"),
         "ok": request.query_params.get("ok"),
     }
@@ -124,16 +129,21 @@ async def page_schedules(request: Request, db: Session = Depends(get_session)) -
 
 
 @router.get("/conversas", response_class=HTMLResponse)
-async def page_chats(request: Request) -> HTMLResponse:
+async def page_chats(
+    request: Request, current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
     return templates.TemplateResponse(
-        "conversas.html", {**_base_ctx(request, "conversas"), "default_timezone": settings.default_timezone}
+        "conversas.html",
+        {**_base_ctx(request, "conversas", current_user), "default_timezone": settings.default_timezone},
     )
 
 
 @router.get("/sessao", response_class=HTMLResponse)
-async def page_session(request: Request) -> HTMLResponse:
+async def page_session(
+    request: Request, current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
     return templates.TemplateResponse(
-        "sessao.html", {**_base_ctx(request, "sessao"), **(await _session_ctx(request))}
+        "sessao.html", {**_base_ctx(request, "sessao", current_user), **(await _session_ctx(request, current_user))}
     )
 
 
@@ -141,47 +151,60 @@ async def page_session(request: Request) -> HTMLResponse:
 # Parciais (htmx)
 # --------------------------------------------------------------------------- #
 @router.get("/ui/sidebar-status", response_class=HTMLResponse)
-async def ui_sidebar_status(request: Request) -> HTMLResponse:
+async def ui_sidebar_status(
+    request: Request, current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
     return templates.TemplateResponse(
-        "_sidebar_status.html", {"request": request, **(await _session_ctx(request))}
+        "_sidebar_status.html", {"request": request, **(await _session_ctx(request, current_user))}
     )
 
 
 @router.get("/ui/session", response_class=HTMLResponse)
-async def ui_session(request: Request) -> HTMLResponse:
+async def ui_session(
+    request: Request, current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
     return templates.TemplateResponse(
         "_session.html",
-        {"request": request, "waha_session": settings.waha_session, **(await _session_ctx(request))},
+        {
+            "request": request,
+            "waha_session": current_user.waha_session,
+            **(await _session_ctx(request, current_user)),
+        },
     )
 
 
 @router.post("/ui/session/start", response_class=HTMLResponse)
-async def ui_session_start(request: Request) -> HTMLResponse:
+async def ui_session_start(
+    request: Request, current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
     start_error = None
     try:
-        await request.app.state.waha.restart_session(settings.waha_session)
+        await request.app.state.waha.restart_session(current_user.waha_session)
     except WahaError as exc:
         start_error = str(exc)
     return templates.TemplateResponse(
         "_session.html",
         {
             "request": request,
-            "waha_session": settings.waha_session,
+            "waha_session": current_user.waha_session,
             "start_error": start_error,
-            **(await _session_ctx(request)),
+            **(await _session_ctx(request, current_user)),
         },
     )
 
 
 @router.get("/ui/schedules", response_class=HTMLResponse)
-async def ui_schedules(request: Request, db: Session = Depends(get_session)) -> HTMLResponse:
-    return templates.TemplateResponse("_table.html", _table_ctx(request, db))
+async def ui_schedules(
+    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
+    return templates.TemplateResponse("_table.html", _table_ctx(request, db, current_user.id))
 
 
 @router.post("/ui/schedules")
 async def ui_create(
     request: Request,
     db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
     recipient: str = Form(...),
     text: str = Form(...),
     send_at: str = Form(...),
@@ -192,10 +215,12 @@ async def ui_create(
     try:
         parsed = datetime.fromisoformat(send_at)
     except ValueError:
-        return RedirectResponse(url="/?error=" + quote("Data/hora inválida."), status_code=303)
+        return RedirectResponse(url="/agendamentos?error=" + quote("Data/hora inválida."), status_code=303)
     try:
         create_schedule(
             db,
+            user_id=current_user.id,
+            session=current_user.waha_session,
             recipient=recipient,
             text=text,
             send_at=parsed,
@@ -204,26 +229,36 @@ async def ui_create(
             max_attempts=max_attempts,
         )
     except ValidationError as exc:
-        return RedirectResponse(url="/?error=" + quote(str(exc)), status_code=303)
-    return RedirectResponse(url="/?ok=" + quote("Agendamento criado."), status_code=303)
+        return RedirectResponse(url="/agendamentos?error=" + quote(str(exc)), status_code=303)
+    return RedirectResponse(url="/agendamentos?ok=" + quote("Agendamento criado."), status_code=303)
 
 
 @router.post("/ui/schedules/{schedule_id}/cancel", response_class=HTMLResponse)
-async def ui_cancel(request: Request, schedule_id: str, db: Session = Depends(get_session)) -> HTMLResponse:
-    cancel_schedule(db, schedule_id)
-    return templates.TemplateResponse("_table.html", _table_ctx(request, db))
+async def ui_cancel(
+    request: Request,
+    schedule_id: str,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    cancel_schedule(db, schedule_id, user_id=current_user.id)
+    return templates.TemplateResponse("_table.html", _table_ctx(request, db, current_user.id))
 
 
 @router.post("/ui/schedules/{schedule_id}/run-now", response_class=HTMLResponse)
-async def ui_run_now(request: Request, schedule_id: str, db: Session = Depends(get_session)) -> HTMLResponse:
-    run_now(db, schedule_id)
-    return templates.TemplateResponse("_table.html", _table_ctx(request, db))
+async def ui_run_now(
+    request: Request,
+    schedule_id: str,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    run_now(db, schedule_id, user_id=current_user.id)
+    return templates.TemplateResponse("_table.html", _table_ctx(request, db, current_user.id))
 
 
 # ---- Conversas -------------------------------------------------------------- #
-async def _chats_ctx(request: Request, *, force: bool = False) -> dict:
+async def _chats_ctx(request: Request, current_user: User, *, force: bool = False) -> dict:
     try:
-        chats = await list_chats(request.app.state.waha, force=force)
+        chats = await list_chats(request.app.state.waha, current_user.waha_session, force=force)
         return {"request": request, "chats": chats, "chats_error": None}
     except WahaError as exc:
         return {"request": request, "chats": [], "chats_error": str(exc)}
@@ -237,8 +272,10 @@ def _find_chat(chats: list[dict], chat_id: str) -> dict:
 
 
 @router.get("/ui/chats", response_class=HTMLResponse)
-async def ui_chats(request: Request, refresh: bool = Query(False)) -> HTMLResponse:
-    return templates.TemplateResponse("_chat_list.html", await _chats_ctx(request, force=refresh))
+async def ui_chats(
+    request: Request, refresh: bool = Query(False), current_user: User = Depends(auth.require_user_web)
+) -> HTMLResponse:
+    return templates.TemplateResponse("_chat_list.html", await _chats_ctx(request, current_user, force=refresh))
 
 
 @router.get("/ui/chats/view", response_class=HTMLResponse)
@@ -246,8 +283,9 @@ async def ui_chat_view(
     request: Request,
     chat: str = Query(...),
     ok: str | None = Query(None),
+    current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    chats = (await _chats_ctx(request))["chats"]
+    chats = (await _chats_ctx(request, current_user))["chats"]
     return templates.TemplateResponse(
         "_chat_view.html",
         {
@@ -266,8 +304,11 @@ async def ui_chat_messages(
     chat: str = Query(...),
     refresh: bool = Query(False),
     db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    hist = await get_history(db, request.app.state.waha, chat, force=refresh)
+    hist = await get_history(
+        db, request.app.state.waha, current_user.id, current_user.waha_session, chat, force=refresh
+    )
     return templates.TemplateResponse(
         "_chat_messages.html",
         {"request": request, "chat_id": chat, "hist": hist, "synced_local": _sync_label(hist.synced_at)},
@@ -280,6 +321,7 @@ async def ui_chat_send(
     chat: str = Form(...),
     text: str = Form(...),
     db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     text = text.strip()
     ok = None
@@ -287,11 +329,11 @@ async def ui_chat_send(
         ok = "erro:Mensagem vazia."
     else:
         try:
-            await send_now(db, request.app.state.waha, chat, text)
+            await send_now(db, request.app.state.waha, current_user.id, current_user.waha_session, chat, text)
             ok = "Mensagem enviada."
         except WahaError as exc:
             ok = f"erro:{exc}"
-    return await ui_chat_view(request, chat=chat, ok=ok)
+    return await ui_chat_view(request, chat=chat, ok=ok, current_user=current_user)
 
 
 @router.post("/ui/chats/schedule", response_class=HTMLResponse)
@@ -302,12 +344,15 @@ async def ui_chat_schedule(
     send_at: str = Form(...),
     recurrence: str = Form(""),
     db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     ok = None
     try:
         parsed = datetime.fromisoformat(send_at)
         create_schedule(
             db,
+            user_id=current_user.id,
+            session=current_user.waha_session,
             recipient=chat,
             text=text,
             send_at=parsed,
@@ -318,7 +363,7 @@ async def ui_chat_schedule(
         ok = "erro:Data/hora inválida."
     except ValidationError as exc:
         ok = f"erro:{exc}"
-    return await ui_chat_view(request, chat=chat, ok=ok)
+    return await ui_chat_view(request, chat=chat, ok=ok, current_user=current_user)
 
 
 def _sync_label(dt: datetime | None) -> str:

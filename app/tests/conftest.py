@@ -21,6 +21,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8090/calendario/oauth/callback")
 os.environ.setdefault("TOKEN_ENCRYPTION_KEY", "8bxweqvwKGVGSYYLOSnwiZWC6TbNYabjfPe-6QBio10=")
 os.environ.setdefault("CALENDAR_SYNC_SECONDS", "3600")  # idem: não dispara sozinho durante os testes
+os.environ.setdefault("CLOCK_SYNC_SECONDS", "3600")  # idem: não dispara sozinho durante os testes
 
 import pytest  # noqa: E402
 from sqlmodel import Session, SQLModel  # noqa: E402
@@ -45,10 +46,78 @@ def _fresh_db():
     SQLModel.metadata.drop_all(engine)
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """`ratelimit._attempts` é estado de módulo global (dict em memória, ver
+    ratelimit.py) — sem isso, os vários testes que passam por `/cadastro`
+    (via `register_and_login`) dentro do MESMO processo pytest acabariam
+    batendo no limite de tentativas (5 por 300s, mesma chave de IP) bem antes
+    da janela expirar de verdade, derrubando testes que não têm nada a ver
+    com rate limit."""
+    from whatsapp_scheduler import ratelimit
+
+    ratelimit._attempts.clear()
+    yield
+    ratelimit._attempts.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_clock_offset():
+    """`clock._offset` é estado de módulo global (ver time_sync.py) — sem
+    isso, um teste que sincroniza o relógio vazaria o offset pros testes
+    seguintes que leem `clock.utcnow()` diretamente (os que usam o fixture
+    `frozen_clock` não seriam afetados, já que ele substitui `utcnow` inteira,
+    mas os que não usam ficariam com "agora" errado de forma silenciosa)."""
+    from whatsapp_scheduler import clock
+
+    clock.set_offset(timedelta(0))
+    yield
+    clock.set_offset(timedelta(0))
+
+
 @pytest.fixture
 def db():
     with Session(get_engine()) as session:
         yield session
+
+
+@pytest.fixture
+def test_user():
+    """`User` real criado direto no banco (sem passar por HTTP) — para os
+    testes unitários que chamam funções de serviço diretamente e só
+    precisam de um dono válido pra satisfazer a FK (`PRAGMA foreign_keys=ON`).
+    Objeto ORM puro (sem `Relationship()` neste projeto), então `.id` e
+    `.waha_session` continuam legíveis depois que a sessão fecha — mesmo
+    padrão do fixture `db` acima."""
+    from whatsapp_scheduler.auth import hash_password
+    from whatsapp_scheduler.models import User
+
+    with Session(get_engine()) as session:
+        user = User(name="Tester", email="tester@example.com", password_hash=hash_password("testpass123"))
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+def register_and_login(client, *, name: str = "Tester", email: str = "tester@example.com", password: str = "testpass123"):
+    """Cadastra e loga um usuário de teste no `TestClient` passado (o
+    cookie de sessão fica no jar do client, então requests seguintes já
+    saem autenticadas). Retorna o `User` criado."""
+    from sqlmodel import select as _select
+
+    from whatsapp_scheduler.models import User
+
+    resp = client.post(
+        "/cadastro",
+        data={"name": name, "email": email, "password": password, "password_confirm": password},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    with Session(get_engine()) as session:
+        user = session.exec(_select(User).where(User.email == email)).first()
+        assert user is not None
+        return user
 
 
 class FakeWaha:

@@ -1,58 +1,75 @@
-"""API REST de calendários externos (conexões, calendários, eventos, automações)."""
+"""API REST de calendários externos (conexões, calendários, eventos, automações) —
+sempre filtrada pelo dono autenticado."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from sqlmodel import Session
 
-from .. import calendar_service
+from .. import auth, calendar_service
 from ..calendar_schemas import AutomationRead, CalendarRead, ConnectionRead, EventRead
 from ..db import get_session
+from ..models import User
 from ..service import ValidationError
+from sqlmodel import Session
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 
 @router.get("/connections", response_model=list[ConnectionRead])
-def list_connections(db: Session = Depends(get_session)) -> list[ConnectionRead]:
-    return [ConnectionRead.of(c) for c in calendar_service.list_connections(db)]
+def list_connections(
+    db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+) -> list[ConnectionRead]:
+    return [ConnectionRead.of(c) for c in calendar_service.list_connections(db, current_user.id)]
 
 
 @router.delete("/connections/{connection_id}")
-def disconnect(connection_id: str, db: Session = Depends(get_session)) -> dict:
-    if not calendar_service.disconnect(db, connection_id):
+def disconnect(
+    connection_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+) -> dict:
+    if not calendar_service.disconnect(db, connection_id, current_user.id):
         raise HTTPException(status_code=404, detail="Conexão não encontrada.")
     return {"status": "disconnected", "id": connection_id}
 
 
 @router.post("/connections/{connection_id}/sync", response_model=ConnectionRead)
-async def sync_now(connection_id: str, db: Session = Depends(get_session)) -> ConnectionRead:
-    connection = await calendar_service.sync_now(db, connection_id)
+async def sync_now(
+    connection_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+) -> ConnectionRead:
+    connection = await calendar_service.sync_now(db, connection_id, current_user.id)
     if connection is None:
         raise HTTPException(status_code=404, detail="Conexão não encontrada.")
     return ConnectionRead.of(connection)
 
 
 @router.get("/connections/{connection_id}/calendars", response_model=list[CalendarRead])
-def list_calendars(connection_id: str, db: Session = Depends(get_session)) -> list[CalendarRead]:
-    return [CalendarRead.of(c) for c in calendar_service.list_calendars(db, connection_id)]
+def list_calendars(
+    connection_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+) -> list[CalendarRead]:
+    return [CalendarRead.of(c) for c in calendar_service.list_calendars(db, connection_id, current_user.id)]
 
 
 @router.post("/calendars/{calendar_id}/toggle", response_model=CalendarRead)
 def toggle_calendar(
-    calendar_id: str, enabled: bool = Body(..., embed=True), db: Session = Depends(get_session)
+    calendar_id: str,
+    enabled: bool = Body(..., embed=True),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_api),
 ) -> CalendarRead:
-    calendar = calendar_service.set_calendar_enabled(db, calendar_id, enabled)
+    calendar = calendar_service.set_calendar_enabled(db, calendar_id, enabled, current_user.id)
     if calendar is None:
         raise HTTPException(status_code=404, detail="Calendário não encontrado.")
     return CalendarRead.of(calendar)
 
 
 @router.get("/events", response_model=list[EventRead])
-def list_events(days: int | None = None, db: Session = Depends(get_session)) -> list[EventRead]:
+def list_events(
+    days: int | None = None, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+) -> list[EventRead]:
     out = []
-    for event in calendar_service.agenda(db, days=days):
-        automations = [AutomationRead.of(item) for item in calendar_service.event_automations(db, event.id)]
+    for event in calendar_service.agenda(db, current_user.id, days=days):
+        automations = [
+            AutomationRead.of(item) for item in calendar_service.event_automations(db, event.id, current_user.id)
+        ]
         out.append(EventRead.of(event, automations))
     return out
 
@@ -67,11 +84,14 @@ def create_automation(
     offset_direction: str = Body(...),
     timezone_name: str | None = Body(None),
     db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_api),
 ) -> AutomationRead:
     try:
         automation = calendar_service.create_event_automation(
             db,
             event_id=event_id,
+            user_id=current_user.id,
+            waha_session=current_user.waha_session,
             recipients=recipients,
             messages=messages,
             offset_amount=offset_amount,
@@ -82,14 +102,16 @@ def create_automation(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    for item in calendar_service.event_automations(db, event_id):
+    for item in calendar_service.event_automations(db, event_id, current_user.id):
         if item["automation"].id == automation.id:
             return AutomationRead.of(item)
     raise HTTPException(status_code=500, detail="Automação criada mas não encontrada logo em seguida.")
 
 
 @router.delete("/automations/{automation_id}")
-def delete_automation(automation_id: str, db: Session = Depends(get_session)) -> dict:
-    if not calendar_service.remove_event_automation(db, automation_id):
+def delete_automation(
+    automation_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+) -> dict:
+    if not calendar_service.remove_event_automation(db, automation_id, current_user.id):
         raise HTTPException(status_code=404, detail="Automação não encontrada.")
     return {"status": "canceled", "id": automation_id}

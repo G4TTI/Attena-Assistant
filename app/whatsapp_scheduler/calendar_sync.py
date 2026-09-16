@@ -23,6 +23,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import update as sa_update
@@ -48,6 +49,7 @@ from .models import (
     EventStatus,
     Schedule,
 )
+from .recurrence import local_to_utc, parse_hhmm, utc_to_local
 from .service import cancel_schedule
 
 logger = logging.getLogger("whatsapp_scheduler.calendar_sync")
@@ -97,7 +99,30 @@ def _offset_timedelta(amount: int, unit: str) -> timedelta:
     raise ValueError(f"Unidade de offset desconhecida: {unit!r}")
 
 
-def target_utc_for_offset(event_start_utc: datetime, amount: int, unit: str, direction: str) -> datetime:
+def _custom_target_utc(event_start_utc: datetime, custom_time_local: str, event_timezone: str) -> datetime:
+    """"custom": horário ABSOLUTO (não offset) — pega a data local do
+    evento (na timezone do próprio evento) e combina com o horário
+    escolhido. Recalculado a cada edição do evento, então se o evento mudar
+    de dia o disparo acompanha a nova data, sempre no mesmo horário-do-dia."""
+    hour, minute = parse_hhmm(custom_time_local)
+    event_date = utc_to_local(event_start_utc, event_timezone).date()
+    target_local = datetime.combine(event_date, dt_time(hour, minute))
+    return local_to_utc(target_local, event_timezone)
+
+
+def target_utc_for_offset(
+    event_start_utc: datetime,
+    amount: int,
+    unit: str,
+    direction: str,
+    *,
+    custom_time_local: str | None = None,
+    event_timezone: str = "UTC",
+) -> datetime:
+    if direction == "custom":
+        if not custom_time_local:
+            raise ValueError("custom_time_local é obrigatório quando direction == 'custom'")
+        return _custom_target_utc(event_start_utc, custom_time_local, event_timezone)
     delta = _offset_timedelta(amount, unit)
     if direction == "before":
         return event_start_utc - delta
@@ -107,14 +132,24 @@ def target_utc_for_offset(event_start_utc: datetime, amount: int, unit: str, dir
 
 
 def target_utc_for_message(
-    event_start_utc: datetime, amount: int, unit: str, direction: str, position: int, gap_seconds: int
+    event_start_utc: datetime,
+    amount: int,
+    unit: str,
+    direction: str,
+    position: int,
+    gap_seconds: int,
+    *,
+    custom_time_local: str | None = None,
+    event_timezone: str = "UTC",
 ) -> datetime:
     """Igual a `target_utc_for_offset`, mais o intervalo acumulado até a
     mensagem `position` (0 = primeira, sem gap) de uma automação de várias
     mensagens. Usado tanto na criação quanto no recálculo — se o recálculo
     não reaplicar o gap por posição, uma edição de horário do evento
     colapsaria todas as mensagens da automação no mesmo instante."""
-    base = target_utc_for_offset(event_start_utc, amount, unit, direction)
+    base = target_utc_for_offset(
+        event_start_utc, amount, unit, direction, custom_time_local=custom_time_local, event_timezone=event_timezone
+    )
     return base + timedelta(seconds=position * gap_seconds)
 
 
@@ -146,6 +181,8 @@ def _reschedule_automations(db: Session, event: Event, now: datetime) -> None:
                 str(automation.offset_direction),
                 message.position,
                 automation.message_gap_seconds,
+                custom_time_local=automation.custom_time_local,
+                event_timezone=event.timezone or settings.default_timezone,
             )
             # first_run_local é ingênuo, na timezone do próprio schedule — mesma
             # convenção usada por service.create_schedule.
@@ -195,7 +232,7 @@ def cancel_event_automations(db: Session, event: Event) -> None:
     _cancel_automations(db, event)
 
 
-def _reconcile_event(db: Session, calendar: Calendar, remote: RemoteEvent, now: datetime) -> None:
+def _reconcile_event(db: Session, calendar: Calendar, user_id: str | None, remote: RemoteEvent, now: datetime) -> None:
     existing = db.exec(
         select(Event)
         .where(col(Event.calendar_id) == calendar.id)
@@ -220,8 +257,11 @@ def _reconcile_event(db: Session, calendar: Calendar, remote: RemoteEvent, now: 
     time_changed = existing is not None and existing.start_utc != remote.start_utc
 
     if existing is None:
-        existing = Event(source=EventSource.google, calendar_id=calendar.id, external_id=remote.external_id)
+        existing = Event(
+            user_id=user_id, source=EventSource.google, calendar_id=calendar.id, external_id=remote.external_id
+        )
 
+    existing.user_id = existing.user_id or user_id  # backfill se o evento foi sincronizado antes da conexão ter dono
     existing.title = remote.title
     existing.description = remote.description
     existing.start_utc = remote.start_utc
@@ -240,7 +280,9 @@ def _reconcile_event(db: Session, calendar: Calendar, remote: RemoteEvent, now: 
         _reschedule_automations(db, existing, now)
 
 
-async def sync_calendar(db: Session, provider: CalendarProvider, tokens: OAuthTokens, calendar: Calendar) -> None:
+async def sync_calendar(
+    db: Session, provider: CalendarProvider, tokens: OAuthTokens, calendar: Calendar, user_id: str | None
+) -> None:
     now = utcnow()
     remote_calendar = RemoteCalendar(external_id=calendar.external_id, name=calendar.name, time_zone=calendar.time_zone)
 
@@ -265,7 +307,7 @@ async def sync_calendar(db: Session, provider: CalendarProvider, tokens: OAuthTo
         page = await provider.list_events(tokens, remote_calendar, time_min=time_min, time_max=time_max)
 
     for remote_event in page.events:
-        _reconcile_event(db, calendar, remote_event, now)
+        _reconcile_event(db, calendar, user_id, remote_event, now)
 
     calendar.sync_token = page.next_sync_token
     calendar.updated_at = now
@@ -289,7 +331,7 @@ async def sync_connection(
         ).all()
         for calendar in calendars:
             try:
-                await sync_calendar(db, provider, tokens, calendar)
+                await sync_calendar(db, provider, tokens, calendar, connection.user_id)
             except CalendarProviderError:
                 raise
             except Exception:

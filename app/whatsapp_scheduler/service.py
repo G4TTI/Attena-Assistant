@@ -28,12 +28,13 @@ def _resolve_local(send_at: datetime, tz_name: str) -> datetime:
 def create_schedule(
     db: Session,
     *,
+    user_id: str,
+    session: str,
     recipient: str,
     text: str,
     send_at: datetime,
     timezone: str | None = None,
     recurrence: str | None = None,
-    session: str | None = None,
     max_attempts: int = 3,
     depends_on_schedule_id: str | None = None,
 ) -> Schedule:
@@ -63,7 +64,8 @@ def create_schedule(
         raise ValidationError("max_attempts deve estar entre 1 e 10.")
 
     schedule = Schedule(
-        session=(session or settings.waha_session).strip() or settings.waha_session,
+        user_id=user_id,
+        session=session.strip(),
         recipient_input=recipient.strip(),
         chat_id=chat_id,
         text=text,
@@ -87,9 +89,15 @@ def create_schedule(
     return schedule
 
 
-def cancel_schedule(db: Session, schedule_id: str) -> bool:
+def cancel_schedule(db: Session, schedule_id: str, *, user_id: str | None = None) -> bool:
+    """`user_id=None` é usado só pelas chamadas internas (ex.: cascata ao
+    desconectar uma automação/calendário) que já validaram o dono do recurso
+    pai — todo caminho vindo de uma rota HTTP passa o `user_id` do usuário
+    autenticado."""
     schedule = db.get(Schedule, schedule_id)
     if schedule is None or not schedule.enabled:
+        return False
+    if user_id is not None and schedule.user_id != user_id:
         return False
     schedule.enabled = False
     schedule.updated_at = utcnow()
@@ -110,7 +118,7 @@ def cancel_schedule(db: Session, schedule_id: str) -> bool:
     return True
 
 
-def run_now(db: Session, schedule_id: str) -> Dispatch | None:
+def run_now(db: Session, schedule_id: str, *, user_id: str | None = None) -> Dispatch | None:
     """Antecipa o envio para agora (para testar ponta a ponta).
 
     Se já existe uma dispatch pendente, apenas adianta o horário dela; senão,
@@ -118,6 +126,8 @@ def run_now(db: Session, schedule_id: str) -> Dispatch | None:
     """
     schedule = db.get(Schedule, schedule_id)
     if schedule is None:
+        return None
+    if user_id is not None and schedule.user_id != user_id:
         return None
 
     pending = db.exec(

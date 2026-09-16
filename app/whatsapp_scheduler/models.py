@@ -41,6 +41,9 @@ class Schedule(SQLModel, table=True):
     __tablename__ = "schedules"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable: linhas criadas antes da autenticação existir ficam sem dono
+    # até `db.claim_orphan_data` associá-las ao primeiro usuário cadastrado.
+    user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
     session: str = "default"
     recipient_input: str
     chat_id: str = Field(index=True)
@@ -76,7 +79,15 @@ class CachedMessage(SQLModel, table=True):
 
     __tablename__ = "cached_messages"
 
+    # message_id continua sendo a PK (evita reconstruir a tabela toda num banco
+    # já com dados — SQLite não faz ALTER de chave primária). Uma colisão de
+    # message_id entre sessões WAHA de dois usuários diferentes é extremamente
+    # improvável (o WAHA já compõe o id a partir do chat); no pior caso uma
+    # linha de cache é sobrescrita, não um vazamento de dado entre contas —
+    # `user_id` é o que decide o que cada usuário VÊ nas consultas.
     message_id: str = Field(primary_key=True)
+    # Nullable pelo mesmo motivo de Schedule.user_id (ver bloco de usuários acima).
+    user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
     chat_id: str = Field(index=True)
     ts: int = Field(default=0, index=True)  # epoch em segundos
     from_me: bool = False
@@ -137,6 +148,10 @@ class OffsetDirection(str, enum.Enum):
     before = "before"
     at = "at"
     after = "after"
+    # Horário absoluto (ex.: "18:00"), não relativo ao evento — ver
+    # Automation.custom_time_local. offset_amount/offset_unit são ignorados
+    # nesse modo (mantidos no schema por simplicidade, não usados no cálculo).
+    custom = "custom"
 
     def __str__(self) -> str:
         return self.value
@@ -148,6 +163,8 @@ class CalendarConnection(SQLModel, table=True):
     __tablename__ = "calendar_connections"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable pelo mesmo motivo de Schedule.user_id (ver bloco de usuários acima).
+    user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
     provider: str = Field(index=True)  # "google" | futuramente "outlook" | "apple"
     account_identifier: str = ""  # e-mail da conta, só para exibição
     # Tokens sempre cifrados (ver crypto.py) — nunca texto puro no banco.
@@ -189,6 +206,8 @@ class Event(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("calendar_id", "external_id", name="uq_event_calendar_external"),)
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nullable pelo mesmo motivo de Schedule.user_id (ver bloco de usuários acima).
+    user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
     source: EventSource = Field(default=EventSource.internal, index=True)
     calendar_id: str | None = Field(default=None, foreign_key="calendars.id", index=True)
     external_id: str | None = None
@@ -241,6 +260,11 @@ class Automation(SQLModel, table=True):
     offset_amount: int
     offset_unit: OffsetUnit
     offset_direction: OffsetDirection
+    # Só usado quando offset_direction == custom: horário absoluto "HH:MM",
+    # combinado com a data local do evento a cada (re)cálculo. Coluna
+    # adicionada via ALTER TABLE em db.py (tabela pré-existente, sem
+    # Alembic) — por isso precisa ser nullable.
+    custom_time_local: str | None = Field(default=None)
     # Intervalo padrão entre o envio de uma mensagem e a próxima da mesma
     # automação/destinatário — arquitetura pronta para virar configurável
     # por mensagem no futuro, sem precisar mudar o schema de novo.
@@ -321,3 +345,134 @@ class AppSetting(SQLModel, table=True):
     key: str = Field(primary_key=True)
     value: str
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
+# Usuários, sessões e autenticação.
+#
+# Tabelas 100% novas, mesmo raciocínio do bloco de calendários acima: sem
+# Alembic, `create_all()` só cria o que ainda não existe, então um banco já
+# rodando ganha estas tabelas sozinho no próximo boot. As colunas `user_id`
+# adicionadas às tabelas pré-existentes (Schedule, CalendarConnection, Event,
+# CachedMessage) entram via ALTER TABLE em db.py — nullable, porque dados
+# criados antes da autenticação existir não têm dono até alguém reivindicar
+# (ver `db.claim_orphan_data`).
+# --------------------------------------------------------------------------- #
+def _waha_session_default() -> str:
+    return f"u_{uuid4().hex[:12]}"
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", name="uq_user_email"),)
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    name: str
+    # Sempre normalizado (trim + lowercase) antes de salvar — ver auth.py.
+    email: str = Field(index=True)
+    password_hash: str
+    phone: str | None = None  # telefone da CONTA — nunca o número do WhatsApp conectado (ver User.waha_session)
+    # Nome da sessão WAHA própria deste usuário — cada usuário tem seu WhatsApp
+    # isolado, mesmo servidor WAHA. Nunca reaproveita `phone` automaticamente.
+    waha_session: str = Field(default_factory=_waha_session_default, unique=True, index=True)
+    timezone: str | None = None  # override pessoal; None = usa o fallback global (app_settings)
+    email_verified: bool = False
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class BillingProfile(SQLModel, table=True):
+    """Dados de cobrança — 1:1 com User, sempre opcional (nunca bloqueia o uso do app)."""
+
+    __tablename__ = "billing_profiles"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", unique=True, index=True)
+    legal_name: str = ""
+    postal_code: str = ""
+    address: str = ""
+    number: str = ""
+    complement: str = ""
+    neighborhood: str = ""
+    city: str = ""
+    state: str = ""
+    country: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class UserSession(SQLModel, table=True):
+    """Sessão de login (cookie httponly). O cookie guarda o token opaco em
+    texto puro; aqui só fica o hash SHA-256 dele — um vazamento do banco não
+    basta para sequestrar uma sessão. Ver auth.py."""
+
+    __tablename__ = "user_sessions"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    token_hash: str = Field(unique=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    last_seen_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    user_agent: str | None = None
+    ip_address: str | None = None
+    revoked_at: datetime | None = None
+
+
+class PasswordResetToken(SQLModel, table=True):
+    """Token de recuperação de senha — mesmo padrão de UserSession: só o
+    hash é persistido, o token em si só existe no link enviado ao usuário."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    token_hash: str = Field(unique=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class EmailVerificationToken(SQLModel, table=True):
+    __tablename__ = "email_verification_tokens"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    token_hash: str = Field(unique=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class AuditEventType(str, enum.Enum):
+    login_success = "login_success"
+    login_failed = "login_failed"
+    logout = "logout"
+    register = "register"
+    password_changed = "password_changed"
+    password_reset_requested = "password_reset_requested"
+    password_reset_completed = "password_reset_completed"
+    email_changed = "email_changed"
+    google_connected = "google_connected"
+    google_disconnected = "google_disconnected"
+    whatsapp_reconnected = "whatsapp_reconnected"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class LoginAuditEvent(SQLModel, table=True):
+    """Trilha de auditoria de segurança da conta — nunca guarda senha ou
+    token, só o suficiente para investigar um incidente (Parte 38)."""
+
+    __tablename__ = "login_audit_events"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    # Nulo em login_failed com e-mail que não existe (não há usuário a ligar).
+    user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
+    event_type: AuditEventType = Field(index=True)
+    detail: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime = Field(default_factory=utcnow, index=True)

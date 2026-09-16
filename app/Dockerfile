@@ -11,7 +11,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY whatsapp_scheduler ./whatsapp_scheduler
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data \
+    && groupadd --system app && useradd --system --gid app --home /srv app \
+    && chown -R app:app /srv /app/data
+USER app
 
 EXPOSE 8000
 

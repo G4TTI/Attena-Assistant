@@ -1,0 +1,16 @@
+{% extends "auth_base.html" %}
+{% block title %}Redefinir senha — Attena Assistant{% endblock %}
+{% block card_title %}Redefinir senha{% endblock %}
+{% block card_sub %}Escolha uma nova senha{% endblock %}
+{% block form %}
+<form method="post" action="/redefinir-senha/{{ token }}">
+  <label for="new_password">Nova senha</label>
+  <input id="new_password" name="new_password" type="password" placeholder="Crie uma senha" required minlength="8" autofocus>
+  <label for="new_password_confirm">Confirmar nova senha</label>
+  <input id="new_password_confirm" name="new_password_confirm" type="password" placeholder="Digite a senha novamente" required minlength="8">
+  <button class="primary" type="submit">Redefinir senha</button>
+</form>
+<div class="auth-foot">
+  <a href="/login">Voltar para o login</a>
+</div>
+{% endblock %}

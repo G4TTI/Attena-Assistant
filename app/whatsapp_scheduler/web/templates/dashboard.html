@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Olá{{ ', ' ~ greeting_name if greeting_name }} 👋</h1>
+    <p class="sub">Aqui está um resumo da sua operação.</p>
+  </div>
+  <div class="meta-live">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
+    <span>{{ today_label }}</span>
+    <button type="button" class="ghost" style="margin-left:8px"
+            hx-get="/ui/dashboard/summary" hx-target="#dashboard-summary" hx-swap="outerHTML">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+      <span class="hide-loading">Atualizar</span><span class="spin">atualizando…</span>
+    </button>
+  </div>
+</div>
+
+{% include "_dashboard_summary.html" %}
+
+{% endblock %}

@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from tests.conftest import FakeWaha
+from tests.conftest import FakeWaha, register_and_login
 from whatsapp_scheduler import chatsvc
 from whatsapp_scheduler.db import get_engine
 from whatsapp_scheduler.main import app
@@ -44,13 +44,15 @@ def client():
     with TestClient(app) as c:
         c.app.state.waha = waha
         c.waha = waha
+        user = register_and_login(c)
+        c.user = user
         yield c
 
 
-async def test_list_chats_normalizes_and_sorts():
+async def test_list_chats_normalizes_and_sorts(test_user):
     waha = FakeWaha()
     waha.chats = OVERVIEW
-    chats = await chatsvc.list_chats(waha, force=True)
+    chats = await chatsvc.list_chats(waha, test_user.waha_session, force=True)
     assert [c["id"] for c in chats] == ["12036300000000@g.us", "5511999998888@c.us"]  # mais recente 1º
     grp = chats[0]
     assert grp["is_group"] is True
@@ -59,37 +61,37 @@ async def test_list_chats_normalizes_and_sorts():
     assert chats[1]["last_preview"] == "oi tudo bem?"
 
 
-async def test_get_history_caches(db: Session):
+async def test_get_history_caches(db: Session, test_user):
     waha = FakeWaha()
     waha.messages = MESSAGES
 
-    first = await chatsvc.get_history(db, waha, "5511999998888@c.us")
+    first = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us")
     assert first.from_cache is False
     assert [m["text"] for m in first.messages] == ["oi", "ola", "[imagem]"]
 
     waha.messages_error = RuntimeError("não deveria ser chamado")
-    second = await chatsvc.get_history(db, waha, "5511999998888@c.us")
+    second = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us")
     assert second.from_cache is True
     assert len(second.messages) == 3
 
 
-async def test_get_history_falls_back_to_cache_on_error(db: Session):
+async def test_get_history_falls_back_to_cache_on_error(db: Session, test_user):
     from whatsapp_scheduler.waha import WahaError
 
     waha = FakeWaha()
     waha.messages = MESSAGES
-    await chatsvc.get_history(db, waha, "chat@c.us")
+    await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "chat@c.us")
 
     waha.messages_error = WahaError("timeout")
-    out = await chatsvc.get_history(db, waha, "chat@c.us", force=True)
+    out = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "chat@c.us", force=True)
     assert out.from_cache is True
     assert out.error is not None
     assert len(out.messages) == 3
 
 
-async def test_send_now_records_outgoing_message(db: Session):
+async def test_send_now_records_outgoing_message(db: Session, test_user):
     waha = FakeWaha()
-    await chatsvc.send_now(db, waha, "5511999998888@c.us", "mensagem enviada")
+    await chatsvc.send_now(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "mensagem enviada")
     rows = db.exec(select(CachedMessage).where(CachedMessage.chat_id == "5511999998888@c.us")).all()
     assert len(rows) == 1
     assert rows[0].from_me is True

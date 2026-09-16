@@ -46,7 +46,7 @@ from .models import (
     Schedule,
 )
 from .recipients import RecipientError, normalize_recipient
-from .recurrence import local_to_utc, utc_to_local
+from .recurrence import RecurrenceError, local_to_utc, parse_hhmm, utc_to_local
 from .service import ValidationError, cancel_schedule, create_schedule
 
 logger = logging.getLogger("whatsapp_scheduler.calendar_service")
@@ -79,7 +79,7 @@ def start_connect(provider_key: str = "google") -> tuple[str, str]:
     return provider.get_authorize_url(state), state
 
 
-async def finish_connect(db: Session, *, provider_key: str, code: str) -> CalendarConnection:
+async def finish_connect(db: Session, *, provider_key: str, code: str, user_id: str) -> CalendarConnection:
     missing = missing_config(provider_key)
     if missing:
         raise NotConfiguredError("Integração não configurada. Defina no .env: " + ", ".join(missing))
@@ -92,11 +92,12 @@ async def finish_connect(db: Session, *, provider_key: str, code: str) -> Calend
     if email:
         existing = db.exec(
             select(CalendarConnection)
+            .where(col(CalendarConnection.user_id) == user_id)
             .where(col(CalendarConnection.provider) == provider_key)
             .where(col(CalendarConnection.account_identifier) == email)
         ).first()
 
-    connection = existing or CalendarConnection(provider=provider_key)
+    connection = existing or CalendarConnection(provider=provider_key, user_id=user_id)
     connection.account_identifier = email or connection.account_identifier or "conta Google"
     connection.access_token_enc = crypto.encrypt(tokens.access_token)
     connection.refresh_token_enc = crypto.encrypt(tokens.refresh_token)
@@ -149,8 +150,21 @@ async def refresh_remote_calendars(db: Session, connection: CalendarConnection) 
     return rows
 
 
-def list_connections(db: Session) -> list[CalendarConnection]:
-    return list(db.exec(select(CalendarConnection).order_by(col(CalendarConnection.created_at))).all())
+def list_connections(db: Session, user_id: str) -> list[CalendarConnection]:
+    return list(
+        db.exec(
+            select(CalendarConnection)
+            .where(col(CalendarConnection.user_id) == user_id)
+            .order_by(col(CalendarConnection.created_at))
+        ).all()
+    )
+
+
+def _owned_connection(db: Session, connection_id: str, user_id: str) -> CalendarConnection | None:
+    connection = db.get(CalendarConnection, connection_id)
+    if connection is None or connection.user_id != user_id:
+        return None
+    return connection
 
 
 _WRITE_SCOPE = "https://www.googleapis.com/auth/calendar"
@@ -162,7 +176,9 @@ def connection_has_write_scope(connection: CalendarConnection) -> bool:
     return _WRITE_SCOPE in (connection.scope or "").split()
 
 
-def list_calendars(db: Session, connection_id: str) -> list[Calendar]:
+def list_calendars(db: Session, connection_id: str, user_id: str) -> list[Calendar]:
+    if _owned_connection(db, connection_id, user_id) is None:
+        return []
     return list(
         db.exec(
             select(Calendar).where(col(Calendar.connection_id) == connection_id).order_by(col(Calendar.name))
@@ -170,8 +186,18 @@ def list_calendars(db: Session, connection_id: str) -> list[Calendar]:
     )
 
 
-def set_calendar_enabled(db: Session, calendar_id: str, enabled: bool) -> Calendar | None:
+def _owned_calendar(db: Session, calendar_id: str, user_id: str) -> Calendar | None:
     calendar = db.get(Calendar, calendar_id)
+    if calendar is None:
+        return None
+    connection = db.get(CalendarConnection, calendar.connection_id)
+    if connection is None or connection.user_id != user_id:
+        return None
+    return calendar
+
+
+def set_calendar_enabled(db: Session, calendar_id: str, enabled: bool, user_id: str) -> Calendar | None:
+    calendar = _owned_calendar(db, calendar_id, user_id)
     if calendar is None:
         return None
     calendar.enabled = enabled
@@ -186,8 +212,8 @@ def set_calendar_enabled(db: Session, calendar_id: str, enabled: bool) -> Calend
     return calendar
 
 
-async def sync_now(db: Session, connection_id: str) -> CalendarConnection | None:
-    connection = db.get(CalendarConnection, connection_id)
+async def sync_now(db: Session, connection_id: str, user_id: str) -> CalendarConnection | None:
+    connection = _owned_connection(db, connection_id, user_id)
     if connection is None:
         return None
     await sync_connection(db, connection)
@@ -195,11 +221,11 @@ async def sync_now(db: Session, connection_id: str) -> CalendarConnection | None
     return connection
 
 
-def disconnect(db: Session, connection_id: str) -> bool:
+def disconnect(db: Session, connection_id: str, user_id: str) -> bool:
     """Para novas sincronizações e cancela mensagens futuras ainda pendentes
     ligadas a esta conta — preserva histórico e mensagens já enviadas.
     """
-    connection = db.get(CalendarConnection, connection_id)
+    connection = _owned_connection(db, connection_id, user_id)
     if connection is None:
         return False
 
@@ -240,6 +266,20 @@ def _parse_offset(offset_unit: str, offset_direction: str) -> tuple[OffsetUnit, 
     return unit, direction
 
 
+def _resolve_custom_time(direction: OffsetDirection, custom_time_local: str | None) -> str | None:
+    """direction != custom: ignora qualquer valor recebido (nunca persiste
+    lixo). direction == custom: exige um "HH:MM" válido."""
+    if direction != OffsetDirection.custom:
+        return None
+    if not custom_time_local or not custom_time_local.strip():
+        raise ValidationError("Informe o horário do disparo personalizado.")
+    try:
+        parse_hhmm(custom_time_local.strip())
+    except RecurrenceError as exc:
+        raise ValidationError(str(exc)) from exc
+    return custom_time_local.strip()
+
+
 _DUPLICATE_WINDOW = timedelta(seconds=15)
 
 
@@ -250,6 +290,7 @@ def _find_duplicate_automation(
     unit: OffsetUnit,
     direction: OffsetDirection,
     amount: int,
+    custom_time_local: str | None,
     message_texts: list[str],
     chat_ids: set[str],
     now: datetime,
@@ -270,6 +311,7 @@ def _find_duplicate_automation(
         .where(col(Automation.offset_amount) == amount)
         .where(col(Automation.offset_unit) == unit)
         .where(col(Automation.offset_direction) == direction)
+        .where(col(Automation.custom_time_local) == custom_time_local)
         .where(col(Automation.created_at) >= window_start)
     ).all()
     for automation in candidates:
@@ -299,16 +341,19 @@ def create_event_automation(
     db: Session,
     *,
     event_id: str,
+    user_id: str,
+    waha_session: str,
     recipients: list[str],
     messages: list[str],
     offset_amount: int,
     offset_unit: str,
     offset_direction: str,
+    custom_time_local: str | None = None,
     timezone_name: str | None = None,
     max_attempts: int = 3,
 ) -> Automation:
     event = db.get(Event, event_id)
-    if event is None:
+    if event is None or event.user_id != user_id:
         raise ValidationError("Evento não encontrado.")
 
     recipients = [r.strip() for r in recipients if r.strip()]
@@ -321,7 +366,9 @@ def create_event_automation(
         raise ValidationError("O tempo da regra não pode ser negativo.")
 
     unit, direction = _parse_offset(offset_unit, offset_direction)
+    custom_time_local = _resolve_custom_time(direction, custom_time_local)
     tz_name = timezone_name or event.timezone or settings.default_timezone
+    event_tz = event.timezone or settings.default_timezone
 
     chat_ids: list[str] = []
     for recipient in recipients:
@@ -337,6 +384,7 @@ def create_event_automation(
         unit=unit,
         direction=direction,
         amount=offset_amount,
+        custom_time_local=custom_time_local,
         message_texts=message_texts,
         chat_ids=set(chat_ids),
         now=now,
@@ -345,7 +393,11 @@ def create_event_automation(
         return duplicate
 
     automation = Automation(
-        event_id=event.id, offset_amount=offset_amount, offset_unit=unit, offset_direction=direction
+        event_id=event.id,
+        offset_amount=offset_amount,
+        offset_unit=unit,
+        offset_direction=direction,
+        custom_time_local=custom_time_local,
     )
     db.add(automation)
     db.commit()
@@ -372,9 +424,13 @@ def create_event_automation(
                 direction.value,
                 message.position,
                 automation.message_gap_seconds,
+                custom_time_local=custom_time_local,
+                event_timezone=event_tz,
             )
             schedule = create_schedule(
                 db,
+                user_id=user_id,
+                session=waha_session,
                 recipient=recipient,
                 text=message.text,
                 send_at=target_utc.replace(tzinfo=timezone.utc),
@@ -396,8 +452,18 @@ def create_event_automation(
     return automation
 
 
-def remove_event_automation(db: Session, automation_id: str) -> bool:
+def _owned_automation(db: Session, automation_id: str, user_id: str) -> Automation | None:
     automation = db.get(Automation, automation_id)
+    if automation is None:
+        return None
+    event = db.get(Event, automation.event_id)
+    if event is None or event.user_id != user_id:
+        return None
+    return automation
+
+
+def remove_event_automation(db: Session, automation_id: str, user_id: str) -> bool:
+    automation = _owned_automation(db, automation_id, user_id)
     if automation is None:
         return False
     links = db.exec(select(AutomationSchedule).where(col(AutomationSchedule.automation_id) == automation_id)).all()
@@ -410,11 +476,14 @@ def update_event_automation(
     db: Session,
     automation_id: str,
     *,
+    user_id: str,
+    waha_session: str,
     recipients: list[str],
     messages: list[str],
     offset_amount: int,
     offset_unit: str,
     offset_direction: str,
+    custom_time_local: str | None = None,
     timezone_name: str | None = None,
 ) -> Automation:
     """"Editar" = cancelar todos os schedules da automação antiga + apagar as
@@ -427,7 +496,7 @@ def update_event_automation(
     Schedule/Dispatch como histórico), depois as linhas-folha
     (AutomationSchedule), depois AutomationMessage, só então Automation.
     """
-    automation = db.get(Automation, automation_id)
+    automation = _owned_automation(db, automation_id, user_id)
     if automation is None:
         raise ValidationError("Automação não encontrada.")
     event_id = automation.event_id
@@ -443,19 +512,25 @@ def update_event_automation(
     return create_event_automation(
         db,
         event_id=event_id,
+        user_id=user_id,
+        waha_session=waha_session,
         recipients=recipients,
         messages=messages,
         offset_amount=offset_amount,
         offset_unit=offset_unit,
         offset_direction=offset_direction,
+        custom_time_local=custom_time_local,
         timezone_name=timezone_name,
     )
 
 
-def event_automations(db: Session, event_id: str) -> list[dict]:
+def event_automations(db: Session, event_id: str, user_id: str) -> list[dict]:
     """Uma entrada por `Automation`, com suas mensagens em ordem e, para cada
     uma, o `Schedule` de cada destinatário (pra mostrar status de envio
     individual) — usado pelo modal de detalhe do evento e pela API REST."""
+    event = db.get(Event, event_id)
+    if event is None or event.user_id != user_id:
+        return []
     automations = db.exec(
         select(Automation).where(col(Automation.event_id) == event_id).order_by(col(Automation.created_at))
     ).all()
@@ -492,12 +567,19 @@ def event_automations(db: Session, event_id: str) -> list[dict]:
             }
             for message in messages
         ]
+        # Horário real da 1ª mensagem (position 0) — dado já persistido em
+        # Schedule.first_run_local, não recalculado aqui, pra exibir o
+        # instante exato do disparo (ex.: no modal de detalhe do evento).
+        first_send_local = None
+        if message_rows and message_rows[0]["per_recipient"]:
+            first_send_local = message_rows[0]["per_recipient"][0]["schedule"].first_run_local
         out.append(
             {
                 "automation": automation,
                 "recipients": list(recipients.values()),
                 "messages": message_rows,
                 "enabled": any(s.enabled for s in schedules.values()),
+                "first_send_local": first_send_local,
             }
         )
     return out
@@ -554,7 +636,7 @@ def migrate_legacy_automations(db: Session) -> None:
         logger.info("migradas %d automações do formato antigo (event_automations) pro novo formato", migrated)
 
 
-def agenda(db: Session, *, days: int | None = None) -> list[Event]:
+def agenda(db: Session, user_id: str, *, days: int | None = None) -> list[Event]:
     """Eventos a partir de agora até `days` dias à frente (default: settings).
     Usado pela API REST (`/api/calendar/events`) — a UI web usa `month_grid`."""
     span = days if days is not None else settings.calendar_agenda_default_days
@@ -563,6 +645,7 @@ def agenda(db: Session, *, days: int | None = None) -> list[Event]:
     return list(
         db.exec(
             select(Event)
+            .where(col(Event.user_id) == user_id)
             .where(col(Event.start_utc) >= start)
             .where(col(Event.start_utc) <= end)
             .where(col(Event.status) == EventStatus.confirmed)
@@ -571,7 +654,7 @@ def agenda(db: Session, *, days: int | None = None) -> list[Event]:
     )
 
 
-def month_grid(db: Session, year: int, month: int) -> list[list[dict]]:
+def month_grid(db: Session, user_id: str, year: int, month: int) -> list[list[dict]]:
     """Grade de 6 semanas (42 dias, domingo a sábado) pro mês pedido.
 
     A janela de busca tem uma margem de 24h além dos limites "exatos" da
@@ -597,6 +680,7 @@ def month_grid(db: Session, year: int, month: int) -> list[list[dict]]:
 
     events = db.exec(
         select(Event)
+        .where(col(Event.user_id) == user_id)
         .where(col(Event.status) == EventStatus.confirmed)
         .where(col(Event.start_utc) >= query_start)
         .where(col(Event.start_utc) < query_end)
@@ -682,6 +766,7 @@ def _delete_automations_for_event(db: Session, event_id: str) -> None:
 async def create_internal_event(
     db: Session,
     *,
+    user_id: str,
     title: str,
     description: str = "",
     start_local: datetime,
@@ -697,6 +782,7 @@ async def create_internal_event(
     e tentar de novo depois."""
     title, description = _validate_event_fields(title, description, start_local, end_local, timezone_name)
     event = Event(
+        user_id=user_id,
         source=EventSource.internal,
         title=title,
         description=description,
@@ -709,7 +795,7 @@ async def create_internal_event(
     db.refresh(event)
 
     if target_calendar_id:
-        calendar = db.get(Calendar, target_calendar_id)
+        calendar = _owned_calendar(db, target_calendar_id, user_id)
         if calendar is None or not calendar.enabled:
             raise ValidationError("Calendário Google selecionado não está disponível.")
         try:
@@ -740,6 +826,7 @@ async def update_internal_event(
     db: Session,
     event_id: str,
     *,
+    user_id: str,
     title: str,
     description: str = "",
     start_local: datetime,
@@ -753,7 +840,7 @@ async def update_internal_event(
     que o Google não tem, e o próximo pull-sync reverteria a edição sozinho
     (e reagendaria a automação de volta) sem o usuário perceber."""
     event = db.get(Event, event_id)
-    if event is None:
+    if event is None or event.user_id != user_id:
         raise ValidationError("Evento não encontrado.")
     if event.source != EventSource.internal:
         raise ValidationError("Eventos sincronizados do Google não podem ser editados aqui — só a automação.")
@@ -802,7 +889,7 @@ async def update_internal_event(
     return event
 
 
-async def delete_internal_event(db: Session, event_id: str, *, also_delete_google: bool = False) -> bool:
+async def delete_internal_event(db: Session, event_id: str, *, user_id: str, also_delete_google: bool = False) -> bool:
     """`also_delete_google` só importa se o evento estiver vinculado — se o
     DELETE no Google falhar, o evento local NÃO é excluído (evita que ele
     reapareça como um evento "novo" vindo do Google no próximo pull-sync
@@ -810,7 +897,7 @@ async def delete_internal_event(db: Session, event_id: str, *, also_delete_googl
     qualquer chamada ao Google — isso é sempre local e seguro,
     independentemente do resultado do push."""
     event = db.get(Event, event_id)
-    if event is None:
+    if event is None or event.user_id != user_id:
         return False
     if event.source != EventSource.internal:
         raise ValidationError("Eventos sincronizados do Google não podem ser excluídos aqui.")
@@ -842,10 +929,10 @@ async def delete_internal_event(db: Session, event_id: str, *, also_delete_googl
     return True
 
 
-async def list_contacts(waha) -> list[dict]:
+async def list_contacts(waha, waha_session: str) -> list[dict]:
     """Contatos pra automação — reaproveita a lista de conversas do WhatsApp
     já existente (`chatsvc.list_chats`); não cria uma base de contatos nova."""
-    chats = await list_chats(waha)
+    chats = await list_chats(waha, waha_session)
     return [
         {"id": c["id"], "name": c["name"], "picture": c.get("picture"), "is_group": c["is_group"]} for c in chats
     ]

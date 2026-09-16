@@ -24,6 +24,15 @@
       Horário atual do app:
       <strong id="app-clock" hx-get="/ui/configuracoes/relogio" hx-trigger="load, every 5s" hx-target="this" hx-swap="innerHTML">{{ now_local.strftime('%d/%m/%Y — %H:%M:%S') }}</strong>
     </p>
+    <p class="hint" style="margin-top:4px">
+      {% if clock_sync_error %}
+      🔴 Não consegui sincronizar o relógio com a internet ({{ clock_sync_error }}) — usando o relógio do sistema.
+      {% elif clock_synced_at_local %}
+      🟢 Sincronizado com a internet às {{ clock_synced_at_local.strftime('%H:%M:%S') }}.
+      {% else %}
+      🟡 Ainda não sincronizou com a internet.
+      {% endif %}
+    </p>
     <div style="margin-top:14px">
       <button type="submit" hx-disabled-elt="this">Salvar fuso horário</button>
     </div>

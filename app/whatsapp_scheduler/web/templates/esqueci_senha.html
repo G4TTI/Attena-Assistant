@@ -1,0 +1,16 @@
+{% extends "auth_base.html" %}
+{% block title %}Recuperar senha — Attena Assistant{% endblock %}
+{% block card_title %}Esqueci minha senha{% endblock %}
+{% block card_sub %}Informe o e-mail da sua conta{% endblock %}
+{% block form %}
+{% if not ok %}
+<form method="post" action="/esqueci-senha">
+  <label for="email">E-mail</label>
+  <input id="email" name="email" type="email" placeholder="Digite seu e-mail" required autofocus>
+  <button class="primary" type="submit">Enviar link de recuperação</button>
+</form>
+{% endif %}
+<div class="auth-foot">
+  <a href="/login">Voltar para o login</a>
+</div>
+{% endblock %}

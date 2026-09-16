@@ -1,0 +1,148 @@
+<div id="dashboard-summary">
+
+<div class="dash-cards">
+  <div class="stat-card">
+    <span class="stat-label">Eventos hoje</span>
+    <span class="stat-value">{{ today_events_count }}</span>
+    <span class="stat-sub">{% if today_events_upcoming_count %}{{ today_events_upcoming_count }} próximo{{ 's' if today_events_upcoming_count != 1 }}{% else %}&nbsp;{% endif %}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Mensagens agendadas</span>
+    <span class="stat-value">{{ scheduled_count }}</span>
+    <span class="stat-sub">{% if next_dispatch_local %}Próximo envio às {{ next_dispatch_local.strftime('%H:%M') }}{% else %}&nbsp;{% endif %}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Mensagens enviadas hoje</span>
+    <span class="stat-value">{{ sent_today_count }}</span>
+    <span class="stat-sub {{ 'stat-ok' if sent_change_pct and sent_change_pct > 0 }}">
+      {% if sent_change_pct is not none %}{{ '+' if sent_change_pct > 0 }}{{ sent_change_pct }}% vs. ontem{% else %}&nbsp;{% endif %}
+    </span>
+  </div>
+  <div class="stat-card {{ 'stat-warn' if failed_today_count }}">
+    <span class="stat-label">Falhas</span>
+    <span class="stat-value">{{ failed_today_count }}</span>
+    <span class="stat-sub">{{ 'Precisa de atenção' if failed_today_count else 'Tudo funcionando' }}</span>
+  </div>
+</div>
+
+<div class="dash-grid">
+
+  <div class="card dash-disparos">
+    <div class="card-hd"><h2>Próximos disparos</h2></div>
+    <div class="card-bd" style="padding-top:6px;padding-bottom:6px">
+      {% if not upcoming_dispatches %}
+      <div class="empty-state">
+        <strong>Nenhum disparo próximo</strong>
+        <p>Tudo tranquilo por aqui. Não há mensagens programadas para as próximas horas.</p>
+      </div>
+      {% else %}
+      {% for row in upcoming_dispatches %}
+      <div class="dash-list-row" style="cursor:default">
+        <span class="dash-list-time">{{ row.send_local.strftime('%H:%M') }}</span>
+        <span class="dash-list-main">
+          <span class="dash-list-title">{{ row.schedule.recipient_input }}</span>
+          <span class="dash-list-meta">{{ row.schedule.text }}</span>
+          <span class="dash-list-meta">{{ row.message_count }} mensage{{ 'm' if row.message_count == 1 else 'ns' }} · WhatsApp</span>
+        </span>
+      </div>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card dash-acoes">
+    <div class="card-hd"><h2>Ações rápidas</h2></div>
+    <div class="card-bd dash-quick-actions">
+      <button type="button" hx-get="/ui/calendario/events/new?date={{ today_date }}&year={{ cal_year }}&month={{ cal_month }}" hx-target="#modal-root">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+        Novo evento
+      </button>
+      {% if next_event_for_automation %}
+      <button type="button" class="ghost"
+              hx-get="/ui/calendario/events/{{ next_event_for_automation.event.id }}/automation/new?year={{ next_event_for_automation.year }}&month={{ next_event_for_automation.month }}"
+              hx-target="#modal-root">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
+        Nova automação
+      </button>
+      {% else %}
+      <a class="ghost-link" href="/calendario">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
+        Nova automação
+      </a>
+      {% endif %}
+      <a class="ghost-link" href="/conversas">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"></circle><path d="M5 20c1.2-3.4 4-5 7-5s5.8 1.6 7 5"></path></svg>
+        Novo contato
+      </a>
+      <a class="ghost-link" href="/calendario">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
+        Ver calendário
+      </a>
+    </div>
+  </div>
+
+  <div class="card dash-status">
+    <div class="card-hd"><h2>Status</h2></div>
+    <div class="card-bd dash-status-stack">
+      <div id="dashboard-whatsapp-card">{% include "_dashboard_whatsapp_card.html" %}</div>
+      <div id="dashboard-calendar-card">{% include "_dashboard_calendar_card.html" %}</div>
+    </div>
+  </div>
+
+  <div class="card dash-atividade">
+    <div class="card-hd"><h2>Atividade recente</h2></div>
+    <div class="card-bd" style="padding-top:8px;padding-bottom:8px">
+      {% if not recent_activity %}
+      <div class="empty-state">
+        <strong>Sem atividade ainda</strong>
+        <p>Assim que algo acontecer por aqui, aparece nesta lista.</p>
+      </div>
+      {% else %}
+      {% for item in recent_activity %}
+      <div class="dash-activity-row">
+        <span class="dash-activity-dot">{{ '🔴' if item.kind == 'failed' else '🟢' }}</span>
+        <span>
+          <span class="dash-activity-text">{{ item.label }}</span>
+          <span class="dash-activity-time">{{ item.at | reltime }}</span>
+        </span>
+      </div>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card dash-eventos">
+    <div class="card-hd"><h2>Próximos eventos</h2></div>
+    <div class="card-bd" style="padding-top:6px;padding-bottom:6px">
+      {% if not upcoming_events %}
+      <div class="empty-state">
+        <strong>Nenhum evento próximo</strong>
+        <p>Sua agenda está livre por enquanto.</p>
+      </div>
+      {% else %}
+      {% for row in upcoming_events %}
+      <button type="button" class="dash-list-row"
+              hx-get="/ui/calendario/events/{{ row.event.id }}?year={{ row.year }}&month={{ row.month }}" hx-target="#modal-root">
+        <span class="dash-list-time">{{ row.local.strftime('%H:%M') }}</span>
+        <span class="dash-list-main">
+          <span class="dash-list-title">{{ row.event.title }}</span>
+          <span class="dash-list-meta">{{ row.local.strftime('%d/%m') }}</span>
+        </span>
+      </button>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card dash-resumo">
+    <div class="card-hd"><h2>Hoje</h2></div>
+    <div class="card-bd dash-summary-strip">
+      <div class="dash-summary-item"><span class="n">{{ today_events_count }}</span><span class="l">evento{{ 's' if today_events_count != 1 }}</span></div>
+      <div class="dash-summary-item"><span class="n">{{ sent_today_count }}</span><span class="l">enviadas</span></div>
+      <div class="dash-summary-item"><span class="n">{{ scheduled_count }}</span><span class="l">agendadas</span></div>
+      <div class="dash-summary-item"><span class="n">{{ failed_today_count }}</span><span class="l">com erro</span></div>
+    </div>
+  </div>
+
+</div>
+</div>

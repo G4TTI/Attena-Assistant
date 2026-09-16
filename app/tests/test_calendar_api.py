@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from tests.conftest import register_and_login
 from whatsapp_scheduler import crypto
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.db import get_engine
@@ -14,13 +15,16 @@ from whatsapp_scheduler.models import Calendar, CalendarConnection, CalendarConn
 @pytest.fixture
 def client():
     with TestClient(app) as c:
+        user = register_and_login(c)
+        c.user = user
         yield c
 
 
-def make_connection_calendar_event() -> tuple[str, str, str]:
+def make_connection_calendar_event(user_id: str) -> tuple[str, str, str]:
     now = utcnow()
     with Session(get_engine()) as db:
         conn = CalendarConnection(
+            user_id=user_id,
             provider="google",
             account_identifier="user@example.com",
             access_token_enc=crypto.encrypt("super-secret-access-token"),
@@ -36,6 +40,7 @@ def make_connection_calendar_event() -> tuple[str, str, str]:
         db.commit()
         db.refresh(cal)
         event = Event(
+            user_id=user_id,
             source=EventSource.google,
             calendar_id=cal.id,
             external_id="ext-1",
@@ -51,7 +56,7 @@ def make_connection_calendar_event() -> tuple[str, str, str]:
 
 
 def test_list_connections_never_exposes_tokens(client):
-    conn_id, _, _ = make_connection_calendar_event()
+    conn_id, _, _ = make_connection_calendar_event(client.user.id)
     resp = client.get("/api/calendar/connections")
     assert resp.status_code == 200
     body_text = resp.text
@@ -64,14 +69,14 @@ def test_list_connections_never_exposes_tokens(client):
 
 
 def test_toggle_calendar(client):
-    _, cal_id, _ = make_connection_calendar_event()
+    _, cal_id, _ = make_connection_calendar_event(client.user.id)
     resp = client.post(f"/api/calendar/calendars/{cal_id}/toggle", json={"enabled": False})
     assert resp.status_code == 200, resp.text
     assert resp.json()["enabled"] is False
 
 
 def test_create_automation_produces_one_of_each(client):
-    _, _, event_id = make_connection_calendar_event()
+    _, _, event_id = make_connection_calendar_event(client.user.id)
     resp = client.post(
         f"/api/calendar/events/{event_id}/automations",
         json={
@@ -95,7 +100,7 @@ def test_create_automation_produces_one_of_each(client):
 
 
 def test_delete_automation_cancels_without_deleting_event(client):
-    _, _, event_id = make_connection_calendar_event()
+    _, _, event_id = make_connection_calendar_event(client.user.id)
     created = client.post(
         f"/api/calendar/events/{event_id}/automations",
         json={
@@ -116,7 +121,7 @@ def test_delete_automation_cancels_without_deleting_event(client):
 
 
 def test_create_automation_with_multiple_messages_and_recipients(client):
-    _, _, event_id = make_connection_calendar_event()
+    _, _, event_id = make_connection_calendar_event(client.user.id)
     resp = client.post(
         f"/api/calendar/events/{event_id}/automations",
         json={
@@ -134,7 +139,7 @@ def test_create_automation_with_multiple_messages_and_recipients(client):
 
 
 def test_create_automation_rejects_empty_recipients(client):
-    _, _, event_id = make_connection_calendar_event()
+    _, _, event_id = make_connection_calendar_event(client.user.id)
     resp = client.post(
         f"/api/calendar/events/{event_id}/automations",
         json={"recipients": [], "messages": ["x"], "offset_amount": 1, "offset_unit": "hours", "offset_direction": "before"},
@@ -143,7 +148,7 @@ def test_create_automation_rejects_empty_recipients(client):
 
 
 def test_disconnect_connection(client):
-    conn_id, _, _ = make_connection_calendar_event()
+    conn_id, _, _ = make_connection_calendar_event(client.user.id)
     resp = client.delete(f"/api/calendar/connections/{conn_id}")
     assert resp.status_code == 200
     conns = client.get("/api/calendar/connections").json()

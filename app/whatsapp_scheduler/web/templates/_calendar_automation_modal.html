@@ -102,13 +102,14 @@
         <div class="form-grid">
           <div class="field">
             <label for="au_dir">Quando enviar</label>
-            <select id="au_dir" name="offset_direction" onchange="updateAutomationPreview(this.form)">
+            <select id="au_dir" name="offset_direction" onchange="toggleAutomationTimingMode(this.form); updateAutomationPreview(this.form)">
               <option value="before" {{ 'selected' if not prefill or prefill.offset_direction == 'before' }}>Antes do evento</option>
               <option value="at" {{ 'selected' if prefill and prefill.offset_direction == 'at' }}>No momento do evento</option>
               <option value="after" {{ 'selected' if prefill and prefill.offset_direction == 'after' }}>Depois do evento</option>
+              <option value="custom" {{ 'selected' if prefill and prefill.offset_direction == 'custom' }}>Personalizado</option>
             </select>
           </div>
-          <div class="field">
+          <div class="field" id="au_interval_field">
             <label for="au_interval">Intervalo</label>
             {% set current = (prefill.offset_amount ~ ':' ~ prefill.offset_unit) if prefill else '2:hours' %}
             <select id="au_interval" name="offset_interval" onchange="updateAutomationPreview(this.form)">
@@ -121,10 +122,20 @@
               {% endfor %}
             </select>
           </div>
+          <div class="field" id="au_custom_time_field" hidden>
+            <label for="au_custom_time">Horário do disparo</label>
+            <input type="time" id="au_custom_time" name="custom_time"
+                   value="{{ prefill.custom_time_local if prefill and prefill.custom_time_local else '' }}"
+                   onchange="updateAutomationPreview(this.form)">
+          </div>
         </div>
 
+        <p class="hint" id="au_custom_warning" hidden style="color:var(--warn);margin-top:10px">
+          ⚠️ O horário personalizado está depois do horário do evento.
+        </p>
+
         <div class="automation-preview" style="margin-top:16px">
-          <div>Primeiro envio: <span class="automation-preview-value">—</span></div>
+          <div>Disparo <span class="automation-preview-value">—</span></div>
           <div class="automation-preview-summary"></div>
         </div>
       </div>
@@ -160,6 +171,6 @@
     var list = document.querySelector('.message-list');
     if (picker) syncContactChips(picker);
     if (list) renumberMessages(list);
-    if (form) updateAutomationPreview(form);
+    if (form) { toggleAutomationTimingMode(form); updateAutomationPreview(form); }
   })();
 </script>

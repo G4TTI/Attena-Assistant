@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import FakeWaha
+from tests.conftest import FakeWaha, register_and_login
 from whatsapp_scheduler.main import app
 from whatsapp_scheduler.waha import WahaError
 
@@ -14,6 +14,8 @@ def client():
     with TestClient(app) as c:
         c.app.state.waha = waha
         c.waha = waha
+        user = register_and_login(c)
+        c.user = user
         yield c
 
 
@@ -113,8 +115,38 @@ def test_ui_session_start_shows_error_when_waha_unreachable(client):
     assert "conexão recusada" in resp.text
 
 
-def test_index_page_renders(client):
-    resp = client.get("/")
+def test_agendamentos_page_renders(client):
+    resp = client.get("/agendamentos")
     assert resp.status_code == 200
     assert "Agendamentos" in resp.text
     assert "Conversas" in resp.text  # barra lateral
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard — agora é "/"; Agendamentos foi para "/agendamentos".
+# --------------------------------------------------------------------------- #
+def test_dashboard_is_now_the_index_page(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Olá" in resp.text
+    assert "Eventos hoje" in resp.text
+    assert "Agendamentos" in resp.text  # ainda linkado na sidebar
+
+
+def test_dashboard_summary_partial_renders_standalone(client):
+    resp = client.get("/ui/dashboard/summary")
+    assert resp.status_code == 200
+    assert 'id="dashboard-summary"' in resp.text
+
+
+def test_dashboard_does_not_auto_poll_inside_modal_trigger_scope(client):
+    """Regressão: a Dashboard já teve um `hx-trigger="every Ns"` envolvendo
+    botões que abrem modal (hx-target="#modal-root") — o poll automático
+    corrompia o `#modal-root` compartilhado (usado por toda ação de
+    evento/automação no app) quando disparava perto de um clique nesses
+    botões. Substituído por um botão "Atualizar" manual (mesmo padrão do
+    `_table.html`). Não pode voltar a ter polling automático na página."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'hx-trigger="every 30s"' not in resp.text
+    assert "Atualizar" in resp.text  # botão manual no lugar do poll

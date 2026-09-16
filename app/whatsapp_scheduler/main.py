@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from sqlmodel import Session
 
 from . import app_settings, calendar_service
@@ -13,13 +14,15 @@ from .api import calendar as calendar_api
 from .api import chats as chats_api
 from .api import schedules as schedules_api
 from .api import session as session_api
+from .auth import NotAuthenticated
 from .calendar_sync import CalendarSyncService
 from .config import settings
 from .db import get_engine, init_db
 from .scheduler import SchedulerService
+from .time_sync import ClockSyncService
 from .waha import WahaClient
 from .web import routes as web_routes
-from .web import calendar_routes, settings_routes
+from .web import auth_routes, calendar_routes, dashboard_routes, settings_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +34,12 @@ logger = logging.getLogger("whatsapp_scheduler")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    clock_sync = ClockSyncService()
+    # Sincroniza o relógio com a internet ANTES de tudo o mais — o relógio do
+    # sistema (VM/container) pode estar errado por horas (sobretudo depois de
+    # suspender/retomar a máquina host), e isso afetaria toda decisão de
+    # agendamento, não só o relógio exibido na tela.
+    await clock_sync.start()
     # Migração + carga de configurações runtime: precisam terminar antes de
     # qualquer requisição ou tick de fundo rodar, pra ninguém ver o banco
     # pela metade (ex.: automações antigas ainda não convertidas).
@@ -43,6 +52,7 @@ async def lifespan(app: FastAPI):
     app.state.waha = waha
     app.state.scheduler = scheduler
     app.state.calendar_sync = calendar_sync
+    app.state.clock_sync = clock_sync
     await scheduler.start()
     await calendar_sync.start()
     logger.info("app pronto — WAHA em %s, sessão '%s'", settings.waha_base_url, settings.waha_session)
@@ -51,10 +61,12 @@ async def lifespan(app: FastAPI):
     finally:
         await calendar_sync.stop()
         await scheduler.stop()
+        await clock_sync.stop()
         await waha.aclose()
 
 
 app = FastAPI(title="Attena Assistant", version="1.1.0-alpha", lifespan=lifespan)
+app.include_router(auth_routes.router)
 app.include_router(schedules_api.router)
 app.include_router(session_api.router)
 app.include_router(chats_api.router)
@@ -62,6 +74,41 @@ app.include_router(calendar_api.router)
 app.include_router(web_routes.router)
 app.include_router(calendar_routes.router)
 app.include_router(settings_routes.router)
+app.include_router(dashboard_routes.router)
+
+
+@app.exception_handler(NotAuthenticated)
+async def _not_authenticated_handler(request: Request, exc: NotAuthenticated):
+    from urllib.parse import quote
+
+    return RedirectResponse(url="/login?next=" + quote(exc.next_path), status_code=303)
+
+
+# CSP liberada só para o que a app de fato usa hoje: htmx via CDN, estilo/script
+# inline (sem build step, ver base.html — apertar pra nonce fica pra uma
+# próxima etapa), imagens/QR em data: URI, e nada de terceiros além disso.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://unpkg.com 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = _CSP
+    if settings.app_env == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
 
 
 @app.get("/healthz", tags=["ops"])

@@ -31,10 +31,12 @@ class RecurrenceError(ValueError):
     """Recorrência inválida."""
 
 
-def _parse_hhmm(token: str) -> tuple[int, int]:
+def parse_hhmm(token: str) -> tuple[int, int]:
+    """"HH:MM" -> (hora, minuto), validado. Reaproveitado fora deste módulo
+    (ex.: horário personalizado de automação em calendar_service.py)."""
     m = _TIME_RE.match(token)
     if not m:
-        raise RecurrenceError(f"Horário inválido em recorrência: {token!r} (use HH:MM)")
+        raise RecurrenceError(f"Horário inválido: {token!r} (use HH:MM)")
     h, mi = int(m["h"]), int(m["m"])
     if not (0 <= h <= 23 and 0 <= mi <= 59):
         raise RecurrenceError(f"Horário fora do intervalo: {token!r}")
@@ -63,14 +65,14 @@ def normalize_recurrence(value: str) -> str:
         return "0 * * * *"
 
     if kind == "daily" and len(parts) == 2:
-        h, mi = _parse_hhmm(parts[1])
+        h, mi = parse_hhmm(parts[1])
         return f"{mi} {h} * * *"
 
     if kind == "weekly" and len(parts) == 3:
         dow = _DOW.get(parts[1])
         if dow is None:
             raise RecurrenceError(f"Dia da semana inválido: {parts[1]!r}")
-        h, mi = _parse_hhmm(parts[2])
+        h, mi = parse_hhmm(parts[2])
         return f"{mi} {h} * * {dow}"
 
     if kind == "monthly" and len(parts) == 3:
@@ -80,7 +82,7 @@ def normalize_recurrence(value: str) -> str:
             raise RecurrenceError(f"Dia do mês inválido: {parts[1]!r}") from exc
         if not (1 <= day <= 31):
             raise RecurrenceError(f"Dia do mês fora do intervalo: {day}")
-        h, mi = _parse_hhmm(parts[2])
+        h, mi = parse_hhmm(parts[2])
         return f"{mi} {h} {day} * *"
 
     raise RecurrenceError(

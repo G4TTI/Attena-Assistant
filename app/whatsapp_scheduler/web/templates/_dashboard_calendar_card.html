@@ -1,0 +1,26 @@
+<div class="dash-status-row">
+  <span class="dash-status-name">Google Agenda</span>
+  {% if not connection %}
+  <span class="pill canceled">— não conectado</span>
+  {% elif connection.status == "error" %}
+  <span class="pill failed_status">🔴 Erro de sincronização</span>
+  {% else %}
+  <span class="pill working">🟢 Sincronizado</span>
+  {% endif %}
+</div>
+{% if not connection %}
+<p class="muted" style="margin:4px 0 0">Nenhum calendário conectado ainda.</p>
+<a class="ghost-link" style="margin-top:10px" href="/configuracoes">Ver configurações</a>
+{% elif connection.status == "error" %}
+<p class="muted" style="margin:4px 0 0">{{ connection.last_sync_error or "Não foi possível sincronizar." }}</p>
+<div style="display:flex;gap:8px;margin-top:10px">
+  <button type="button" class="ghost" hx-post="/ui/dashboard/calendar-card/sync" hx-target="#dashboard-calendar-card" hx-swap="innerHTML">
+    <span class="hide-loading">Re tentar</span><span class="spin">sincronizando…</span>
+  </button>
+  <a class="ghost-link" href="/configuracoes">Ver configurações</a>
+</div>
+{% else %}
+<p class="muted" style="margin:4px 0 0">
+  {{ connection.account_identifier }}{% if connection.last_sync_at %} · última sincronização {{ connection.last_sync_at | reltime }}{% endif %}
+</p>
+{% endif %}
