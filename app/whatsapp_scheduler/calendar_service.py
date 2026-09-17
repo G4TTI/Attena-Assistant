@@ -151,10 +151,18 @@ async def refresh_remote_calendars(db: Session, connection: CalendarConnection) 
 
 
 def list_connections(db: Session, user_id: str) -> list[CalendarConnection]:
+    """Só conexões que ainda "existem" pro usuário — `disconnected` é um
+    soft-delete (a linha continua no banco só pra manter o histórico de
+    schedules já cancelados por ela), então nunca deve aparecer como uma
+    conta conectada em Configurações, nem virar a "conexão principal" do
+    Dashboard. Reconectar a mesma conta cria uma linha nova apenas se essa
+    aqui não existir mais — ver `finish_connect`, que já reaproveita por
+    (user_id, provider, e-mail) independente do status."""
     return list(
         db.exec(
             select(CalendarConnection)
             .where(col(CalendarConnection.user_id) == user_id)
+            .where(col(CalendarConnection.status) != CalendarConnectionStatus.disconnected)
             .order_by(col(CalendarConnection.created_at))
         ).all()
     )

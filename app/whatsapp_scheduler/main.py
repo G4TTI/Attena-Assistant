@@ -87,6 +87,13 @@ async def _not_authenticated_handler(request: Request, exc: NotAuthenticated):
 # CSP liberada só para o que a app de fato usa hoje: htmx via CDN, estilo/script
 # inline (sem build step, ver base.html — apertar pra nonce fica pra uma
 # próxima etapa), imagens/QR em data: URI, e nada de terceiros além disso.
+# `form-action` também é aplicado pelo navegador ao destino FINAL de um
+# redirect (não só à URL do `action` do form) — o formulário "Conectar Google
+# Agenda" faz POST em /configuracoes/google/connect, que responde com um
+# redirect 302 pra accounts.google.com; com só 'self' aqui, o navegador
+# bloqueia esse redirect silenciosamente (sem erro visível, só no console) e
+# o botão parece não fazer nada. Precisa liberar o domínio de destino do
+# fluxo OAuth explicitamente.
 _CSP = (
     "default-src 'self'; "
     "script-src 'self' https://unpkg.com 'unsafe-inline'; "
@@ -95,7 +102,7 @@ _CSP = (
     "connect-src 'self'; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "
-    "form-action 'self'"
+    "form-action 'self' https://accounts.google.com"
 )
 
 

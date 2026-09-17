@@ -152,5 +152,7 @@ def test_disconnect_connection(client):
     resp = client.delete(f"/api/calendar/connections/{conn_id}")
     assert resp.status_code == 200
     conns = client.get("/api/calendar/connections").json()
-    (conn,) = [c for c in conns if c["id"] == conn_id]
-    assert conn["status"] == "disconnected"
+    # Desconectada = soft-delete: some da lista (nao aparece mais como conta
+    # conectada nem vira a "conexao principal" do Dashboard), mesmo a linha
+    # continuando no banco para preservar o historico de schedules cancelados.
+    assert conn_id not in [c["id"] for c in conns]
