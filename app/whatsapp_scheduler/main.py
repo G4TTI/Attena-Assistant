@@ -97,7 +97,8 @@ async def _not_authenticated_handler(request: Request, exc: NotAuthenticated):
 _CSP = (
     "default-src 'self'; "
     "script-src 'self' https://unpkg.com 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data: https:; "
     "connect-src 'self'; "
     "frame-ancestors 'none'; "
