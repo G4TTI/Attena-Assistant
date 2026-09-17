@@ -1,6 +1,6 @@
 # Attena Assistant
 
-_Versão alfa 1.1_
+_Versão alfa 1.2_
 
 Agendador de mensagens de WhatsApp com **WAHA** como motor de envio.
 Você cria agendamentos numa página web (ou pela API REST) e um _poller_ interno
