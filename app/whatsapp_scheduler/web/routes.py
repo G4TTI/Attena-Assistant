@@ -11,9 +11,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, col, select
 
-from .. import auth, whatsapp_service
+from .. import app_settings, auth, whatsapp_service
 from ..chatsvc import get_history, list_chats, send_now
-from ..config import settings
 from ..db import get_session
 from ..models import Dispatch, Schedule, User
 from ..recurrence import utc_to_local
@@ -101,8 +100,8 @@ def _rows(db: Session, user_id: str) -> list[dict]:
     return out
 
 
-def _table_ctx(request: Request, db: Session, user_id: str) -> dict:
-    return {"request": request, "rows": _rows(db, user_id), "default_timezone": settings.default_timezone}
+def _table_ctx(request: Request, db: Session, user_id: str, tz_name: str) -> dict:
+    return {"request": request, "rows": _rows(db, user_id), "default_timezone": tz_name}
 
 
 # --------------------------------------------------------------------------- #
@@ -114,7 +113,7 @@ async def page_schedules(
 ) -> HTMLResponse:
     ctx = {
         **_base_ctx(request, "agendamentos", current_user),
-        **_table_ctx(request, db, current_user.id),
+        **_table_ctx(request, db, current_user.id, app_settings.user_timezone(current_user)),
         "whatsapp_sessions": whatsapp_service.list_sessions(db, current_user.id),
         "error": request.query_params.get("error"),
         "ok": request.query_params.get("ok"),
@@ -150,7 +149,7 @@ async def page_chats_session(
             **_base_ctx(request, "conversas", current_user),
             "session_id": session.id,
             "whatsapp_sessions": whatsapp_service.list_sessions(db, current_user.id),
-            "default_timezone": settings.default_timezone,
+            "default_timezone": app_settings.user_timezone(current_user),
         },
     )
 
@@ -171,7 +170,9 @@ async def ui_sidebar_status(
 async def ui_schedules(
     request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
 ) -> HTMLResponse:
-    return templates.TemplateResponse("_table.html", _table_ctx(request, db, current_user.id))
+    return templates.TemplateResponse(
+        "_table.html", _table_ctx(request, db, current_user.id, app_settings.user_timezone(current_user))
+    )
 
 
 @router.post("/ui/schedules")
@@ -208,7 +209,7 @@ async def ui_create(
             recipient=recipient,
             text=text,
             send_at=parsed,
-            timezone=timezone or None,
+            timezone=timezone or app_settings.user_timezone(current_user),
             recurrence=recurrence or None,
             max_attempts=max_attempts,
         )
@@ -225,7 +226,9 @@ async def ui_cancel(
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     cancel_schedule(db, schedule_id, user_id=current_user.id)
-    return templates.TemplateResponse("_table.html", _table_ctx(request, db, current_user.id))
+    return templates.TemplateResponse(
+        "_table.html", _table_ctx(request, db, current_user.id, app_settings.user_timezone(current_user))
+    )
 
 
 @router.post("/ui/schedules/{schedule_id}/run-now", response_class=HTMLResponse)
@@ -236,7 +239,9 @@ async def ui_run_now(
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     run_now(db, schedule_id, user_id=current_user.id)
-    return templates.TemplateResponse("_table.html", _table_ctx(request, db, current_user.id))
+    return templates.TemplateResponse(
+        "_table.html", _table_ctx(request, db, current_user.id, app_settings.user_timezone(current_user))
+    )
 
 
 # ---- Conversas -------------------------------------------------------------- #
@@ -250,7 +255,9 @@ def _owned_wa_session(db: Session, session_id: str, user_id: str):
 async def _chats_ctx(request: Request, db: Session, current_user: User, session_id: str, *, force: bool = False) -> dict:
     wa_session = _owned_wa_session(db, session_id, current_user.id)
     try:
-        chats = await list_chats(request.app.state.waha, wa_session.session_name, force=force)
+        chats = await list_chats(
+            request.app.state.waha, wa_session.session_name, app_settings.user_timezone(current_user), force=force
+        )
         return {"request": request, "session_id": session_id, "chats": chats, "chats_error": None}
     except WahaError as exc:
         return {"request": request, "session_id": session_id, "chats": [], "chats_error": str(exc)}
@@ -291,7 +298,7 @@ async def ui_chat_view(
             "session_id": session_id,
             "chat_id": chat,
             "chat": _find_chat(chats, chat),
-            "default_timezone": settings.default_timezone,
+            "default_timezone": app_settings.user_timezone(current_user),
             "ok": ok,
         },
     )
@@ -307,10 +314,16 @@ async def ui_chat_messages(
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     wa_session = _owned_wa_session(db, session_id, current_user.id)
-    hist = await get_history(db, request.app.state.waha, current_user.id, wa_session.session_name, chat, force=refresh)
+    hist = await get_history(
+        db, request.app.state.waha, current_user.id, wa_session.session_name, chat,
+        app_settings.user_timezone(current_user), force=refresh,
+    )
     return templates.TemplateResponse(
         "_chat_messages.html",
-        {"request": request, "chat_id": chat, "hist": hist, "synced_local": _sync_label(hist.synced_at)},
+        {
+            "request": request, "chat_id": chat, "hist": hist,
+            "synced_local": _sync_label(hist.synced_at, app_settings.user_timezone(current_user)),
+        },
     )
 
 
@@ -359,6 +372,7 @@ async def ui_chat_schedule(
             recipient=chat,
             text=text,
             send_at=parsed,
+            timezone=app_settings.user_timezone(current_user),
             recurrence=recurrence or None,
         )
         ok = "Agendamento criado."
@@ -369,7 +383,7 @@ async def ui_chat_schedule(
     return await ui_chat_view(request, session_id=session_id, chat=chat, ok=ok, db=db, current_user=current_user)
 
 
-def _sync_label(dt: datetime | None) -> str:
+def _sync_label(dt: datetime | None, tz_name: str) -> str:
     if dt is None:
         return ""
-    return utc_to_local(dt, settings.default_timezone).strftime("%d/%m %H:%M:%S")
+    return utc_to_local(dt, tz_name).strftime("%d/%m %H:%M:%S")

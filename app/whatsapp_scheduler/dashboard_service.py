@@ -18,7 +18,6 @@ from sqlmodel import Session, col, select
 
 from . import calendar_service, whatsapp_service
 from .clock import utcnow
-from .config import settings
 from .models import (
     Automation,
     AutomationMessage,
@@ -35,26 +34,25 @@ from .models import (
 from .recurrence import local_to_utc, utc_to_local
 
 
-def today_local_date() -> date:
-    return utc_to_local(utcnow(), settings.default_timezone).date()
+def today_local_date(tz_name: str) -> date:
+    return utc_to_local(utcnow(), tz_name).date()
 
 
-def _local_day_bounds_utc(day: date) -> tuple[datetime, datetime]:
-    tz = settings.default_timezone
-    start = local_to_utc(datetime.combine(day, time.min), tz)
-    end = local_to_utc(datetime.combine(day + timedelta(days=1), time.min), tz)
+def _local_day_bounds_utc(day: date, tz_name: str) -> tuple[datetime, datetime]:
+    start = local_to_utc(datetime.combine(day, time.min), tz_name)
+    end = local_to_utc(datetime.combine(day + timedelta(days=1), time.min), tz_name)
     return start, end
 
 
 # --------------------------------------------------------------------------- #
 # Eventos
 # --------------------------------------------------------------------------- #
-def today_events(db: Session, user_id: str, *, today: date | None = None) -> list[Event]:
+def today_events(db: Session, user_id: str, tz_name: str, *, today: date | None = None) -> list[Event]:
     """Eventos de hoje, em qualquer calendário — reaproveita o mesmo
     bucketing por dia/timezone que a grade do Calendário já usa, então um
     evento cai no mesmo dia aqui e lá."""
-    today = today or today_local_date()
-    weeks = calendar_service.month_grid(db, user_id, today.year, today.month)
+    today = today or today_local_date(tz_name)
+    weeks = calendar_service.month_grid(db, user_id, today.year, today.month, tz_name)
     for week in weeks:
         for day in week:
             if day["date"] == today:
@@ -98,8 +96,8 @@ def scheduled_dispatches(db: Session, user_id: str) -> list[Dispatch]:
     )
 
 
-def sent_count_on(db: Session, user_id: str, day: date) -> int:
-    start_utc, end_utc = _local_day_bounds_utc(day)
+def sent_count_on(db: Session, user_id: str, day: date, tz_name: str) -> int:
+    start_utc, end_utc = _local_day_bounds_utc(day, tz_name)
     return len(
         db.exec(
             select(Dispatch)
@@ -112,8 +110,8 @@ def sent_count_on(db: Session, user_id: str, day: date) -> int:
     )
 
 
-def failed_count_on(db: Session, user_id: str, day: date) -> int:
-    start_utc, end_utc = _local_day_bounds_utc(day)
+def failed_count_on(db: Session, user_id: str, day: date, tz_name: str) -> int:
+    start_utc, end_utc = _local_day_bounds_utc(day, tz_name)
     return len(
         db.exec(
             select(Dispatch)

@@ -52,7 +52,7 @@ def client():
 async def test_list_chats_normalizes_and_sorts(test_user):
     waha = FakeWaha()
     waha.chats = OVERVIEW
-    chats = await chatsvc.list_chats(waha, test_user.waha_session, force=True)
+    chats = await chatsvc.list_chats(waha, test_user.waha_session, "America/Sao_Paulo", force=True)
     assert [c["id"] for c in chats] == ["12036300000000@g.us", "5511999998888@c.us"]  # mais recente 1º
     grp = chats[0]
     assert grp["is_group"] is True
@@ -65,12 +65,12 @@ async def test_get_history_caches(db: Session, test_user):
     waha = FakeWaha()
     waha.messages = MESSAGES
 
-    first = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us")
+    first = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "America/Sao_Paulo")
     assert first.from_cache is False
     assert [m["text"] for m in first.messages] == ["oi", "ola", "[imagem]"]
 
     waha.messages_error = RuntimeError("não deveria ser chamado")
-    second = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us")
+    second = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "America/Sao_Paulo")
     assert second.from_cache is True
     assert len(second.messages) == 3
 
@@ -80,10 +80,12 @@ async def test_get_history_falls_back_to_cache_on_error(db: Session, test_user):
 
     waha = FakeWaha()
     waha.messages = MESSAGES
-    await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "chat@c.us")
+    await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo")
 
     waha.messages_error = WahaError("timeout")
-    out = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "chat@c.us", force=True)
+    out = await chatsvc.get_history(
+        db, waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo", force=True
+    )
     assert out.from_cache is True
     assert out.error is not None
     assert len(out.messages) == 3

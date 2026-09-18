@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlmodel import Session
 
-from .. import auth, whatsapp_service
+from .. import app_settings, auth, whatsapp_service
 from ..chatsvc import get_history, list_chats, send_now
 from ..db import get_session
 from ..models import User, WhatsAppSession
@@ -36,7 +36,9 @@ async def chats(
 ) -> list[dict]:
     wa_session = _owned(db, session_id, current_user)
     try:
-        return await list_chats(_waha(request), wa_session.session_name, force=refresh)
+        return await list_chats(
+            _waha(request), wa_session.session_name, app_settings.user_timezone(current_user), force=refresh
+        )
     except WahaError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -51,7 +53,10 @@ async def messages(
     current_user: User = Depends(auth.require_user_api),
 ) -> dict:
     wa_session = _owned(db, session_id, current_user)
-    hist = await get_history(db, _waha(request), current_user.id, wa_session.session_name, chat, force=refresh)
+    hist = await get_history(
+        db, _waha(request), current_user.id, wa_session.session_name, chat,
+        app_settings.user_timezone(current_user), force=refresh,
+    )
     return {
         "chat": chat,
         "from_cache": hist.from_cache,

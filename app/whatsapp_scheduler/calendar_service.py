@@ -662,19 +662,22 @@ def agenda(db: Session, user_id: str, *, days: int | None = None) -> list[Event]
     )
 
 
-def month_grid(db: Session, user_id: str, year: int, month: int) -> list[list[dict]]:
+def month_grid(db: Session, user_id: str, year: int, month: int, tz_name: str) -> list[list[dict]]:
     """Grade de 6 semanas (42 dias, domingo a sábado) pro mês pedido.
 
-    A janela de busca tem uma margem de 24h além dos limites "exatos" da
-    grade: um evento com timezone bem distante de `default_timezone` (ex.:
-    Asia/Tokyo vs. America/Sao_Paulo) pode ter `start_utc` fora dos limites
-    estritos mesmo pertencendo visualmente a uma célula da grade. Cada
-    evento é distribuído na SUA PRÓPRIA timezone (não em `default_timezone`),
-    igual o dia-a-dia já fazia — e o lookup é por dict, nunca por índice
-    fixo, porque mesmo com a margem um evento ainda pode cair fora das 42
-    células (é só ignorado nesse caso, não quebra a grade).
+    `tz_name` é o fuso do USUÁRIO dono da grade (`app_settings.user_timezone`)
+    — decide o que é "hoje" e a janela de busca; nunca `settings.
+    default_timezone` direto (isso já foi um bug de isolamento: o fuso de um
+    usuário mudando a grade de outro). A janela de busca tem uma margem de
+    24h além dos limites "exatos" da grade: um evento com timezone bem
+    distante de `tz_name` (ex.: Asia/Tokyo vs. America/Sao_Paulo) pode ter
+    `start_utc` fora dos limites estritos mesmo pertencendo visualmente a uma
+    célula da grade. Cada evento é distribuído na SUA PRÓPRIA timezone (não
+    em `tz_name`), igual o dia-a-dia já fazia — e o lookup é por dict, nunca
+    por índice fixo, porque mesmo com a margem um evento ainda pode cair fora
+    das 42 células (é só ignorado nesse caso, não quebra a grade).
     """
-    default_tz = settings.default_timezone
+    default_tz = tz_name
     first_of_month = date(year, month, 1)
     # date.weekday(): segunda=0..domingo=6; a grade começa no domingo (=0).
     days_since_sunday = (first_of_month.weekday() + 1) % 7
@@ -939,8 +942,10 @@ async def delete_internal_event(db: Session, event_id: str, *, user_id: str, als
 
 async def list_contacts(waha, waha_session: str) -> list[dict]:
     """Contatos pra automação — reaproveita a lista de conversas do WhatsApp
-    já existente (`chatsvc.list_chats`); não cria uma base de contatos nova."""
-    chats = await list_chats(waha, waha_session)
+    já existente (`chatsvc.list_chats`); não cria uma base de contatos nova.
+    Só usa id/nome/foto do resultado — o timezone passado não afeta nada
+    aqui (só formata `last_when`, descartado abaixo)."""
+    chats = await list_chats(waha, waha_session, settings.default_timezone)
     return [
         {"id": c["id"], "name": c["name"], "picture": c.get("picture"), "is_group": c["is_group"]} for c in chats
     ]

@@ -21,8 +21,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, col, select
 
-from .. import auth, calendar_service, whatsapp_service
-from ..config import settings
+from .. import app_settings, auth, calendar_service, whatsapp_service
 from ..db import get_session
 from ..models import Automation, AutomationMessage, AutomationSchedule, Calendar, Event, EventSyncStatus, Schedule, User
 from ..recurrence import utc_to_local
@@ -62,8 +61,8 @@ def _ctx(request: Request, current_user: User, **extra: object) -> dict:
     return {"request": request, "nav": "calendario", **extra}
 
 
-def _current_year_month(year: int | None, month: int | None) -> tuple[int, int]:
-    today = utc_to_local(calendar_service.utcnow(), settings.default_timezone).date()
+def _current_year_month(year: int | None, month: int | None, tz_name: str) -> tuple[int, int]:
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
     return year or today.year, month or today.month
 
 
@@ -108,19 +107,18 @@ def _automation_summary_map(db: Session, event_ids: list[str]) -> dict[str, dict
 
 
 def _event_chip(event: Event, automation_info: dict[str, dict]) -> dict:
-    tz = event.timezone or settings.default_timezone
     info = automation_info.get(event.id)
     return {
         "event": event,
-        "start_local": utc_to_local(event.start_utc, tz),
+        "start_local": utc_to_local(event.start_utc, event.timezone),
         "is_external": event.source != "internal",
         "calendar_key": event.calendar_id or "internal",
         "automation_count": info["count"] if info else 0,
     }
 
 
-def _grid_ctx(db: Session, user_id: str, year: int, month: int, *, oob: bool = False) -> dict:
-    weeks = calendar_service.month_grid(db, user_id, year, month)
+def _grid_ctx(db: Session, user_id: str, year: int, month: int, tz_name: str, *, oob: bool = False) -> dict:
+    weeks = calendar_service.month_grid(db, user_id, year, month, tz_name)
     all_event_ids = [e.id for week in weeks for day in week for e in day["events"]]
     automation_info = _automation_summary_map(db, all_event_ids)
     grid = [
@@ -129,7 +127,7 @@ def _grid_ctx(db: Session, user_id: str, year: int, month: int, *, oob: bool = F
     ]
     prev_year, prev_month = _shift_month(year, month, -1)
     next_year, next_month = _shift_month(year, month, 1)
-    today = utc_to_local(calendar_service.utcnow(), settings.default_timezone).date()
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
     return {
         "weeks": grid,
         "year": year,
@@ -156,7 +154,7 @@ def _load_event(db: Session, event_id: str, user_id: str) -> Event:
 
 
 def _event_detail_ctx(db: Session, event: Event, user_id: str, *, year: int, month: int) -> dict:
-    tz = event.timezone or settings.default_timezone
+    tz = event.timezone
     # "is_linked" só marca eventos INTERNOS empurrados pro Google (a
     # funcionalidade nova) — um evento nativamente vindo do Google já mostra
     # o badge "Google Agenda" acima; repetir "sincronizado" ali seria redundante.
@@ -203,7 +201,7 @@ async def _contacts_ctx(request: Request, waha_session: str) -> dict:
 def _automation_modal_ctx(
     db: Session, event: Event, *, user_id: str, year: int, month: int, automation_id: str | None = None
 ) -> dict:
-    tz = event.timezone or settings.default_timezone
+    tz = event.timezone
     prefill = None
     selected_whatsapp_session_id = None
     if automation_id:
@@ -268,9 +266,10 @@ def page_calendario(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    y, m = _current_year_month(year, month)
+    tz_name = app_settings.user_timezone(current_user)
+    y, m = _current_year_month(year, month, tz_name)
     return templates.TemplateResponse(
-        "calendario.html", {**_ctx(request, current_user), **_grid_ctx(db, current_user.id, y, m)}
+        "calendario.html", {**_ctx(request, current_user), **_grid_ctx(db, current_user.id, y, m, tz_name)}
     )
 
 
@@ -282,8 +281,9 @@ def ui_grid(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
+    tz_name = app_settings.user_timezone(current_user)
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month)}
+        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, tz_name)}
     )
 
 
@@ -348,7 +348,7 @@ def ui_event_edit(
     event = _load_event(db, event_id, current_user.id)
     if event.source != "internal":
         raise HTTPException(status_code=403, detail="Eventos do Google Agenda não podem ser editados aqui.")
-    tz = event.timezone or settings.default_timezone
+    tz = event.timezone
     start_local = utc_to_local(event.start_utc, tz)
     end_local = utc_to_local(event.end_utc, tz)
     return templates.TemplateResponse(
@@ -417,7 +417,8 @@ async def ui_event_create(
         end_local = _parse_local_dt(date_str, end_time)
         await calendar_service.create_internal_event(
             db, user_id=current_user.id, title=title, description=description, start_local=start_local,
-            end_local=end_local, timezone_name=settings.default_timezone, target_calendar_id=target_calendar_id or None,
+            end_local=end_local, timezone_name=app_settings.user_timezone(current_user),
+            target_calendar_id=target_calendar_id or None,
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
@@ -431,7 +432,8 @@ async def ui_event_create(
             },
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -455,7 +457,7 @@ async def ui_event_update(
         end_local = _parse_local_dt(date_str, end_time)
         await calendar_service.update_internal_event(
             db, event_id, user_id=current_user.id, title=title, description=description, start_local=start_local,
-            end_local=end_local, timezone_name=event.timezone or settings.default_timezone,
+            end_local=end_local, timezone_name=event.timezone,
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
@@ -469,7 +471,8 @@ async def ui_event_update(
             },
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -492,7 +495,8 @@ async def ui_event_delete(
     if not ok:
         raise HTTPException(status_code=404, detail="Evento não encontrado.")
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -597,7 +601,8 @@ async def ui_automation_create(
             },
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -640,7 +645,8 @@ async def ui_automation_update(
             },
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -659,5 +665,6 @@ def ui_automation_remove(
     _load_event(db, automation.event_id, current_user.id)  # 404 se o evento pai não for do usuário
     calendar_service.remove_event_automation(db, automation_id, current_user.id)
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )

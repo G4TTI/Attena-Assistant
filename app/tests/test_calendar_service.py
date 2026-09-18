@@ -413,7 +413,7 @@ def test_disconnect_cancels_pending_but_preserves_sent_history(test_user):
 # --------------------------------------------------------------------------- #
 def test_month_grid_always_has_42_cells(frozen_clock, test_user):
     with Session(get_engine()) as db:
-        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9, "America/Sao_Paulo")
     assert len(weeks) == 6
     for week in weeks:
         assert len(week) == 7
@@ -437,7 +437,7 @@ def test_month_grid_places_event_on_correct_local_day(frozen_clock, test_user):
         db.add(event)
         db.commit()
 
-        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9, "America/Sao_Paulo")
 
     day15 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-09-15")
     assert [e.title for e in day15["events"]] == ["Consulta"]
@@ -462,7 +462,7 @@ def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock, test
         db.add(event)
         db.commit()
 
-        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9, "America/Sao_Paulo")
 
     day1 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-09-01")
     assert [e.title for e in day1["events"]] == ["Tokyo meeting"]

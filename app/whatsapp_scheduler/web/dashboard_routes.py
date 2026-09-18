@@ -14,8 +14,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session
 
-from .. import auth, calendar_service, dashboard_service, whatsapp_service
-from ..config import settings
+from .. import app_settings, auth, calendar_service, dashboard_service, whatsapp_service
 from ..db import get_session
 from ..models import Event, User
 from ..recurrence import utc_to_local
@@ -51,8 +50,7 @@ def _greeting_name(whatsapp_rows: list[dict]) -> str | None:
 
 
 def _event_row(event: Event) -> dict:
-    tz = event.timezone or settings.default_timezone
-    local = utc_to_local(event.start_utc, tz)
+    local = utc_to_local(event.start_utc, event.timezone)
     return {"event": event, "local": local, "year": local.year, "month": local.month}
 
 
@@ -62,12 +60,13 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
     30s (`/ui/dashboard/summary`), pra status refletir o estado atual sem
     precisar de um mecanismo de push separado."""
     user_id = current_user.id
-    today = dashboard_service.today_local_date()
-    today_events = dashboard_service.today_events(db, user_id, today=today)
+    tz_name = app_settings.user_timezone(current_user)
+    today = dashboard_service.today_local_date(tz_name)
+    today_events = dashboard_service.today_events(db, user_id, tz_name, today=today)
     scheduled = dashboard_service.scheduled_dispatches(db, user_id)
-    sent_today = dashboard_service.sent_count_on(db, user_id, today)
-    sent_yesterday = dashboard_service.sent_count_on(db, user_id, today - timedelta(days=1))
-    failed_today = dashboard_service.failed_count_on(db, user_id, today)
+    sent_today = dashboard_service.sent_count_on(db, user_id, today, tz_name)
+    sent_yesterday = dashboard_service.sent_count_on(db, user_id, today - timedelta(days=1), tz_name)
+    failed_today = dashboard_service.failed_count_on(db, user_id, today, tz_name)
     next_dispatch = scheduled[0] if scheduled else None
     next_upcoming = dashboard_service.upcoming_events(db, user_id, limit=1)
 
@@ -80,7 +79,7 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
         "today_events_upcoming_count": dashboard_service.upcoming_today_count(today_events),
         "scheduled_count": len(scheduled),
         "next_dispatch_local": (
-            utc_to_local(next_dispatch.scheduled_at_utc, settings.default_timezone) if next_dispatch else None
+            utc_to_local(next_dispatch.scheduled_at_utc, tz_name) if next_dispatch else None
         ),
         "sent_today_count": sent_today,
         "sent_change_pct": sent_change_pct,
@@ -103,7 +102,7 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
 async def page_dashboard(
     request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
 ) -> HTMLResponse:
-    today = dashboard_service.today_local_date()
+    today = dashboard_service.today_local_date(app_settings.user_timezone(current_user))
     summary = await _summary_ctx(request, db, current_user)
     ctx = {
         "request": request,
