@@ -1,0 +1,20 @@
+{% if similar_events %}
+<p class="hint" style="margin:0 0 8px">
+  Aplica os mesmos destinatários, mensagens e horário também nestes outros eventos — cada um no seu próprio dia.
+</p>
+<label class="calendar-check-item" style="font-weight:600">
+  <input type="checkbox" class="select-all-similar-events" onchange="toggleAllSimilarEvents(this)">
+  Selecionar todos ({{ similar_events|length }})
+</label>
+<div class="calendar-checklist" style="max-height:190px;overflow-y:auto">
+  {% for se in similar_events %}
+  <label class="calendar-check-item">
+    <input type="checkbox" name="apply_to_event_ids" value="{{ se.event.id }}"
+           class="similar-event-checkbox" onchange="syncSelectAllSimilarEvents(this)">
+    {{ se.start_local.strftime('%d/%m/%Y %H:%M') }}
+  </label>
+  {% endfor %}
+</div>
+{% else %}
+<p class="contact-empty">Nenhum evento igual encontrado nos próximos dias.</p>
+{% endif %}

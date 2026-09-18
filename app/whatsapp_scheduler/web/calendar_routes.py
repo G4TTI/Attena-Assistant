@@ -286,7 +286,6 @@ def _automation_modal_ctx(
         if any_schedule is not None:
             existing = whatsapp_service.session_by_name(db, user_id, any_schedule.session)
             selected_whatsapp_session_id = existing.id if existing else None
-    similar = [] if automation_id else calendar_service.similar_events(db, event, user_id)
     return {
         "event": event,
         "start_local": utc_to_local(event.start_utc, tz),
@@ -295,9 +294,6 @@ def _automation_modal_ctx(
         "prefill": prefill,
         "whatsapp_sessions": whatsapp_service.list_sessions(db, user_id),
         "selected_whatsapp_session_id": selected_whatsapp_session_id,
-        "similar_events": [
-            {"event": e, "start_local": utc_to_local(e.start_utc, e.timezone)} for e in similar
-        ],
     }
 
 
@@ -615,6 +611,43 @@ async def ui_calendario_contacts(
         ctx = await _contacts_ctx(request, session_name)
     return templates.TemplateResponse(
         "_contact_options.html", {"request": request, "prefill_ids": prefill_id, **ctx}
+    )
+
+
+@router.get("/ui/calendario/events/{event_id}/similar-events", response_class=HTMLResponse)
+def ui_calendario_similar_events(
+    request: Request,
+    event_id: str,
+    repeat_choice: str = Query("nao"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Checklist de "eventos iguais" do modal de automação — carregado à
+    parte (v1.3.1), só quando o usuário escolhe "Sim" em "Repetir esta
+    automação". Antes disso rodava em toda abertura do modal (mesmo quando
+    ninguém ia usar) e virou o novo gargalo depois que resolvemos o dos
+    contatos: `similar_events` varre todos os eventos futuros do usuário
+    dentro da janela de sincronização — caro para quem tem muita coisa no
+    calendário, e não deveria custar nada pra quem nunca marca "Sim".
+
+    O próprio seletor dispara esta rota em QUALQUER mudança (não só
+    "sim"), com `repeat_choice` vindo junto (htmx sempre manda o valor do
+    elemento que disparou) — mais simples e mais robusto do que um
+    `onchange` em paralelo tentando limpar o painel no cliente: um único
+    caminho, decidido no servidor, sem depender de ordem de eventos entre
+    o listener do htmx e um handler inline."""
+    event = _load_event(db, event_id, current_user.id)
+    if repeat_choice != "sim":
+        return HTMLResponse("")
+    similar = calendar_service.similar_events(db, event, current_user.id)
+    return templates.TemplateResponse(
+        "_similar_events_checklist.html",
+        {
+            "request": request,
+            "similar_events": [
+                {"event": e, "start_local": utc_to_local(e.start_utc, e.timezone)} for e in similar
+            ],
+        },
     )
 
 

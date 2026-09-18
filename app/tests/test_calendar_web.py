@@ -82,17 +82,76 @@ def _automations_of(event_id: str) -> list[Automation]:
         return list(db.exec(select(Automation).where(col(Automation.event_id) == event_id)).all())
 
 
-def test_automation_modal_lists_similar_future_events(client):
+def test_automation_modal_shows_repeat_toggle_defaulting_to_no_without_querying_similar_events(client, monkeypatch):
+    """Regressão de performance: `similar_events` varre todos os eventos
+    futuros do usuário e virou o gargalo seguinte depois que resolvemos o
+    dos contatos — abrir o modal não pode mais rodar essa busca de cara,
+    só quando a pessoa escolhe "Sim" no seletor."""
+    def boom(*args, **kwargs):
+        raise AssertionError("abrir o modal não deveria calcular eventos iguais")
+
+    monkeypatch.setattr(calendar_service, "similar_events", boom)
+
     now = utcnow()
     event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
-    _make_event(client.user.id, "Aula Tales", now + timedelta(days=8), now + timedelta(days=8, hours=1))
 
     resp = client.get(
         f"/ui/calendario/events/{event_a}/automation/new", params={"year": 2026, "month": 9}
     )
     assert resp.status_code == 200
-    assert "Repetir esta automação" in resp.text
-    assert "1 evento igual" in resp.text
+    assert 'hx-get="/ui/calendario/events/' in resp.text
+    assert '<option value="nao" selected>Não</option>' in resp.text
+    assert "select-all-similar-events" not in resp.text  # checklist não veio pré-carregada
+
+
+def test_lazy_similar_events_endpoint_lists_future_matches_when_repeat_choice_is_sim(client):
+    now = utcnow()
+    event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
+    _make_event(client.user.id, "Aula Tales", now + timedelta(days=8), now + timedelta(days=8, hours=1))
+
+    resp = client.get(f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim"})
+    assert resp.status_code == 200
+    assert "Selecionar todos (1)" in resp.text
+    assert "similar-event-checkbox" in resp.text
+
+
+def test_lazy_similar_events_endpoint_empty_state_when_no_matches(client):
+    now = utcnow()
+    event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
+
+    resp = client.get(f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim"})
+    assert resp.status_code == 200
+    assert "Nenhum evento igual encontrado" in resp.text
+
+
+def test_lazy_similar_events_endpoint_returns_nothing_and_skips_the_query_when_repeat_choice_is_not_sim(client, monkeypatch):
+    """O seletor dispara esta rota em toda mudança (não só "sim" -> "não"
+    também manda um GET, pra limpar o painel sem depender de um onchange
+    em paralelo brigando com o htmx por causa de ordem de eventos). Esse
+    caminho não pode rodar `similar_events` (a varredura cara) — só o
+    caminho "sim" precisa dela."""
+    def boom(*args, **kwargs):
+        raise AssertionError("repeat_choice != sim não deveria calcular eventos iguais")
+
+    monkeypatch.setattr(calendar_service, "similar_events", boom)
+
+    now = utcnow()
+    event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
+
+    resp = client.get(f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "nao"})
+    assert resp.status_code == 200
+    assert resp.text == ""
+
+
+def test_lazy_similar_events_endpoint_ignored_for_another_users_event(client):
+    now = utcnow()
+    original_email = client.user.email
+    other = register_and_login(client, name="Outro", email="calendar-other-similar@example.com")
+    event_other = _make_event(other.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
+    client.post("/login", data={"email": original_email, "password": "testpass123", "next": ""}, follow_redirects=False)
+
+    resp = client.get(f"/ui/calendario/events/{event_other}/similar-events")
+    assert resp.status_code == 404
 
 
 def test_create_automation_applies_to_selected_similar_events(client):

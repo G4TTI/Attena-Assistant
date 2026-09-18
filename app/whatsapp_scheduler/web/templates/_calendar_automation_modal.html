@@ -36,7 +36,7 @@
                  nunca esperar por isso (ver ui_calendario_contacts). #}
               <div class="contact-popover" hidden
                    hx-get="/ui/calendario/contacts?whatsapp_session_id={{ selected_whatsapp_session_id or '' }}{% for cid in prefill_ids %}&prefill_id={{ cid | urlencode }}{% endfor %}"
-                   hx-trigger="load" hx-swap="innerHTML">
+                   hx-trigger="load" hx-target="this" hx-swap="innerHTML">
                 <p class="contact-empty">Carregando contatos…</p>
               </div>
             </div>
@@ -135,28 +135,26 @@
           ⚠️ O horário personalizado está depois do horário do evento.
         </p>
 
-        {% if not prefill and similar_events %}
+        {% if not prefill %}
         <div class="field full" style="margin-top:16px">
-          <label>
-            Repetir esta automação
-            <b>({{ similar_events|length }} evento{{ 's' if similar_events|length != 1 }} igual{{ 'is' if similar_events|length != 1 }})</b>
-          </label>
-          <p class="hint" style="margin:0 0 8px">
-            Aplica os mesmos destinatários, mensagens e horário também nestes outros eventos — cada um no seu próprio dia.
-          </p>
-          <label class="calendar-check-item" style="font-weight:600">
-            <input type="checkbox" class="select-all-similar-events" onchange="toggleAllSimilarEvents(this)">
-            Selecionar todos
-          </label>
-          <div class="calendar-checklist" style="max-height:190px;overflow-y:auto">
-            {% for se in similar_events %}
-            <label class="calendar-check-item">
-              <input type="checkbox" name="apply_to_event_ids" value="{{ se.event.id }}"
-                     class="similar-event-checkbox" onchange="syncSelectAllSimilarEvents(this)">
-              {{ se.start_local.strftime('%d/%m/%Y %H:%M') }}
-            </label>
-            {% endfor %}
-          </div>
+          <label for="au_repeat">Repetir esta automação em eventos iguais?</label>
+          {# Buscar "eventos iguais" varre o calendário inteiro do usuário —
+             caro pra quem tem muita coisa marcada, e a maioria nunca usa
+             isto. Só busca quando a pessoa escolhe "Sim" (ver
+             ui_calendario_similar_events), com uma bolinha de carregamento
+             enquanto isso, em vez de rodar em toda abertura do modal. #}
+          <select id="au_repeat" name="repeat_choice"
+                  hx-get="/ui/calendario/events/{{ event.id }}/similar-events"
+                  hx-trigger="change"
+                  hx-target="#similar-events-panel" hx-swap="innerHTML"
+                  hx-indicator="#similar-events-spinner">
+            <option value="nao" selected>Não</option>
+            <option value="sim">Sim</option>
+          </select>
+          <span id="similar-events-spinner" class="htmx-indicator spinner-row">
+            <span class="spinner-dot"></span> Buscando eventos iguais…
+          </span>
+          <div id="similar-events-panel" style="margin-top:8px"></div>
         </div>
         {% endif %}
 
