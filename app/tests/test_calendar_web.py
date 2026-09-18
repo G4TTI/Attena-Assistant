@@ -5,16 +5,20 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, col, select
 
-from tests.conftest import register_and_login, whatsapp_session_id
+from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
+from whatsapp_scheduler import calendar_service
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.db import get_engine
 from whatsapp_scheduler.main import app
-from whatsapp_scheduler.models import Automation, Event, EventSource
+from whatsapp_scheduler.models import Automation, Event, EventSource, WhatsAppSession
 
 
 @pytest.fixture
 def client():
+    waha = FakeWaha()
     with TestClient(app) as c:
+        c.app.state.waha = waha
+        c.waha = waha
         user = register_and_login(c)
         c.user = user
         yield c
@@ -196,3 +200,69 @@ def test_bulk_automation_creation_is_offloaded_to_a_worker_thread(client, monkey
     assert len(calls) == 1  # a criação em lote foi despachada via asyncio.to_thread, não direto na coroutine
     assert len(_automations_of(event_a)) == 1
     assert len(_automations_of(event_b)) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Modal de automação abre instantâneo — contatos carregam à parte (v1.3)
+# --------------------------------------------------------------------------- #
+def test_opening_automation_modal_never_calls_waha_for_contacts(client):
+    """A única coisa no modal que dependia de rede (lista de contatos do
+    WAHA) agora é buscada à parte, depois do modal já estar na tela — abrir
+    "Adicionar automação" precisa ser instantâneo mesmo se o WAHA estiver
+    lento ou fora do ar."""
+    event_a = _make_event(client.user.id, "Aula Tales", utcnow() + timedelta(days=1), utcnow() + timedelta(days=1, hours=1))
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("abrir o modal não deveria chamar o WAHA")
+
+    client.waha.get_chats_overview = boom
+
+    resp = client.get(f"/ui/calendario/events/{event_a}/automation/new", params={"year": 2026, "month": 9})
+    assert resp.status_code == 200
+    assert "Carregando contatos" in resp.text
+
+
+def test_automation_modal_popover_points_to_the_lazy_contacts_endpoint(client):
+    event_a = _make_event(client.user.id, "Aula Tales", utcnow() + timedelta(days=1), utcnow() + timedelta(days=1, hours=1))
+
+    resp = client.get(f"/ui/calendario/events/{event_a}/automation/new", params={"year": 2026, "month": 9})
+    assert resp.status_code == 200
+    # Ao criar (sem edição prévia), nenhum WhatsApp está "selecionado" ainda
+    # — o parâmetro vai vazio e o endpoint preguiçoso cai pro primary_session.
+    assert 'hx-get="/ui/calendario/contacts?whatsapp_session_id="' in resp.text
+    assert 'hx-trigger="load"' in resp.text
+
+
+def test_lazy_contacts_endpoint_returns_contacts_for_the_given_whatsapp(client):
+    client.waha.chats = [
+        {"id": "5511999998888@c.us", "name": "Fulano", "lastMessage": {}},
+    ]
+    wa_id = whatsapp_session_id(client)
+
+    resp = client.get("/ui/calendario/contacts", params={"whatsapp_session_id": wa_id})
+    assert resp.status_code == 200
+    assert "Fulano" in resp.text
+
+
+def test_lazy_contacts_endpoint_ignored_for_unowned_whatsapp_session(client):
+    resp = client.get("/ui/calendario/contacts", params={"whatsapp_session_id": "does-not-exist"})
+    assert resp.status_code == 200
+    assert "Conecte um WhatsApp" in resp.text
+
+
+def test_edit_automation_modal_pins_down_whatsapp_and_prefill_ids_for_the_lazy_fetch(client):
+    event_a = _make_event(client.user.id, "Aula Tales", utcnow() + timedelta(days=1), utcnow() + timedelta(days=1, hours=1))
+    wa_id = whatsapp_session_id(client)
+    with Session(get_engine()) as db:
+        wa_session_name = db.get(WhatsAppSession, wa_id).session_name
+        automation = calendar_service.create_event_automation(
+            db, event_id=event_a, user_id=client.user.id, waha_session=wa_session_name,
+            recipients=["+55 11 99999-8888"], messages=["Lembrete"],
+            offset_amount=1, offset_unit="hours", offset_direction="before",
+        )
+        automation_id = automation.id
+
+    resp = client.get(f"/ui/calendario/automations/{automation_id}/edit", params={"year": 2026, "month": 9})
+    assert resp.status_code == 200
+    assert f"whatsapp_session_id={wa_id}" in resp.text
+    assert "prefill_id=5511999998888%40c.us" in resp.text

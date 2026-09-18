@@ -594,11 +594,28 @@ def _resolve_waha_session(db: Session, user_id: str, whatsapp_session_id: str | 
     return session.session_name if session else None
 
 
-async def _contacts_for(request: Request, db: Session, user_id: str, whatsapp_session_id: str | None) -> dict:
-    session_name = _resolve_waha_session(db, user_id, whatsapp_session_id)
+@router.get("/ui/calendario/contacts", response_class=HTMLResponse)
+async def ui_calendario_contacts(
+    request: Request,
+    whatsapp_session_id: str = Query(""),
+    prefill_id: list[str] = Query([]),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Lista de contatos do popover de destinatário — carregada à parte do
+    resto do modal (v1.3): é a única coisa no modal de automação que depende
+    de uma chamada de rede ao WAHA, então abrir "Adicionar automação" nunca
+    deveria esperar por ela. `_calendar_automation_modal.html` só dispara
+    isto via `hx-trigger="load"` DEPOIS que o modal (instantâneo, só banco)
+    já apareceu inteiro na tela."""
+    session_name = _resolve_waha_session(db, current_user.id, whatsapp_session_id)
     if session_name is None:
-        return {"contacts": [], "contacts_error": "Conecte um WhatsApp em /whatsapps para importar contatos."}
-    return await _contacts_ctx(request, session_name)
+        ctx = {"contacts": [], "contacts_error": "Conecte um WhatsApp em /configuracoes?tab=conexoes para importar contatos."}
+    else:
+        ctx = await _contacts_ctx(request, session_name)
+    return templates.TemplateResponse(
+        "_contact_options.html", {"request": request, "prefill_ids": prefill_id, **ctx}
+    )
 
 
 @router.get("/ui/calendario/events/{event_id}/automation/new", response_class=HTMLResponse)
@@ -613,11 +630,7 @@ async def ui_automation_new(
     event = _load_event(db, event_id, current_user.id)
     ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
     return templates.TemplateResponse(
-        "_calendar_automation_modal.html",
-        {
-            "request": request, "form_error": None, **ctx,
-            **await _contacts_for(request, db, current_user.id, ctx["selected_whatsapp_session_id"]),
-        },
+        "_calendar_automation_modal.html", {"request": request, "form_error": None, **ctx}
     )
 
 
@@ -636,11 +649,7 @@ async def ui_automation_edit(
     event = _load_event(db, automation.event_id, current_user.id)
     ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
     return templates.TemplateResponse(
-        "_calendar_automation_modal.html",
-        {
-            "request": request, "form_error": None, **ctx,
-            **await _contacts_for(request, db, current_user.id, ctx["selected_whatsapp_session_id"]),
-        },
+        "_calendar_automation_modal.html", {"request": request, "form_error": None, **ctx}
     )
 
 
@@ -696,11 +705,7 @@ async def ui_automation_create(
     except ValidationError as exc:
         ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
         return templates.TemplateResponse(
-            "_calendar_automation_modal.html",
-            {
-                "request": request, "form_error": str(exc), **ctx,
-                **await _contacts_for(request, db, current_user.id, whatsapp_session_id),
-            },
+            "_calendar_automation_modal.html", {"request": request, "form_error": str(exc), **ctx}
         )
     return templates.TemplateResponse(
         "_calendar_month_grid.html",
@@ -740,11 +745,7 @@ async def ui_automation_update(
     except ValidationError as exc:
         ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
         return templates.TemplateResponse(
-            "_calendar_automation_modal.html",
-            {
-                "request": request, "form_error": str(exc), **ctx,
-                **await _contacts_for(request, db, current_user.id, whatsapp_session_id),
-            },
+            "_calendar_automation_modal.html", {"request": request, "form_error": str(exc), **ctx}
         )
     return templates.TemplateResponse(
         "_calendar_month_grid.html",

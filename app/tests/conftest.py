@@ -75,6 +75,20 @@ def _reset_clock_offset():
     clock.set_offset(timedelta(0))
 
 
+@pytest.fixture(autouse=True)
+def _reset_chat_cache():
+    """`chatsvc._chat_cache` é estado de módulo global, chaveado por
+    `session_name` — e `_fresh_db` faz o "primeiro usuário cadastrado" (que
+    ganha `session_name = settings.waha_session`, sempre o mesmo valor fixo
+    de teste) se repetir a cada teste, então sem isso o cache de chats de um
+    teste vazaria pro próximo que usa o mesmo `session_name`."""
+    from whatsapp_scheduler import chatsvc
+
+    chatsvc._chat_cache.clear()
+    yield
+    chatsvc._chat_cache.clear()
+
+
 @pytest.fixture
 def db():
     with Session(get_engine()) as session:

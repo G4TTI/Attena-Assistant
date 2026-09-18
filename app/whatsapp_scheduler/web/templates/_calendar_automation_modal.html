@@ -20,7 +20,6 @@
 
         {% set prefill_ids = (prefill.recipient_chat_ids if prefill else []) %}
         {% set contact_ids = (contacts | map(attribute='id') | list) if contacts else [] %}
-        {% set palette = ['', 'bg-c1', 'bg-c2', 'bg-c3', 'bg-c4'] %}
 
         <div class="field full" style="margin-bottom:16px">
           <label>Destinatário(s)</label>
@@ -32,26 +31,13 @@
                 </span>
                 <input type="text" placeholder="Pesquisar contato…" oninput="contactPickerFilter(this)" onfocus="contactPopoverOpen(this)">
               </div>
-              <div class="contact-popover" hidden>
-                {% if contacts_error %}
-                <p class="contact-empty">Não consegui carregar seus contatos do WhatsApp ({{ contacts_error }}) — digite o número manualmente abaixo.</p>
-                {% elif contacts %}
-                  {% for contact in contacts %}
-                  <label class="contact-option" data-name="{{ contact.name }}" data-phone="{{ contact.id.split('@')[0] }}">
-                    <input type="checkbox" value="{{ contact.id }}" data-name="{{ contact.name }}"
-                           {{ 'checked' if contact.id in prefill_ids else '' }}
-                           onchange="contactPickerToggle(this)">
-                    <span class="avatar {{ palette[loop.index0 % (palette | length)] }}">{{ (contact.name or '?')[0] | upper }}{% if contact.picture %}<img src="{{ contact.picture }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}</span>
-                    <span class="contact-option-info">
-                      <span class="contact-option-name">{{ contact.name }}{% if contact.is_group %} <span class="muted">· grupo</span>{% endif %}</span>
-                      <span class="contact-option-phone">+{{ contact.id.split('@')[0] }}</span>
-                    </span>
-                  </label>
-                  {% endfor %}
-                  <p class="contact-empty" hidden>Nenhum contato encontrado.</p>
-                {% else %}
-                <p class="contact-empty">Nenhuma conversa encontrada — digite o número manualmente abaixo.</p>
-                {% endif %}
+              {# Contatos vêm do WAHA (chamada de rede) — carregados à parte,
+                 depois que o resto do modal já apareceu, pra abrir o modal
+                 nunca esperar por isso (ver ui_calendario_contacts). #}
+              <div class="contact-popover" hidden
+                   hx-get="/ui/calendario/contacts?whatsapp_session_id={{ selected_whatsapp_session_id or '' }}{% for cid in prefill_ids %}&prefill_id={{ cid | urlencode }}{% endfor %}"
+                   hx-trigger="load" hx-swap="innerHTML">
+                <p class="contact-empty">Carregando contatos…</p>
               </div>
             </div>
             <input type="text" placeholder="+55 11 99999-8888 (Enter pra adicionar)" onkeydown="contactPickerAddManual(this, event)">
