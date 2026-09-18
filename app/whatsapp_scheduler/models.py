@@ -371,13 +371,44 @@ class User(SQLModel, table=True):
     # Sempre normalizado (trim + lowercase) antes de salvar — ver auth.py.
     email: str = Field(index=True)
     password_hash: str
-    phone: str | None = None  # telefone da CONTA — nunca o número do WhatsApp conectado (ver User.waha_session)
-    # Nome da sessão WAHA própria deste usuário — cada usuário tem seu WhatsApp
-    # isolado, mesmo servidor WAHA. Nunca reaproveita `phone` automaticamente.
+    phone: str | None = None  # telefone da CONTA — nunca o número do WhatsApp conectado
+    # LEGADO (v1.2, WhatsApp único por usuário) — superseded por `WhatsAppSession`
+    # (v1.3, N por usuário). Mantido só para a migração idempotente no boot
+    # (`whatsapp_service.migrate_legacy_sessions`) criar a primeira
+    # `WhatsAppSession` de cada usuário existente sem perder o pareamento já
+    # feito. Código novo nunca lê este campo diretamente.
     waha_session: str = Field(default_factory=_waha_session_default, unique=True, index=True)
-    timezone: str | None = None  # override pessoal; None = usa o fallback global (app_settings)
+    timezone: str | None = None  # fuso pessoal do usuário; None = usa settings.default_timezone (só p/ conta nova)
     email_verified: bool = False
     is_active: bool = True
+    # None = ainda não terminou (nem pulou até o fim) o onboarding de primeiros
+    # passos — ver `onboarding_service.py`. Coluna aditiva (ALTER TABLE em
+    # db.py); contas que já existiam antes desta versão são retroativamente
+    # marcadas como concluídas numa migração de boot única, pra não forçar
+    # quem já usa o app a ver a tela de onboarding do nada.
+    onboarding_completed_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class WhatsAppSession(SQLModel, table=True):
+    """Um número de WhatsApp conectado por um usuário — um usuário pode ter
+    várias (v1.3, item 9). `session_name` é o nome interno da sessão no WAHA:
+    gerado uma vez, nunca muda — é o mesmo valor gravado em `Schedule.session`
+    e usado pelo scheduler pra disparar, então editar `name` (o rótulo de
+    exibição, ex. "Trabalho") depois de criada nunca precisa tocar aqui.
+    `disconnected_at` é soft-delete, mesmo padrão de `CalendarConnection`:
+    histórico (`Schedule`/`Dispatch`) preservado, só some da lista de conexões
+    ativas do usuário."""
+
+    __tablename__ = "whatsapp_sessions"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    name: str = "WhatsApp"
+    session_name: str = Field(default_factory=_waha_session_default, unique=True, index=True)
+    engine: str | None = None
+    disconnected_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

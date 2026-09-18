@@ -1,0 +1,83 @@
+{% set STATUS_LABEL = {'WORKING': 'conectado', 'SCAN_QR_CODE': 'aguardando QR', 'STARTING': 'conectando'} %}
+<form hx-post="/whatsapps" hx-target="#whatsapp-list" hx-swap="innerHTML" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+  <div class="field" style="flex:1 1 220px;margin:0">
+    <label for="wa_new_name">Nome da conexão</label>
+    <input id="wa_new_name" name="name" placeholder="ex: Pessoal, Trabalho, Comercial" required maxlength="60">
+  </div>
+  <button type="submit">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+    Adicionar WhatsApp
+  </button>
+</form>
+
+{% if not rows %}
+<div class="empty-state">
+  <strong>Nenhum WhatsApp conectado ainda.</strong>
+  <p>Dê um nome à sua primeira conexão acima pra começar a parear.</p>
+</div>
+{% endif %}
+
+<div style="display:flex;flex-direction:column;gap:16px">
+  {% for row in rows %}
+  {% set session = row.session %}
+  {% set status = (row.status.status if row.status else None) %}
+  <div class="card card-pad connection-card">
+    <div class="connection-row">
+      {% if status == "WORKING" %}
+        <span class="dot ok"></span>
+      {% elif status in ("SCAN_QR_CODE", "STARTING") %}
+        <span class="dot warn"></span>
+      {% else %}
+        <span class="dot err"></span>
+      {% endif %}
+      <span class="connection-name">{{ session.name }}</span>
+      <span class="pill {{ 'working' if status == 'WORKING' else ('pending' if status in ('SCAN_QR_CODE', 'STARTING') else 'failed_status') }}" style="margin-left:auto">
+        {{ STATUS_LABEL.get(status, status or 'desconectado') }}
+      </span>
+    </div>
+
+    {% if status == "WORKING" %}
+      <p class="muted" style="margin:0">
+        {{ '+' ~ row.status.me.id.split('@')[0] if row.status.me else session.session_name }}
+        {% if row.status | engine_label != '—' %} · {{ row.status | engine_label }}{% endif %}
+      </p>
+    {% elif status in ("SCAN_QR_CODE", "STARTING") %}
+      <p class="muted" style="margin:0">Escaneie o QR no WhatsApp &rarr; Aparelhos conectados.</p>
+    {% else %}
+      <p class="muted" style="margin:0">{{ status or 'sessão parada' }}</p>
+    {% endif %}
+    {% if row.status_error %}
+      <p class="muted" style="color:var(--err);margin:0">{{ row.status_error }}</p>
+    {% endif %}
+
+    {% if status in ("SCAN_QR_CODE", "STARTING") %}
+    <div class="qr-box" style="align-self:flex-start">
+      <img class="qr" alt="QR code" src="/ui/whatsapps/{{ session.id }}/qr?ts={{ range(100000)|random }}">
+      <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
+    </div>
+    {% endif %}
+
+    <form hx-post="/whatsapps/{{ session.id }}/rename" hx-target="#whatsapp-list" hx-swap="innerHTML"
+          style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field" style="flex:1 1 180px;margin:0">
+        <label>Renomear</label>
+        <input name="name" value="{{ session.name }}" maxlength="60" required>
+      </div>
+      <button type="submit" class="ghost">Salvar nome</button>
+    </form>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      {% if status != "WORKING" %}
+      <button class="ghost" hx-post="/whatsapps/{{ session.id }}/start" hx-target="#whatsapp-list" hx-swap="innerHTML">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+        <span class="hide-loading">Iniciar / reconectar</span><span class="spin">conectando…</span>
+      </button>
+      {% endif %}
+      <button class="danger" hx-post="/whatsapps/{{ session.id }}/disconnect" hx-target="#whatsapp-list" hx-swap="innerHTML"
+              hx-confirm="Desconectar '{{ session.name }}'? Mensagens futuras ainda pendentes que usam este WhatsApp serão canceladas — o histórico já enviado é preservado.">
+        Desconectar
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+</div>

@@ -460,6 +460,37 @@ def create_event_automation(
     return automation
 
 
+def similar_events(db: Session, event: Event, user_id: str) -> list[Event]:
+    """Outros eventos FUTUROS "iguais" a este (v1.3) — usado pra oferecer
+    "repetir esta automação" sem precisar recriá-la manualmente em cada
+    ocorrência. "Igual" quer dizer: mesma série recorrente do Google
+    (`recurring_event_id`) quando o evento vem de lá; senão, mesmo título
+    (comparação exata, sem acento/case-fold — cobre o caso comum de eventos
+    internos criados um a um com o mesmo nome, ex. "Aula Tales" toda semana).
+    Nunca inclui o próprio evento nem eventos cancelados/passados.
+    """
+    now = utcnow()
+    query = (
+        select(Event)
+        .where(col(Event.user_id) == user_id)
+        .where(col(Event.id) != event.id)
+        .where(col(Event.status) == EventStatus.confirmed)
+        .where(col(Event.start_utc) >= now)
+        .where(col(Event.start_utc) <= now + timedelta(days=settings.calendar_sync_window_future_days))
+        .order_by(col(Event.start_utc))
+    )
+    if event.recurring_event_id:
+        # Filtro no próprio SQL: só a série do evento vem do banco, em vez de
+        # carregar todo o calendário futuro e filtrar em Python.
+        return list(db.exec(query.where(col(Event.recurring_event_id) == event.recurring_event_id)).all())
+    title = (event.title or "").strip().lower()
+    if not title:
+        return []
+    # Título comparado em Python (str.lower() entende acentos; o lower() do
+    # SQLite só entende ASCII e daria resultado diferente).
+    return [e for e in db.exec(query).all() if (e.title or "").strip().lower() == title]
+
+
 def _owned_automation(db: Session, automation_id: str, user_id: str) -> Automation | None:
     automation = db.get(Automation, automation_id)
     if automation is None:
@@ -662,19 +693,51 @@ def agenda(db: Session, user_id: str, *, days: int | None = None) -> list[Event]
     )
 
 
-def month_grid(db: Session, user_id: str, year: int, month: int) -> list[list[dict]]:
+def day_events(db: Session, user_id: str, day: date, tz_name: str) -> list[Event]:
+    """Eventos de UM dia local específico (v1.3, visão diária — item 29),
+    mesma lógica de bucketing por timezone PRÓPRIA do evento que `month_grid`
+    já usa: a janela de busca tem margem de 24h pros dois lados porque um
+    evento com timezone bem distante de `tz_name` pode ter `start_utc` fora
+    dos limites estritos do dia mesmo pertencendo visualmente a ele."""
+    query_start = local_to_utc(datetime.combine(day, dt_time.min), tz_name) - timedelta(hours=24)
+    query_end = local_to_utc(datetime.combine(day + timedelta(days=1), dt_time.min), tz_name) + timedelta(hours=24)
+
+    events = db.exec(
+        select(Event)
+        .where(col(Event.user_id) == user_id)
+        .where(col(Event.status) == EventStatus.confirmed)
+        .where(col(Event.start_utc) >= query_start)
+        .where(col(Event.start_utc) < query_end)
+        .order_by(col(Event.start_utc))
+    ).all()
+
+    out = []
+    for event in events:
+        tz = event.timezone or tz_name
+        try:
+            if utc_to_local(event.start_utc, tz).date() == day:
+                out.append(event)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return out
+
+
+def month_grid(db: Session, user_id: str, year: int, month: int, tz_name: str) -> list[list[dict]]:
     """Grade de 6 semanas (42 dias, domingo a sábado) pro mês pedido.
 
-    A janela de busca tem uma margem de 24h além dos limites "exatos" da
-    grade: um evento com timezone bem distante de `default_timezone` (ex.:
-    Asia/Tokyo vs. America/Sao_Paulo) pode ter `start_utc` fora dos limites
-    estritos mesmo pertencendo visualmente a uma célula da grade. Cada
-    evento é distribuído na SUA PRÓPRIA timezone (não em `default_timezone`),
-    igual o dia-a-dia já fazia — e o lookup é por dict, nunca por índice
-    fixo, porque mesmo com a margem um evento ainda pode cair fora das 42
-    células (é só ignorado nesse caso, não quebra a grade).
+    `tz_name` é o fuso do USUÁRIO dono da grade (`app_settings.user_timezone`)
+    — decide o que é "hoje" e a janela de busca; nunca `settings.
+    default_timezone` direto (isso já foi um bug de isolamento: o fuso de um
+    usuário mudando a grade de outro). A janela de busca tem uma margem de
+    24h além dos limites "exatos" da grade: um evento com timezone bem
+    distante de `tz_name` (ex.: Asia/Tokyo vs. America/Sao_Paulo) pode ter
+    `start_utc` fora dos limites estritos mesmo pertencendo visualmente a uma
+    célula da grade. Cada evento é distribuído na SUA PRÓPRIA timezone (não
+    em `tz_name`), igual o dia-a-dia já fazia — e o lookup é por dict, nunca
+    por índice fixo, porque mesmo com a margem um evento ainda pode cair fora
+    das 42 células (é só ignorado nesse caso, não quebra a grade).
     """
-    default_tz = settings.default_timezone
+    default_tz = tz_name
     first_of_month = date(year, month, 1)
     # date.weekday(): segunda=0..domingo=6; a grade começa no domingo (=0).
     days_since_sunday = (first_of_month.weekday() + 1) % 7
@@ -789,6 +852,15 @@ async def create_internal_event(
     (`external_id=None`) e o erro fica em `EventSyncStatus` pro usuário ver
     e tentar de novo depois."""
     title, description = _validate_event_fields(title, description, start_local, end_local, timezone_name)
+    # Valida o calendário de destino ANTES de gravar qualquer coisa: antes, um
+    # calendário inválido levantava o erro só depois do evento já ter sido
+    # commitado — o usuário via a mensagem de erro, mas o evento ficava criado.
+    calendar = None
+    if target_calendar_id:
+        calendar = _owned_calendar(db, target_calendar_id, user_id)
+        if calendar is None or not calendar.enabled:
+            raise ValidationError("Calendário Google selecionado não está disponível.")
+
     event = Event(
         user_id=user_id,
         source=EventSource.internal,
@@ -802,10 +874,7 @@ async def create_internal_event(
     db.commit()
     db.refresh(event)
 
-    if target_calendar_id:
-        calendar = _owned_calendar(db, target_calendar_id, user_id)
-        if calendar is None or not calendar.enabled:
-            raise ValidationError("Calendário Google selecionado não está disponível.")
+    if calendar is not None:
         try:
             provider, tokens = await _google_provider_and_tokens(db, calendar)
             external_id = await provider.create_event(
@@ -910,13 +979,10 @@ async def delete_internal_event(db: Session, event_id: str, *, user_id: str, als
     if event.source != EventSource.internal:
         raise ValidationError("Eventos sincronizados do Google não podem ser excluídos aqui.")
 
-    # Ordem obrigatória (PRAGMA foreign_keys=ON, sem Relationship() do ORM
-    # pra ordenar sozinho): cancelar os schedules primeiro (preserva
-    # Schedule/Dispatch como histórico), depois as linhas de ligação, só
-    # então o evento.
-    cancel_event_automations(db, event)
-    _delete_automations_for_event(db, event_id)
-
+    # O Google vem PRIMEIRO: se ele falhar, nada local foi tocado e a mensagem
+    # "o evento não foi excluído" é verdadeira. Antes, as automações já tinham
+    # sido canceladas e apagadas quando o erro aparecia — o evento continuava
+    # lá, mas sem as automações.
     if event.calendar_id and event.external_id and also_delete_google:
         calendar = db.get(Calendar, event.calendar_id)
         if calendar is not None:
@@ -927,6 +993,13 @@ async def delete_internal_event(db: Session, event_id: str, *, user_id: str, als
                 raise ValidationError(
                     f"Não consegui excluir no Google Agenda ({exc}). O evento não foi excluído — tente de novo."
                 ) from exc
+
+    # Ordem obrigatória (PRAGMA foreign_keys=ON, sem Relationship() do ORM
+    # pra ordenar sozinho): cancelar os schedules primeiro (preserva
+    # Schedule/Dispatch como histórico), depois as linhas de ligação, só
+    # então o evento.
+    cancel_event_automations(db, event)
+    _delete_automations_for_event(db, event_id)
 
     sync_row = db.get(EventSyncStatus, event_id)
     if sync_row is not None:
@@ -939,8 +1012,10 @@ async def delete_internal_event(db: Session, event_id: str, *, user_id: str, als
 
 async def list_contacts(waha, waha_session: str) -> list[dict]:
     """Contatos pra automação — reaproveita a lista de conversas do WhatsApp
-    já existente (`chatsvc.list_chats`); não cria uma base de contatos nova."""
-    chats = await list_chats(waha, waha_session)
+    já existente (`chatsvc.list_chats`); não cria uma base de contatos nova.
+    Só usa id/nome/foto do resultado — o timezone passado não afeta nada
+    aqui (só formata `last_when`, descartado abaixo)."""
+    chats = await list_chats(waha, waha_session, settings.default_timezone)
     return [
         {"id": c["id"], "name": c["name"], "picture": c.get("picture"), "is_group": c["is_group"]} for c in chats
     ]

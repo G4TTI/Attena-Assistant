@@ -6,7 +6,7 @@
     <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78rem">{{ chat_id }}</div>
   </div>
   <button class="icon-btn ghost" title="Atualizar histórico"
-          hx-get="/ui/chats/messages?chat={{ chat_id | urlencode }}&refresh=1"
+          hx-get="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}&refresh=1"
           hx-target="#chat-scroll" hx-swap="innerHTML">
     <span class="hide-loading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg></span>
     <span class="spin">…</span>
@@ -17,12 +17,12 @@
 {% elif ok %}<div class="alert ok" style="margin:10px 16px 0">{{ ok }}</div>{% endif %}
 
 <div id="chat-scroll" class="chat-scroll"
-     hx-get="/ui/chats/messages?chat={{ chat_id | urlencode }}" hx-trigger="load">
+     hx-get="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}" hx-trigger="load">
   <p class="muted center-note">Buscando o histórico no WhatsApp… a primeira vez pode levar até 1 minuto.</p>
 </div>
 
 <div class="composer">
-  <form id="form-now" class="composer-row" hx-post="/ui/chats/send" hx-target="#chat-view" hx-swap="innerHTML">
+  <form id="form-now" class="composer-row" hx-post="/ui/chats/{{ session_id }}/send" hx-target="#chat-view" hx-swap="innerHTML">
     <input type="hidden" name="chat" id="composer-chat" value="{{ chat_id }}">
     <button type="button" class="icon-btn round" title="Agendar esta mensagem" onclick="toggleSchedule()">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
@@ -44,7 +44,7 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
       </button>
     </div>
-    <form hx-post="/ui/chats/schedule" hx-target="#chat-view" hx-swap="innerHTML"
+    <form hx-post="/ui/chats/{{ session_id }}/schedule" hx-target="#chat-view" hx-swap="innerHTML"
           hx-include="#composer-text,#composer-chat">
       <div class="row">
         <div>

@@ -1,5 +1,39 @@
 <div id="dashboard-summary">
 
+{% if is_new_user %}
+<div class="card card-pad" style="text-align:center;padding:44px 24px">
+  <h2 style="font-family:var(--font-display);font-size:22px;font-weight:500;margin:0 0 6px">Bem-vindo ao Attena 👋</h2>
+  <p class="muted" style="margin:0 0 22px">Você ainda não possui automações. Comece por aqui:</p>
+  <div class="dash-quick-actions" style="justify-content:center">
+    <a class="ghost-link" href="/configuracoes?tab=conexoes">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+      Conectar WhatsApp
+    </a>
+    <a class="ghost-link" href="/configuracoes">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+      Conectar Google Agenda
+    </a>
+    <button type="button"
+            hx-get="/ui/calendario/events/new?date={{ today_date }}&year={{ cal_year }}&month={{ cal_month }}" hx-target="#modal-root">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+      Criar evento
+    </button>
+    <a class="ghost-link" href="/calendario">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
+      Criar automação
+    </a>
+  </div>
+</div>
+<div class="dash-grid" style="grid-template-columns:minmax(0,1fr);margin-top:16px">
+  <div class="card dash-status">
+    <div class="card-hd"><h2>Status</h2></div>
+    <div class="card-bd dash-status-stack">
+      <div id="dashboard-whatsapp-card">{% include "_dashboard_whatsapp_card.html" %}</div>
+      <div id="dashboard-calendar-card">{% include "_dashboard_calendar_card.html" %}</div>
+    </div>
+  </div>
+</div>
+{% else %}
 <div class="dash-cards">
   <div class="stat-card">
     <span class="stat-label">Eventos hoje</span>
@@ -42,7 +76,7 @@
         <span class="dash-list-main">
           <span class="dash-list-title">{{ row.schedule.recipient_input }}</span>
           <span class="dash-list-meta">{{ row.schedule.text }}</span>
-          <span class="dash-list-meta">{{ row.message_count }} mensage{{ 'm' if row.message_count == 1 else 'ns' }} · WhatsApp</span>
+          <span class="dash-list-meta">{{ row.message_count }} mensage{{ 'm' if row.message_count == 1 else 'ns' }} · {{ row.whatsapp_label }}</span>
         </span>
       </div>
       {% endfor %}
@@ -145,4 +179,5 @@
   </div>
 
 </div>
+{% endif %}
 </div>

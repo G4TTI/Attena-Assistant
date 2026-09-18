@@ -1,0 +1,52 @@
+{% set status = (whatsapp_row.status.status if whatsapp_row and whatsapp_row.status else None) %}
+{# O poll pausa enquanto o campo de telefone está focado — sem isso, a
+   atualização automática a cada 3s reescreve o formulário e apaga o que a
+   pessoa está digitando (mesma classe de bug já corrigida em
+   _whatsapp_list.html). #}
+<div id="onboarding-whatsapp-step" hx-get="/ui/onboarding/whatsapp"
+     hx-trigger="every 3s [document.activeElement.id !== 'onb_wa_phone']" hx-swap="innerHTML">
+  {% if status == "WORKING" %}
+    <div class="notice" style="border-color:var(--accent-d)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-d)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9"></path></svg>
+      <span>🟢 WhatsApp conectado{% if whatsapp_row.status.me %} — +{{ whatsapp_row.status.me.id.split('@')[0] }}{% endif %}.</span>
+    </div>
+    <div class="modal-ft" style="padding:16px 0 0;justify-content:flex-end">
+      <a class="ghost-link" href="/onboarding?step=2">Continuar</a>
+    </div>
+  {% else %}
+    <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1 1 260px;min-width:0">
+        <p class="muted" style="margin:0 0 10px">
+          Conecte um número de WhatsApp para começar a enviar suas mensagens automaticamente.
+        </p>
+        <ol class="steps">
+          <li>No celular: WhatsApp → <b>Aparelhos conectados</b> → <b>Conectar um aparelho</b>.</li>
+          <li>Escaneie o QR code ao lado.</li>
+          <li>Assim que conectar, esta página avança sozinha.</li>
+        </ol>
+        {% if whatsapp_row and whatsapp_row.status_error %}
+        <p class="muted" style="color:var(--err);margin-top:10px">{{ whatsapp_row.status_error }}</p>
+        {% endif %}
+        <form hx-post="/onboarding/whatsapp/start" hx-target="#onboarding-whatsapp-step" hx-swap="outerHTML" style="margin-top:16px;max-width:280px">
+          <div class="field" style="margin:0">
+            <label for="onb_wa_phone">Seu número de WhatsApp</label>
+            <input id="onb_wa_phone" name="phone" type="text" placeholder="+55 11 99999-8888"
+                   value="{{ current_user.phone or '' }}" required>
+          </div>
+          <button class="ghost" type="submit" style="margin-top:10px">
+            <span class="hide-loading">{{ 'Gerar novo QR' if status else 'Iniciar pareamento' }}</span><span class="spin">gerando…</span>
+          </button>
+        </form>
+      </div>
+      {% if whatsapp_session %}
+      <div class="qr-box">
+        <img class="qr" alt="QR code" src="/ui/whatsapps/{{ whatsapp_session.id }}/qr?ts={{ range(100000)|random }}">
+        <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
+      </div>
+      {% endif %}
+    </div>
+    <div class="modal-ft" style="padding:16px 0 0;justify-content:flex-end">
+      <a class="ghost-link" href="/onboarding?step=2">Pular por enquanto</a>
+    </div>
+  {% endif %}
+</div>

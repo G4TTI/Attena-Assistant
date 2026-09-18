@@ -1,10 +1,9 @@
-{% set status = (session.status if session else None) %}
-{% if session_error %}
-  <a href="/sessao" title="WAHA offline"><span class="dot err"></span></a>
-{% elif status == "WORKING" %}
-  <span class="dot ok" title="conectado"></span>
-{% elif status in ("SCAN_QR_CODE", "STARTING") %}
-  <a href="/sessao" title="parear ({{ status|lower }})"><span class="dot warn"></span></a>
+{% if overall == "ok" %}
+  <span class="dot ok" title="WhatsApp conectado"></span>
+{% elif overall == "pending" %}
+  <a href="/configuracoes?tab=conexoes" title="pareando WhatsApp"><span class="dot warn"></span></a>
+{% elif overall == "none" %}
+  <a href="/configuracoes?tab=conexoes" title="conectar WhatsApp"><span class="dot err"></span></a>
 {% else %}
-  <a href="/sessao" title="{{ status or 'sessão parada' }}"><span class="dot err"></span></a>
+  <a href="/configuracoes?tab=conexoes" title="WhatsApp desconectado"><span class="dot err"></span></a>
 {% endif %}

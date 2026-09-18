@@ -1,0 +1,20 @@
+{% if contacts_error %}
+<p class="contact-empty">Não consegui carregar seus contatos do WhatsApp ({{ contacts_error }}) — digite o número manualmente abaixo.</p>
+{% elif contacts %}
+  {% set palette = ['', 'bg-c1', 'bg-c2', 'bg-c3', 'bg-c4'] %}
+  {% for contact in contacts %}
+  <label class="contact-option" data-name="{{ contact.name }}" data-phone="{{ contact.id.split('@')[0] }}">
+    <input type="checkbox" value="{{ contact.id }}" data-name="{{ contact.name }}"
+           {{ 'checked' if contact.id in prefill_ids else '' }}
+           onchange="contactPickerToggle(this)">
+    <span class="avatar {{ palette[loop.index0 % (palette | length)] }}">{{ (contact.name or '?')[0] | upper }}{% if contact.picture %}<img src="{{ contact.picture }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}</span>
+    <span class="contact-option-info">
+      <span class="contact-option-name">{{ contact.name }}{% if contact.is_group %} <span class="muted">· grupo</span>{% endif %}</span>
+      <span class="contact-option-phone">+{{ contact.id.split('@')[0] }}</span>
+    </span>
+  </label>
+  {% endfor %}
+  <p class="contact-empty" hidden>Nenhum contato encontrado.</p>
+{% else %}
+<p class="contact-empty">Nenhuma conversa encontrada — digite o número manualmente abaixo.</p>
+{% endif %}

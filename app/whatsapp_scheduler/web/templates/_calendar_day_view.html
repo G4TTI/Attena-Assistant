@@ -1,0 +1,59 @@
+<div id="calendar-day-view">
+  <div class="month-nav">
+    <button type="button" class="icon-btn ghost" title="Dia anterior"
+            hx-get="/ui/calendario/dia?date={{ prev_date }}"
+            hx-target="#calendar-day-view" hx-swap="outerHTML" hx-push-url="/calendario/dia?date={{ prev_date }}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+    </button>
+    <button type="button" class="ghost"
+            hx-get="/ui/calendario/dia?date={{ today_date }}"
+            hx-target="#calendar-day-view" hx-swap="outerHTML" hx-push-url="/calendario/dia?date={{ today_date }}">Hoje</button>
+    <button type="button" class="icon-btn ghost" title="Próximo dia"
+            hx-get="/ui/calendario/dia?date={{ next_date }}"
+            hx-target="#calendar-day-view" hx-swap="outerHTML" hx-push-url="/calendario/dia?date={{ next_date }}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg>
+    </button>
+    <h2 class="month-nav-label">{{ day_label }}{% if is_today %} <span class="muted" style="font-weight:400;font-size:13px">(hoje)</span>{% endif %}</h2>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <a class="ghost-link" href="/calendario?year={{ day.year }}&month={{ day.month }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
+        Mês
+      </a>
+      <button type="button" class="ghost"
+              hx-get="/ui/calendario/dia?date={{ day.isoformat() }}" hx-target="#calendar-day-view" hx-swap="outerHTML">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+        <span class="hide-loading">Atualizar</span><span class="spin">atualizando…</span>
+      </button>
+    </div>
+  </div>
+
+  {% if not by_hour %}
+  <div class="empty-state" style="padding:40px 12px">
+    <strong>Nenhum evento neste dia.</strong>
+    <p>Sua agenda está livre.</p>
+  </div>
+  {% endif %}
+
+  <div class="day-hours">
+    {% for h in hours %}
+    <div class="day-hour-row">
+      <div class="day-hour-label">{{ '%02d:00' % h }}</div>
+      <div class="day-hour-line"></div>
+    </div>
+    {% for row in by_hour.get(h, []) %}
+    <button type="button" class="day-event-card {{ 'external' if row.is_external }}"
+            hx-get="/ui/calendario/events/{{ row.event.id }}?year={{ day.year }}&month={{ day.month }}" hx-target="#modal-root">
+      <span class="chip-time">{{ row.start_local.strftime('%H:%M') }}–{{ row.end_local.strftime('%H:%M') }}</span>
+      <span class="day-event-title">{{ row.event.title }}</span>
+      <span class="badge-source {{ 'external' if row.is_external }}">{{ 'Google Agenda' if row.is_external else 'Attena' }}</span>
+      {% if row.automation_count %}
+      <span class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg>
+        {{ row.automation_count }} automa{{ 'ção' if row.automation_count == 1 else 'ções' }}
+      </span>
+      {% endif %}
+    </button>
+    {% endfor %}
+    {% endfor %}
+  </div>
+</div>

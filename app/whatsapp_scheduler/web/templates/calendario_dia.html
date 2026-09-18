@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Calendário</h1>
+    <p class="sub">Visão diária — tudo que acontece num dia só.</p>
+  </div>
+  <button type="button"
+          hx-get="/ui/calendario/events/new?date={{ day.isoformat() }}&year={{ day.year }}&month={{ day.month }}"
+          hx-target="#modal-root">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+    Novo evento
+  </button>
+</div>
+
+{% include "_calendar_day_view.html" %}
+
+{% endblock %}

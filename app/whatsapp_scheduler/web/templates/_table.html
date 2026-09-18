@@ -18,7 +18,7 @@
           <div class="sc-name">
             {{ s.recipient_input }}{% if s.chat_id.endswith('@g.us') %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}
           </div>
-          <div class="sc-id">{{ s.chat_id }}</div>
+          <div class="sc-id">{{ s.chat_id }} · WhatsApp: {{ r.whatsapp_label }}</div>
           <div class="sc-text">{{ s.text[:80] }}{% if s.text|length > 80 %}…{% endif %}</div>
           {% if r.last_dispatch and r.last_dispatch.status == "failed" and r.last_dispatch.last_error %}
           <div class="sc-error">

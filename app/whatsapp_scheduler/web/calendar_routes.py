@@ -15,14 +15,14 @@ editar o recurso de outro só trocando o id na URL.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, col, select
 
-from .. import auth, calendar_service
-from ..config import settings
+from .. import app_settings, auth, calendar_service, whatsapp_service
 from ..db import get_session
 from ..models import Automation, AutomationMessage, AutomationSchedule, Calendar, Event, EventSyncStatus, Schedule, User
 from ..recurrence import utc_to_local
@@ -59,11 +59,11 @@ def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
 
 
 def _ctx(request: Request, current_user: User, **extra: object) -> dict:
-    return {"request": request, "nav": "calendario", "waha_session": current_user.waha_session, **extra}
+    return {"request": request, "nav": "calendario", **extra}
 
 
-def _current_year_month(year: int | None, month: int | None) -> tuple[int, int]:
-    today = utc_to_local(calendar_service.utcnow(), settings.default_timezone).date()
+def _current_year_month(year: int | None, month: int | None, tz_name: str) -> tuple[int, int]:
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
     return year or today.year, month or today.month
 
 
@@ -108,19 +108,18 @@ def _automation_summary_map(db: Session, event_ids: list[str]) -> dict[str, dict
 
 
 def _event_chip(event: Event, automation_info: dict[str, dict]) -> dict:
-    tz = event.timezone or settings.default_timezone
     info = automation_info.get(event.id)
     return {
         "event": event,
-        "start_local": utc_to_local(event.start_utc, tz),
+        "start_local": utc_to_local(event.start_utc, event.timezone),
         "is_external": event.source != "internal",
         "calendar_key": event.calendar_id or "internal",
         "automation_count": info["count"] if info else 0,
     }
 
 
-def _grid_ctx(db: Session, user_id: str, year: int, month: int, *, oob: bool = False) -> dict:
-    weeks = calendar_service.month_grid(db, user_id, year, month)
+def _grid_ctx(db: Session, user_id: str, year: int, month: int, tz_name: str, *, oob: bool = False) -> dict:
+    weeks = calendar_service.month_grid(db, user_id, year, month, tz_name)
     all_event_ids = [e.id for week in weeks for day in week for e in day["events"]]
     automation_info = _automation_summary_map(db, all_event_ids)
     grid = [
@@ -129,7 +128,7 @@ def _grid_ctx(db: Session, user_id: str, year: int, month: int, *, oob: bool = F
     ]
     prev_year, prev_month = _shift_month(year, month, -1)
     next_year, next_month = _shift_month(year, month, 1)
-    today = utc_to_local(calendar_service.utcnow(), settings.default_timezone).date()
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
     return {
         "weeks": grid,
         "year": year,
@@ -148,6 +147,47 @@ def _grid_ctx(db: Session, user_id: str, year: int, month: int, *, oob: bool = F
     }
 
 
+def _day_event_row(event: Event, automation_info: dict[str, dict]) -> dict:
+    tz = event.timezone
+    info = automation_info.get(event.id)
+    return {
+        "event": event,
+        "start_local": utc_to_local(event.start_utc, tz),
+        "end_local": utc_to_local(event.end_utc, tz),
+        "is_external": event.source != "internal",
+        "automation_count": info["count"] if info else 0,
+    }
+
+
+def _day_ctx(db: Session, user_id: str, day: date, tz_name: str) -> dict:
+    events = calendar_service.day_events(db, user_id, day, tz_name)
+    automation_info = _automation_summary_map(db, [e.id for e in events])
+    rows = [_day_event_row(e, automation_info) for e in events]
+    by_hour: dict[int, list[dict]] = {}
+    for row in rows:
+        by_hour.setdefault(row["start_local"].hour, []).append(row)
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
+    return {
+        "day": day,
+        "day_label": _day_label(day),
+        "is_today": day == today,
+        "today_date": today.isoformat(),
+        "prev_date": (day - timedelta(days=1)).isoformat(),
+        "next_date": (day + timedelta(days=1)).isoformat(),
+        "hours": range(24),
+        "by_hour": by_hour,
+    }
+
+
+def _parse_date_str(date_str: str | None, default: date) -> date:
+    if not date_str:
+        return default
+    try:
+        return date.fromisoformat(date_str)
+    except ValueError:
+        return default
+
+
 def _load_event(db: Session, event_id: str, user_id: str) -> Event:
     event = db.get(Event, event_id)
     if event is None or event.user_id != user_id:
@@ -156,7 +196,7 @@ def _load_event(db: Session, event_id: str, user_id: str) -> Event:
 
 
 def _event_detail_ctx(db: Session, event: Event, user_id: str, *, year: int, month: int) -> dict:
-    tz = event.timezone or settings.default_timezone
+    tz = event.timezone
     # "is_linked" só marca eventos INTERNOS empurrados pro Google (a
     # funcionalidade nova) — um evento nativamente vindo do Google já mostra
     # o badge "Google Agenda" acima; repetir "sincronizado" ali seria redundante.
@@ -201,10 +241,11 @@ async def _contacts_ctx(request: Request, waha_session: str) -> dict:
 
 
 def _automation_modal_ctx(
-    db: Session, event: Event, *, year: int, month: int, automation_id: str | None = None
+    db: Session, event: Event, *, user_id: str, year: int, month: int, automation_id: str | None = None
 ) -> dict:
-    tz = event.timezone or settings.default_timezone
+    tz = event.timezone
     prefill = None
+    selected_whatsapp_session_id = None
     if automation_id:
         automation = db.get(Automation, automation_id)
         if automation is None:
@@ -239,12 +280,20 @@ def _automation_modal_ctx(
             "offset_direction": str(automation.offset_direction),
             "custom_time_local": automation.custom_time_local,
         }
+        # Todas as mensagens/destinatários de uma automação sempre usam o
+        # mesmo WhatsApp (ver create_event_automation) — basta olhar 1 schedule.
+        any_schedule = next(iter(schedules.values()), None)
+        if any_schedule is not None:
+            existing = whatsapp_service.session_by_name(db, user_id, any_schedule.session)
+            selected_whatsapp_session_id = existing.id if existing else None
     return {
         "event": event,
         "start_local": utc_to_local(event.start_utc, tz),
         "year": year,
         "month": month,
         "prefill": prefill,
+        "whatsapp_sessions": whatsapp_service.list_sessions(db, user_id),
+        "selected_whatsapp_session_id": selected_whatsapp_session_id,
     }
 
 
@@ -259,9 +308,10 @@ def page_calendario(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    y, m = _current_year_month(year, month)
+    tz_name = app_settings.user_timezone(current_user)
+    y, m = _current_year_month(year, month, tz_name)
     return templates.TemplateResponse(
-        "calendario.html", {**_ctx(request, current_user), **_grid_ctx(db, current_user.id, y, m)}
+        "calendario.html", {**_ctx(request, current_user), **_grid_ctx(db, current_user.id, y, m, tz_name)}
     )
 
 
@@ -273,8 +323,42 @@ def ui_grid(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
+    tz_name = app_settings.user_timezone(current_user)
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month)}
+        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, tz_name)}
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Visão diária — o que o botão "Hoje" abre (v1.3, itens 27-31)
+# --------------------------------------------------------------------------- #
+@router.get("/calendario/dia", response_class=HTMLResponse)
+def page_calendario_dia(
+    request: Request,
+    date_str: str | None = Query(None, alias="date"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    tz_name = app_settings.user_timezone(current_user)
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
+    day = _parse_date_str(date_str, today)
+    return templates.TemplateResponse(
+        "calendario_dia.html", {**_ctx(request, current_user), **_day_ctx(db, current_user.id, day, tz_name)}
+    )
+
+
+@router.get("/ui/calendario/dia", response_class=HTMLResponse)
+def ui_calendario_dia(
+    request: Request,
+    date_str: str = Query(..., alias="date"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    tz_name = app_settings.user_timezone(current_user)
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
+    day = _parse_date_str(date_str, today)
+    return templates.TemplateResponse(
+        "_calendar_day_view.html", {"request": request, **_day_ctx(db, current_user.id, day, tz_name)}
     )
 
 
@@ -339,7 +423,7 @@ def ui_event_edit(
     event = _load_event(db, event_id, current_user.id)
     if event.source != "internal":
         raise HTTPException(status_code=403, detail="Eventos do Google Agenda não podem ser editados aqui.")
-    tz = event.timezone or settings.default_timezone
+    tz = event.timezone
     start_local = utc_to_local(event.start_utc, tz)
     end_local = utc_to_local(event.end_utc, tz)
     return templates.TemplateResponse(
@@ -408,7 +492,8 @@ async def ui_event_create(
         end_local = _parse_local_dt(date_str, end_time)
         await calendar_service.create_internal_event(
             db, user_id=current_user.id, title=title, description=description, start_local=start_local,
-            end_local=end_local, timezone_name=settings.default_timezone, target_calendar_id=target_calendar_id or None,
+            end_local=end_local, timezone_name=app_settings.user_timezone(current_user),
+            target_calendar_id=target_calendar_id or None,
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
@@ -422,7 +507,8 @@ async def ui_event_create(
             },
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -446,7 +532,7 @@ async def ui_event_update(
         end_local = _parse_local_dt(date_str, end_time)
         await calendar_service.update_internal_event(
             db, event_id, user_id=current_user.id, title=title, description=description, start_local=start_local,
-            end_local=end_local, timezone_name=event.timezone or settings.default_timezone,
+            end_local=end_local, timezone_name=event.timezone,
         )
     except ValidationError as exc:
         return templates.TemplateResponse(
@@ -460,7 +546,8 @@ async def ui_event_update(
             },
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -483,15 +570,93 @@ async def ui_event_delete(
     if not ok:
         raise HTTPException(status_code=404, detail="Evento não encontrado.")
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
 # --------------------------------------------------------------------------- #
 # Automação: criar / editar / remover (modal flutuante)
 # --------------------------------------------------------------------------- #
+def _resolve_waha_session(db: Session, user_id: str, whatsapp_session_id: str | None) -> str | None:
+    """Sessão explicitamente escolhida no seletor "Enviar através de"; sem
+    escolha (GET inicial do modal), cai pra conexão mais antiga só como
+    conveniência de pré-seleção (nunca lido de volta como fonte de verdade,
+    ver `whatsapp_service.primary_session`)."""
+    if whatsapp_session_id:
+        session = whatsapp_service.get_session(db, whatsapp_session_id, user_id)
+    else:
+        session = whatsapp_service.primary_session(db, user_id)
+    return session.session_name if session else None
+
+
+@router.get("/ui/calendario/contacts", response_class=HTMLResponse)
+async def ui_calendario_contacts(
+    request: Request,
+    whatsapp_session_id: str = Query(""),
+    prefill_id: list[str] = Query([]),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Lista de contatos do popover de destinatário — carregada à parte do
+    resto do modal (v1.3): é a única coisa no modal de automação que depende
+    de uma chamada de rede ao WAHA, então abrir "Adicionar automação" nunca
+    deveria esperar por ela. `_calendar_automation_modal.html` só dispara
+    isto via `hx-trigger="load"` DEPOIS que o modal (instantâneo, só banco)
+    já apareceu inteiro na tela."""
+    session_name = _resolve_waha_session(db, current_user.id, whatsapp_session_id)
+    if session_name is None:
+        ctx = {"contacts": [], "contacts_error": "Conecte um WhatsApp em /configuracoes?tab=conexoes para importar contatos."}
+    else:
+        ctx = await _contacts_ctx(request, session_name)
+    return templates.TemplateResponse(
+        "_contact_options.html", {"request": request, "prefill_ids": prefill_id, **ctx}
+    )
+
+
+@router.get("/ui/calendario/events/{event_id}/similar-events", response_class=HTMLResponse)
+def ui_calendario_similar_events(
+    request: Request,
+    event_id: str,
+    repeat_choice: str = Query("nao"),
+    search: int = Query(0),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """"Repetir esta automação em eventos iguais?" do modal de automação, em
+    dois passos — a varredura de `similar_events` (todos os eventos futuros
+    do usuário na janela de sincronização) é cara e a maioria das pessoas
+    nunca marca "Sim":
+
+    - `repeat_choice != "sim"`: resposta vazia (limpa a caixa; sem consulta).
+    - `repeat_choice == "sim"`, sem `search`: só a caixa, instantânea, já com
+      a bolinha de carregamento — e ela mesma dispara o passo seguinte
+      (`hx-trigger="load"`), então a caixa aparece ANTES da busca começar.
+    - `search=1`: aí sim roda a busca e devolve a lista de datas.
+
+    O seletor dispara esta rota em QUALQUER mudança, com `repeat_choice`
+    vindo junto (htmx sempre manda o valor do elemento que disparou) — um
+    caminho só, decidido no servidor, sem `onchange` no cliente brigando
+    com o listener do htmx por ordem de eventos."""
+    event = _load_event(db, event_id, current_user.id)
+    if repeat_choice != "sim":
+        return HTMLResponse("")
+    if not search:
+        return templates.TemplateResponse("_similar_events_box.html", {"request": request, "event": event})
+    similar = calendar_service.similar_events(db, event, current_user.id)
+    return templates.TemplateResponse(
+        "_similar_events_checklist.html",
+        {
+            "request": request,
+            "similar_events": [
+                {"event": e, "start_local": utc_to_local(e.start_utc, e.timezone)} for e in similar
+            ],
+        },
+    )
+
+
 @router.get("/ui/calendario/events/{event_id}/automation/new", response_class=HTMLResponse)
-async def ui_automation_new(
+def ui_automation_new(
     request: Request,
     event_id: str,
     year: int = Query(...),
@@ -500,15 +665,14 @@ async def ui_automation_new(
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     event = _load_event(db, event_id, current_user.id)
-    ctx = _automation_modal_ctx(db, event, year=year, month=month)
+    ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
     return templates.TemplateResponse(
-        "_calendar_automation_modal.html",
-        {"request": request, "form_error": None, **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+        "_calendar_automation_modal.html", {"request": request, "form_error": None, **ctx}
     )
 
 
 @router.get("/ui/calendario/automations/{automation_id}/edit", response_class=HTMLResponse)
-async def ui_automation_edit(
+def ui_automation_edit(
     request: Request,
     automation_id: str,
     year: int = Query(...),
@@ -520,10 +684,9 @@ async def ui_automation_edit(
     if automation is None:
         raise HTTPException(status_code=404, detail="Automação não encontrada.")
     event = _load_event(db, automation.event_id, current_user.id)
-    ctx = _automation_modal_ctx(db, event, year=year, month=month, automation_id=automation_id)
+    ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
     return templates.TemplateResponse(
-        "_calendar_automation_modal.html",
-        {"request": request, "form_error": None, **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+        "_calendar_automation_modal.html", {"request": request, "form_error": None, **ctx}
     )
 
 
@@ -536,32 +699,64 @@ async def ui_automation_create(
     offset_interval: str = Form(...),
     offset_direction: str = Form(...),
     custom_time: str = Form(""),
+    whatsapp_session_id: str = Form(""),
+    apply_to_event_ids: list[str] = Form([]),
     year: int = Form(...),
     month: int = Form(...),
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     event = _load_event(db, event_id, current_user.id)
+    wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
     try:
+        if wa_session is None:
+            raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
         offset_amount, offset_unit = _parse_interval(offset_interval)
-        calendar_service.create_event_automation(
-            db, event_id=event_id, user_id=current_user.id, waha_session=current_user.waha_session,
-            recipients=recipients, messages=messages, offset_amount=offset_amount,
-            offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
-        )
+        # Recalcula quem é "igual" a este evento no servidor — nunca confia
+        # nos ids que o formulário mandou (poderiam ter sido adulterados pra
+        # apontar pro evento de outro usuário).
+        selected_ids = set(apply_to_event_ids)
+
+        def _create_for_all_targets() -> None:
+            # A varredura de "eventos iguais" só roda se o usuário marcou
+            # algum (o padrão é "Não repetir") e, quando roda, também fica
+            # aqui dentro da thread — não na coroutine.
+            target_events = [event]
+            if selected_ids:
+                target_events += [
+                    e for e in calendar_service.similar_events(db, event, current_user.id) if e.id in selected_ids
+                ]
+            # "Repetir esta automação" pode significar dezenas de eventos
+            # (ex.: uma aula recorrente semanal já com um ano de ocorrências).
+            # Cada create_event_automation faz vários commits no SQLite; feito
+            # direto na coroutine, isso bloquearia o único event loop do
+            # processo (nada mais responde — nem o poll da sidebar, nem outro
+            # usuário) pelo tempo inteiro da soma de todos. `asyncio.to_thread`
+            # tira esse trabalho síncrono do event loop, mesmo padrão que
+            # `scheduler.materialize_due` já usa. O mesmo `db` (SQLite com
+            # `check_same_thread=False`, ver db.py) é reaproveitado — chamado
+            # de forma sequencial, nunca concorrente, então é seguro.
+            for target in target_events:
+                calendar_service.create_event_automation(
+                    db, event_id=target.id, user_id=current_user.id, waha_session=wa_session.session_name,
+                    recipients=recipients, messages=messages, offset_amount=offset_amount,
+                    offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
+                )
+
+        await asyncio.to_thread(_create_for_all_targets)
     except ValidationError as exc:
-        ctx = _automation_modal_ctx(db, event, year=year, month=month)
+        ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
         return templates.TemplateResponse(
-            "_calendar_automation_modal.html",
-            {"request": request, "form_error": str(exc), **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+            "_calendar_automation_modal.html", {"request": request, "form_error": str(exc), **ctx}
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
 @router.post("/ui/calendario/automations/{automation_id}", response_class=HTMLResponse)
-async def ui_automation_update(
+def ui_automation_update(
     request: Request,
     automation_id: str,
     recipients: list[str] = Form([]),
@@ -569,6 +764,7 @@ async def ui_automation_update(
     offset_interval: str = Form(...),
     offset_direction: str = Form(...),
     custom_time: str = Form(""),
+    whatsapp_session_id: str = Form(""),
     year: int = Form(...),
     month: int = Form(...),
     db: Session = Depends(get_session),
@@ -578,21 +774,24 @@ async def ui_automation_update(
     if automation is None:
         raise HTTPException(status_code=404, detail="Automação não encontrada.")
     event = _load_event(db, automation.event_id, current_user.id)
+    wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
     try:
+        if wa_session is None:
+            raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
         offset_amount, offset_unit = _parse_interval(offset_interval)
         calendar_service.update_event_automation(
-            db, automation_id, user_id=current_user.id, waha_session=current_user.waha_session,
+            db, automation_id, user_id=current_user.id, waha_session=wa_session.session_name,
             recipients=recipients, messages=messages, offset_amount=offset_amount,
             offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
         )
     except ValidationError as exc:
-        ctx = _automation_modal_ctx(db, event, year=year, month=month, automation_id=automation_id)
+        ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
         return templates.TemplateResponse(
-            "_calendar_automation_modal.html",
-            {"request": request, "form_error": str(exc), **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+            "_calendar_automation_modal.html", {"request": request, "form_error": str(exc), **ctx}
         )
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
 
 
@@ -611,5 +810,6 @@ def ui_automation_remove(
     _load_event(db, automation.event_id, current_user.id)  # 404 se o evento pai não for do usuário
     calendar_service.remove_event_automation(db, automation_id, current_user.id)
     return templates.TemplateResponse(
-        "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
+        "_calendar_month_grid.html",
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
     )
