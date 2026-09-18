@@ -1,9 +1,9 @@
 {% if overall == "ok" %}
   <span class="dot ok" title="WhatsApp conectado"></span>
 {% elif overall == "pending" %}
-  <a href="/whatsapps" title="pareando WhatsApp"><span class="dot warn"></span></a>
+  <a href="/configuracoes?tab=conexoes" title="pareando WhatsApp"><span class="dot warn"></span></a>
 {% elif overall == "none" %}
-  <a href="/whatsapps" title="conectar WhatsApp"><span class="dot err"></span></a>
+  <a href="/configuracoes?tab=conexoes" title="conectar WhatsApp"><span class="dot err"></span></a>
 {% else %}
-  <a href="/whatsapps" title="WhatsApp desconectado"><span class="dot err"></span></a>
+  <a href="/configuracoes?tab=conexoes" title="WhatsApp desconectado"><span class="dot err"></span></a>
 {% endif %}

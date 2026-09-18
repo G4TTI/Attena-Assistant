@@ -81,6 +81,23 @@ def test_skip_whatsapp_step_advances_to_google(client):
     assert "Conecte seu calendário" in resp.text
 
 
+def test_whatsapp_step_form_has_phone_field(client):
+    client.waha.status = "SCAN_QR_CODE"  # sem isso o FakeWaha reporta WORKING e pula pro passo 2
+    resp = client.get("/onboarding")
+    assert resp.status_code == 200
+    assert 'name="phone"' in resp.text
+    assert "Seu número de WhatsApp" in resp.text
+
+
+def test_starting_pairing_saves_the_phone_number(client):
+    resp = client.post("/onboarding/whatsapp/start", data={"phone": "+55 11 99999-8888"})
+    assert resp.status_code == 200
+
+    with Session(get_engine()) as db:
+        user = db.get(User, client.user.id)
+        assert user.phone == "+55 11 99999-8888"
+
+
 def test_set_timezone_persists_and_advances_to_done(client):
     resp = client.post("/onboarding/timezone", data={"timezone_name": "Europe/Lisbon"})
     assert resp.status_code == 200

@@ -68,8 +68,9 @@
     /* ---------------- Rail nav ---------------- */
     .rail { width:64px; flex-shrink:0; background:var(--rail); border-right:1px solid var(--rail); display:flex; flex-direction:column; align-items:center; padding:14px 0 12px; gap:6px; position:sticky; top:0; height:100vh; overflow:hidden; transition:width 200ms ease; }
     .rail:hover, .rail:focus-within { width:232px; align-items:stretch; padding-left:11px; padding-right:11px; }
-    .rail-brand-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-shrink:0; }
-    .rail-brand { width:34px; height:34px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .rail-brand-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-shrink:0; width:42px; overflow:hidden; }
+    .rail:hover .rail-brand-row, .rail:focus-within .rail-brand-row { width:100%; }
+    .rail-brand { width:42px; height:42px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
     .rail-brand-word { display:flex; flex-direction:column; gap:1px; overflow:hidden; white-space:nowrap; opacity:0; max-width:0; transition:opacity 150ms ease, max-width 200ms ease; }
     .rail:hover .rail-brand-word, .rail:focus-within .rail-brand-word { opacity:1; max-width:160px; }
     .rail-brand-name { font-family:var(--font-display); font-size:19px; line-height:1; letter-spacing:-.01em; color:#F7F5F0; }
@@ -98,6 +99,12 @@
     .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; flex-wrap:wrap; }
     .meta-live { display:flex; align-items:center; gap:8px; color:var(--mut); font-size:13px; flex-shrink:0; }
     .meta-live svg { flex-shrink:0; }
+
+    /* ---------------- Abas ---------------- */
+    .tabbar { display:flex; gap:4px; border-bottom:1px solid var(--bd); margin-bottom:4px; }
+    .tabbar-btn { background:none; border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 4px; margin-right:20px; font-weight:600; font-size:14px; color:var(--mut); cursor:pointer; }
+    .tabbar-btn:hover { color:var(--fg); background:none; }
+    .tabbar-btn.active { color:var(--accent-d); border-bottom-color:var(--accent-d); }
 
     /* ---------------- Cards ---------------- */
     .card { background:var(--card); border:1px solid var(--bd); border-radius:14px; box-shadow:var(--sh); }
@@ -454,10 +461,6 @@
       <a class="rail-btn {{ 'active' if nav == 'agendamentos' }}" href="/agendamentos" title="Agendamentos">
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12L19 4.5l-5 15-3-7-7-2.5z"></path><circle cx="17.5" cy="17.5" r="4.7" fill="var(--rail)" stroke-width="1.5"></circle><path d="M17.5 15.6V17.6l1.3.9" stroke-width="1.5"></path></svg></span>
         <span class="rail-label">Agendamentos</span>
-      </a>
-      <a class="rail-btn {{ 'active' if nav == 'whatsapps' }}" href="/whatsapps" title="WhatsApps">
-        <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"></path><path d="M13 6.7l1.8-1.8a3.6 3.6 0 0 1 5.1 5.1L18.1 11.8"></path><path d="M11 17.3l-1.8 1.8a3.6 3.6 0 0 1-5.1-5.1L5.9 12.2"></path></svg></span>
-        <span class="rail-label">WhatsApps</span>
       </a>
       <a class="rail-btn {{ 'active' if nav == 'conversas' }}" href="/conversas" title="Conversas">
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg></span>

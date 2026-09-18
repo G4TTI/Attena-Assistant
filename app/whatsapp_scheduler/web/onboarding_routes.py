@@ -59,8 +59,18 @@ async def ui_onboarding_whatsapp(
 
 @router.post("/onboarding/whatsapp/start", response_class=HTMLResponse)
 async def ui_onboarding_whatsapp_start(
-    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+    request: Request,
+    phone: str = Form(""),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
+    phone = phone.strip()
+    if phone and phone != current_user.phone:
+        current_user.phone = phone
+        current_user.updated_at = utcnow()
+        db.add(current_user)
+        db.commit()
+
     primary = whatsapp_service.primary_session(db, current_user.id)
     if primary is not None:
         try:

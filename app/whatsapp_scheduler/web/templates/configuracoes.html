@@ -5,92 +5,124 @@
 <div class="page-head">
   <div>
     <h1>Configurações</h1>
-    <p class="sub">Calendários conectados e outras preferências.</p>
+    <p class="sub">Preferências da conta e conexões (WhatsApp, Google Agenda).</p>
   </div>
 </div>
 
 {% if error %}<div class="alert err">{{ error }}</div>{% endif %}
 {% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
 
-<div class="card">
-  <div class="card-hd">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 20c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg>
-    <h2>Minha conta</h2>
+<div class="tabbar" role="tablist">
+  <button type="button" class="tabbar-btn" data-tab-btn="preferencias" onclick="switchConfigTab('preferencias')">Preferências</button>
+  <button type="button" class="tabbar-btn" data-tab-btn="conexoes" onclick="switchConfigTab('conexoes')">Conexões</button>
+</div>
+
+<div data-tab-panel="preferencias" style="display:flex;flex-direction:column;gap:24px">
+  <div class="card">
+    <div class="card-hd">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 20c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg>
+      <h2>Minha conta</h2>
+    </div>
+    <div class="card-bd">
+      <p class="section-label">Dados pessoais</p>
+      <form method="post" action="/configuracoes/conta/perfil">
+        <div class="form-grid">
+          <div class="field">
+            <label for="acc_name">Nome</label>
+            <input id="acc_name" name="name" type="text" value="{{ current_user.name }}" required>
+          </div>
+          <div class="field">
+            <label for="acc_email">E-mail</label>
+            <input id="acc_email" type="email" value="{{ current_user.email }}" disabled>
+          </div>
+          <div class="field">
+            <label for="acc_phone">Telefone da conta</label>
+            <input id="acc_phone" name="phone" type="text" placeholder="+55 (11) 99999-9999" value="{{ current_user.phone or '' }}">
+          </div>
+        </div>
+        <p class="hint">O telefone da conta é usado só para contato — não é necessariamente o número de WhatsApp conectado em "Conexões".</p>
+        <button type="submit" style="margin-top:12px;">Salvar</button>
+      </form>
+
+      <p class="section-label" style="margin-top:24px;">Segurança</p>
+      <form method="post" action="/configuracoes/conta/senha">
+        <div class="form-grid">
+          <div class="field full">
+            <label for="acc_current_password">Senha atual</label>
+            <input id="acc_current_password" name="current_password" type="password" required>
+          </div>
+          <div class="field">
+            <label for="acc_new_password">Nova senha</label>
+            <input id="acc_new_password" name="new_password" type="password" minlength="8" required>
+          </div>
+          <div class="field">
+            <label for="acc_new_password_confirm">Confirmar nova senha</label>
+            <input id="acc_new_password_confirm" name="new_password_confirm" type="password" minlength="8" required>
+          </div>
+        </div>
+        <button type="submit" style="margin-top:12px;">Alterar senha</button>
+      </form>
+
+      <form method="post" action="/configuracoes/conta/sair-outros-dispositivos" style="margin-top:16px;">
+        <button type="submit" class="ghost">Sair de outros dispositivos</button>
+      </form>
+    </div>
   </div>
-  <div class="card-bd">
-    <p class="section-label">Dados pessoais</p>
-    <form method="post" action="/configuracoes/conta/perfil">
-      <div class="form-grid">
-        <div class="field">
-          <label for="acc_name">Nome</label>
-          <input id="acc_name" name="name" type="text" value="{{ current_user.name }}" required>
-        </div>
-        <div class="field">
-          <label for="acc_email">E-mail</label>
-          <input id="acc_email" type="email" value="{{ current_user.email }}" disabled>
-        </div>
-        <div class="field">
-          <label for="acc_phone">Telefone da conta</label>
-          <input id="acc_phone" name="phone" type="text" placeholder="+55 (11) 99999-9999" value="{{ current_user.phone or '' }}">
-        </div>
-      </div>
-      <p class="hint">O telefone da conta é usado só para contato — não é o número de WhatsApp conectado acima em "WhatsApp", que pode ser outro.</p>
-      <button type="submit" style="margin-top:12px;">Salvar</button>
-    </form>
 
-    <p class="section-label" style="margin-top:24px;">Segurança</p>
-    <form method="post" action="/configuracoes/conta/senha">
-      <div class="form-grid">
-        <div class="field full">
-          <label for="acc_current_password">Senha atual</label>
-          <input id="acc_current_password" name="current_password" type="password" required>
-        </div>
-        <div class="field">
-          <label for="acc_new_password">Nova senha</label>
-          <input id="acc_new_password" name="new_password" type="password" minlength="8" required>
-        </div>
-        <div class="field">
-          <label for="acc_new_password_confirm">Confirmar nova senha</label>
-          <input id="acc_new_password_confirm" name="new_password_confirm" type="password" minlength="8" required>
-        </div>
-      </div>
-      <button type="submit" style="margin-top:12px;">Alterar senha</button>
-    </form>
-
-    <form method="post" action="/configuracoes/conta/sair-outros-dispositivos" style="margin-top:16px;">
-      <button type="submit" class="ghost">Sair de outros dispositivos</button>
-    </form>
+  <div class="card">
+    <div class="card-hd">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
+      <h2>Preferências</h2>
+    </div>
+    <div class="card-bd">
+      {% include "_preferences.html" %}
+    </div>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-hd">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"></path><path d="M13 6.7l1.8-1.8a3.6 3.6 0 0 1 5.1 5.1L18.1 11.8"></path><path d="M11 17.3l-1.8 1.8a3.6 3.6 0 0 1-5.1-5.1L5.9 12.2"></path></svg>
-    <h2>WhatsApps</h2>
+<div data-tab-panel="conexoes" hidden style="display:flex;flex-direction:column;gap:24px">
+  <div class="card">
+    <div class="card-hd">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"></path><path d="M13 6.7l1.8-1.8a3.6 3.6 0 0 1 5.1 5.1L18.1 11.8"></path><path d="M11 17.3l-1.8 1.8a3.6 3.6 0 0 1-5.1-5.1L5.9 12.2"></path></svg>
+      <h2>WhatsApps</h2>
+    </div>
+    <div id="whatsapp-list" class="card-bd">
+      {% include "_whatsapp_list.html" %}
+    </div>
   </div>
-  <div id="whatsapp-list" class="card-bd">
-    {% include "_whatsapp_list.html" %}
+
+  <div class="card">
+    <div class="card-hd">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
+      <h2>Calendários</h2>
+    </div>
+    <div class="card-bd" id="connections">
+      {% include "_connections.html" %}
+    </div>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-hd">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"></rect><path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path></svg>
-    <h2>Calendários</h2>
-  </div>
-  <div class="card-bd" id="connections">
-    {% include "_connections.html" %}
-  </div>
-</div>
-
-<div class="card">
-  <div class="card-hd">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
-    <h2>Preferências</h2>
-  </div>
-  <div class="card-bd">
-    {% include "_preferences.html" %}
-  </div>
-</div>
+<script>
+  function switchConfigTab(tab){
+    document.querySelectorAll('[data-tab-btn]').forEach(function(btn){
+      btn.classList.toggle('active', btn.getAttribute('data-tab-btn') === tab);
+    });
+    document.querySelectorAll('[data-tab-panel]').forEach(function(panel){
+      panel.hidden = panel.getAttribute('data-tab-panel') !== tab;
+    });
+    try{ localStorage.setItem('configTab', tab); }catch(e){}
+    var url = new URL(window.location);
+    url.searchParams.set('tab', tab);
+    window.history.replaceState({}, '', url);
+  }
+  (function(){
+    var params = new URLSearchParams(window.location.search);
+    var initial = params.get('tab');
+    if(!initial){
+      try{ initial = localStorage.getItem('configTab'); }catch(e){}
+    }
+    switchConfigTab(initial === 'conexoes' ? 'conexoes' : 'preferencias');
+  })();
+</script>
 
 {% endblock %}

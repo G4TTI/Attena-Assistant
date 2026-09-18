@@ -6,7 +6,7 @@ vez por conexão em vez de uma vez só."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlmodel import Session
 
 from .. import auth, whatsapp_service
@@ -27,12 +27,12 @@ async def _list_ctx(request: Request, db: Session, current_user: User) -> dict:
     return {"request": request, "rows": await whatsapp_service.status_rows(_waha(request), sessions)}
 
 
-@router.get("/whatsapps", response_class=HTMLResponse)
-async def page_whatsapps(
-    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
-) -> HTMLResponse:
-    ctx = {"request": request, "nav": "whatsapps", "current_user": current_user, **(await _list_ctx(request, db, current_user))}
-    return templates.TemplateResponse("whatsapps.html", ctx)
+@router.get("/whatsapps")
+def page_whatsapps(current_user: User = Depends(auth.require_user_web)) -> RedirectResponse:
+    """WhatsApps deixou de ser um destino próprio na sidebar — vira a aba
+    "Conexões" de Configurações (junto com Calendários). Rota mantida como
+    redirect só para não quebrar link/favorito antigo."""
+    return RedirectResponse(url="/configuracoes?tab=conexoes", status_code=303)
 
 
 @router.get("/ui/whatsapps", response_class=HTMLResponse)
