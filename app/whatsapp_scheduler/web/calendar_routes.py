@@ -146,6 +146,47 @@ def _grid_ctx(db: Session, user_id: str, year: int, month: int, tz_name: str, *,
     }
 
 
+def _day_event_row(event: Event, automation_info: dict[str, dict]) -> dict:
+    tz = event.timezone
+    info = automation_info.get(event.id)
+    return {
+        "event": event,
+        "start_local": utc_to_local(event.start_utc, tz),
+        "end_local": utc_to_local(event.end_utc, tz),
+        "is_external": event.source != "internal",
+        "automation_count": info["count"] if info else 0,
+    }
+
+
+def _day_ctx(db: Session, user_id: str, day: date, tz_name: str) -> dict:
+    events = calendar_service.day_events(db, user_id, day, tz_name)
+    automation_info = _automation_summary_map(db, [e.id for e in events])
+    rows = [_day_event_row(e, automation_info) for e in events]
+    by_hour: dict[int, list[dict]] = {}
+    for row in rows:
+        by_hour.setdefault(row["start_local"].hour, []).append(row)
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
+    return {
+        "day": day,
+        "day_label": _day_label(day),
+        "is_today": day == today,
+        "today_date": today.isoformat(),
+        "prev_date": (day - timedelta(days=1)).isoformat(),
+        "next_date": (day + timedelta(days=1)).isoformat(),
+        "hours": range(24),
+        "by_hour": by_hour,
+    }
+
+
+def _parse_date_str(date_str: str | None, default: date) -> date:
+    if not date_str:
+        return default
+    try:
+        return date.fromisoformat(date_str)
+    except ValueError:
+        return default
+
+
 def _load_event(db: Session, event_id: str, user_id: str) -> Event:
     event = db.get(Event, event_id)
     if event is None or event.user_id != user_id:
@@ -284,6 +325,39 @@ def ui_grid(
     tz_name = app_settings.user_timezone(current_user)
     return templates.TemplateResponse(
         "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, tz_name)}
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Visão diária — o que o botão "Hoje" abre (v1.3, itens 27-31)
+# --------------------------------------------------------------------------- #
+@router.get("/calendario/dia", response_class=HTMLResponse)
+def page_calendario_dia(
+    request: Request,
+    date_str: str | None = Query(None, alias="date"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    tz_name = app_settings.user_timezone(current_user)
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
+    day = _parse_date_str(date_str, today)
+    return templates.TemplateResponse(
+        "calendario_dia.html", {**_ctx(request, current_user), **_day_ctx(db, current_user.id, day, tz_name)}
+    )
+
+
+@router.get("/ui/calendario/dia", response_class=HTMLResponse)
+def ui_calendario_dia(
+    request: Request,
+    date_str: str = Query(..., alias="date"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    tz_name = app_settings.user_timezone(current_user)
+    today = utc_to_local(calendar_service.utcnow(), tz_name).date()
+    day = _parse_date_str(date_str, today)
+    return templates.TemplateResponse(
+        "_calendar_day_view.html", {"request": request, **_day_ctx(db, current_user.id, day, tz_name)}
     )
 
 

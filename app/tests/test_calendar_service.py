@@ -471,6 +471,69 @@ def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock, test
 
 
 # --------------------------------------------------------------------------- #
+# Visão diária (botão "Hoje", v1.3 itens 27-31)
+# --------------------------------------------------------------------------- #
+def test_day_events_returns_only_events_of_that_local_day(frozen_clock, test_user):
+    with Session(get_engine()) as db:
+        same_day = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Reunião",
+            start_utc=datetime(2026, 9, 15, 17, 0), end_utc=datetime(2026, 9, 15, 18, 0),
+            timezone="America/Sao_Paulo",
+        )
+        other_day = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Amanhã",
+            start_utc=datetime(2026, 9, 16, 17, 0), end_utc=datetime(2026, 9, 16, 18, 0),
+            timezone="America/Sao_Paulo",
+        )
+        db.add(same_day)
+        db.add(other_day)
+        db.commit()
+
+        events = calendar_service.day_events(db, test_user.id, date(2026, 9, 15), "America/Sao_Paulo")
+
+    assert [e.title for e in events] == ["Reunião"]
+
+
+def test_day_events_buckets_by_event_own_timezone_not_the_requested_one(frozen_clock, test_user):
+    # Mesmo evento do teste de month_grid acima: 2026-08-31 15:30 UTC cai em
+    # 2026-09-01 na timezone PRÓPRIA do evento (Asia/Tokyo), mesmo pedindo o
+    # dia com outra timezone.
+    with Session(get_engine()) as db:
+        event = Event(
+            user_id=test_user.id, source=EventSource.google, title="Tokyo meeting",
+            start_utc=datetime(2026, 8, 31, 15, 30), end_utc=datetime(2026, 8, 31, 16, 30),
+            timezone="Asia/Tokyo",
+        )
+        db.add(event)
+        db.commit()
+
+        sep1 = calendar_service.day_events(db, test_user.id, date(2026, 9, 1), "America/Sao_Paulo")
+        aug31 = calendar_service.day_events(db, test_user.id, date(2026, 8, 31), "America/Sao_Paulo")
+
+    assert [e.title for e in sep1] == ["Tokyo meeting"]
+    assert aug31 == []
+
+
+def test_day_events_ordered_chronologically(frozen_clock, test_user):
+    with Session(get_engine()) as db:
+        late = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Tarde",
+            start_utc=datetime(2026, 9, 15, 21, 0), end_utc=datetime(2026, 9, 15, 22, 0), timezone="America/Sao_Paulo",
+        )
+        early = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Manhã",
+            start_utc=datetime(2026, 9, 15, 13, 0), end_utc=datetime(2026, 9, 15, 14, 0), timezone="America/Sao_Paulo",
+        )
+        db.add(late)
+        db.add(early)
+        db.commit()
+
+        events = calendar_service.day_events(db, test_user.id, date(2026, 9, 15), "America/Sao_Paulo")
+
+    assert [e.title for e in events] == ["Manhã", "Tarde"]
+
+
+# --------------------------------------------------------------------------- #
 # CRUD de evento interno
 # --------------------------------------------------------------------------- #
 async def test_create_internal_event_validates_fields(test_user):

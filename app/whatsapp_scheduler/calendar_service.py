@@ -662,6 +662,35 @@ def agenda(db: Session, user_id: str, *, days: int | None = None) -> list[Event]
     )
 
 
+def day_events(db: Session, user_id: str, day: date, tz_name: str) -> list[Event]:
+    """Eventos de UM dia local específico (v1.3, visão diária — item 29),
+    mesma lógica de bucketing por timezone PRÓPRIA do evento que `month_grid`
+    já usa: a janela de busca tem margem de 24h pros dois lados porque um
+    evento com timezone bem distante de `tz_name` pode ter `start_utc` fora
+    dos limites estritos do dia mesmo pertencendo visualmente a ele."""
+    query_start = local_to_utc(datetime.combine(day, dt_time.min), tz_name) - timedelta(hours=24)
+    query_end = local_to_utc(datetime.combine(day + timedelta(days=1), dt_time.min), tz_name) + timedelta(hours=24)
+
+    events = db.exec(
+        select(Event)
+        .where(col(Event.user_id) == user_id)
+        .where(col(Event.status) == EventStatus.confirmed)
+        .where(col(Event.start_utc) >= query_start)
+        .where(col(Event.start_utc) < query_end)
+        .order_by(col(Event.start_utc))
+    ).all()
+
+    out = []
+    for event in events:
+        tz = event.timezone or tz_name
+        try:
+            if utc_to_local(event.start_utc, tz).date() == day:
+                out.append(event)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return out
+
+
 def month_grid(db: Session, user_id: str, year: int, month: int, tz_name: str) -> list[list[dict]]:
     """Grade de 6 semanas (42 dias, domingo a sábado) pro mês pedido.
 

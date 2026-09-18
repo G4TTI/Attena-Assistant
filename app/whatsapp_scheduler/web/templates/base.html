@@ -214,6 +214,20 @@
       .month-grid-hd { font-size:9.5px; }
     }
 
+    /* ---------------- Calendário: visão diária ---------------- */
+    .day-hours { display:flex; flex-direction:column; }
+    .day-hour-row { display:flex; align-items:center; gap:12px; height:32px; flex-shrink:0; }
+    .day-hour-label { width:48px; flex-shrink:0; font-family:var(--font-mono); font-size:11px; color:var(--mut); text-align:right; }
+    .day-hour-line { flex:1; border-top:1px solid var(--bd); }
+    .day-event-card { display:flex; align-items:center; gap:10px; width:100%; text-align:left; margin:2px 0 2px 60px; padding:8px 12px; border:1px solid var(--bd); border-left:3px solid var(--accent-d); border-radius:9px; background:var(--soft); font:inherit; cursor:pointer; max-width:calc(100% - 60px); }
+    .day-event-card:hover { filter:brightness(0.97); }
+    .day-event-card.external { border-left-color:#6f8fae; background:color-mix(in oklab, #6f8fae 14%, transparent); }
+    .day-event-title { font-weight:600; font-size:13.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    @media (max-width:720px){
+      .day-event-card { flex-wrap:wrap; margin-left:44px; max-width:calc(100% - 44px); }
+      .day-hour-label { width:36px; }
+    }
+
     .badge-source { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:500; letter-spacing:.02em; color:var(--accent-d); background:var(--soft); flex-shrink:0; }
     .badge-source.external { color:#6f8fae; background:color-mix(in oklab, #6f8fae 14%, transparent); }
     .automation-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:10px 0; border-top:1px solid var(--bd); font-size:13px; }
