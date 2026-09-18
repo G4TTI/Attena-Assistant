@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from sqlmodel import Session
 
-from . import app_settings, calendar_service
+from . import app_settings, calendar_service, whatsapp_service
 from .api import calendar as calendar_api
 from .api import chats as chats_api
 from .api import schedules as schedules_api
@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
     # pela metade (ex.: automações antigas ainda não convertidas).
     with Session(get_engine()) as db:
         calendar_service.migrate_legacy_automations(db)
+        whatsapp_service.migrate_legacy_sessions(db)
         app_settings.load_from_db(db)
     waha = WahaClient(settings.waha_base_url, settings.waha_api_key, settings.request_timeout)
     scheduler = SchedulerService(waha)
