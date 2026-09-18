@@ -137,8 +137,24 @@ def test_dashboard_is_now_the_index_page(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "Olá" in resp.text
-    assert "Eventos hoje" in resp.text
     assert "Agendamentos" in resp.text  # ainda linkado na sidebar
+
+
+def test_dashboard_shows_welcome_block_for_brand_new_user_with_no_activity(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Bem-vindo ao Attena" in resp.text
+    assert "Eventos hoje" not in resp.text  # os cards de estatística só aparecem com alguma atividade
+
+
+def test_dashboard_shows_stat_cards_once_user_has_activity(client):
+    client.post(
+        "/api/schedules", json={"recipient": "5511999998888", "text": "oi", "send_at": FUTURE}
+    )
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Bem-vindo ao Attena" not in resp.text
+    assert "Eventos hoje" in resp.text
 
 
 def test_dashboard_summary_partial_renders_standalone(client):

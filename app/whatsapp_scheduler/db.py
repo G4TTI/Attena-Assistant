@@ -33,6 +33,10 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("calendar_connections", "user_id", "ALTER TABLE calendar_connections ADD COLUMN user_id TEXT"),
     ("events", "user_id", "ALTER TABLE events ADD COLUMN user_id TEXT"),
     ("cached_messages", "user_id", "ALTER TABLE cached_messages ADD COLUMN user_id TEXT"),
+    # Onboarding (v1.3) — NULL = ainda não terminou; `onboarding_service.
+    # migrate_legacy_users` marca retroativamente quem já existia como
+    # concluído, então só conta nova de verdade fica pendente.
+    ("users", "onboarding_completed_at", "ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT"),
 ]
 
 

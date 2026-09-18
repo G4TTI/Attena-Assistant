@@ -381,6 +381,12 @@ class User(SQLModel, table=True):
     timezone: str | None = None  # fuso pessoal do usuário; None = usa settings.default_timezone (só p/ conta nova)
     email_verified: bool = False
     is_active: bool = True
+    # None = ainda não terminou (nem pulou até o fim) o onboarding de primeiros
+    # passos — ver `onboarding_service.py`. Coluna aditiva (ALTER TABLE em
+    # db.py); contas que já existiam antes desta versão são retroativamente
+    # marcadas como concluídas numa migração de boot única, pra não forçar
+    # quem já usa o app a ver a tela de onboarding do nada.
+    onboarding_completed_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

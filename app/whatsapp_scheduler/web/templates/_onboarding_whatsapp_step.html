@@ -1,0 +1,42 @@
+{% set status = (whatsapp_row.status.status if whatsapp_row and whatsapp_row.status else None) %}
+<div id="onboarding-whatsapp-step" hx-get="/ui/onboarding/whatsapp" hx-trigger="every 3s" hx-swap="innerHTML">
+  {% if status == "WORKING" %}
+    <div class="notice" style="border-color:var(--accent-d)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-d)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9"></path></svg>
+      <span>🟢 WhatsApp conectado{% if whatsapp_row.status.me %} — +{{ whatsapp_row.status.me.id.split('@')[0] }}{% endif %}.</span>
+    </div>
+    <div class="modal-ft" style="padding:16px 0 0;justify-content:flex-end">
+      <a class="ghost-link" href="/onboarding?step=2">Continuar</a>
+    </div>
+  {% else %}
+    <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1 1 260px;min-width:0">
+        <p class="muted" style="margin:0 0 10px">
+          Conecte um número de WhatsApp para começar a enviar suas mensagens automaticamente.
+        </p>
+        <ol class="steps">
+          <li>No celular: WhatsApp → <b>Aparelhos conectados</b> → <b>Conectar um aparelho</b>.</li>
+          <li>Escaneie o QR code ao lado.</li>
+          <li>Assim que conectar, esta página avança sozinha.</li>
+        </ol>
+        {% if whatsapp_row and whatsapp_row.status_error %}
+        <p class="muted" style="color:var(--err);margin-top:10px">{{ whatsapp_row.status_error }}</p>
+        {% endif %}
+        <div style="margin-top:16px">
+          <button class="ghost" hx-post="/onboarding/whatsapp/start" hx-target="#onboarding-whatsapp-step" hx-swap="outerHTML">
+            <span class="hide-loading">{{ 'Gerar novo QR' if status else 'Iniciar pareamento' }}</span><span class="spin">gerando…</span>
+          </button>
+        </div>
+      </div>
+      {% if whatsapp_session %}
+      <div class="qr-box">
+        <img class="qr" alt="QR code" src="/ui/whatsapps/{{ whatsapp_session.id }}/qr?ts={{ range(100000)|random }}">
+        <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
+      </div>
+      {% endif %}
+    </div>
+    <div class="modal-ft" style="padding:16px 0 0;justify-content:flex-end">
+      <a class="ghost-link" href="/onboarding?step=2">Pular por enquanto</a>
+    </div>
+  {% endif %}
+</div>

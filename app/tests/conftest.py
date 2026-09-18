@@ -100,12 +100,27 @@ def test_user():
         return user
 
 
-def register_and_login(client, *, name: str = "Tester", email: str = "tester@example.com", password: str = "testpass123"):
+def register_and_login(
+    client,
+    *,
+    name: str = "Tester",
+    email: str = "tester@example.com",
+    password: str = "testpass123",
+    skip_onboarding: bool = True,
+):
     """Cadastra e loga um usuário de teste no `TestClient` passado (o
     cookie de sessão fica no jar do client, então requests seguintes já
-    saem autenticadas). Retorna o `User` criado."""
+    saem autenticadas). Retorna o `User` criado.
+
+    `skip_onboarding=True` (padrão) marca o onboarding como concluído direto
+    no banco — a maioria dos testes existentes pressupõe acesso direto às
+    páginas depois de logar, e sem isso o gate de onboarding (v1.3,
+    `main._onboarding_gate`) redirecionaria toda página pra `/onboarding`.
+    Testes que exercitam o próprio onboarding devem passar `False`.
+    """
     from sqlmodel import select as _select
 
+    from whatsapp_scheduler.clock import utcnow
     from whatsapp_scheduler.models import User
 
     resp = client.post(
@@ -117,6 +132,11 @@ def register_and_login(client, *, name: str = "Tester", email: str = "tester@exa
     with Session(get_engine()) as session:
         user = session.exec(_select(User).where(User.email == email)).first()
         assert user is not None
+        if skip_onboarding:
+            user.onboarding_completed_at = utcnow()
+            session.add(user)
+            session.commit()
+            session.refresh(user)
         return user
 
 

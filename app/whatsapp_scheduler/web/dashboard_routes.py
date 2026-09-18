@@ -95,6 +95,7 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
         "whatsapp_rows": await whatsapp_service.status_rows(
             request.app.state.waha, whatsapp_service.list_sessions(db, user_id)
         ),
+        "is_new_user": not dashboard_service.has_any_activity(db, user_id),
     }
 
 

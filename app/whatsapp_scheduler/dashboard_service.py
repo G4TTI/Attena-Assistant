@@ -225,6 +225,26 @@ def recent_activity(db: Session, user_id: str, *, limit: int = 6) -> list[dict]:
     return items[:limit]
 
 
+def has_any_activity(db: Session, user_id: str) -> bool:
+    """Já existe QUALQUER schedule, evento ou automação deste usuário, alguma
+    vez (não só hoje/futuro)? Usado só pra decidir se o Dashboard mostra o
+    resumo operacional ou o bloco de boas-vindas de quem acabou de criar a
+    conta (v1.3, item 26) — não é uma condição de negócio em lugar nenhum."""
+    has_schedule = db.exec(select(Schedule.id).where(col(Schedule.user_id) == user_id).limit(1)).first()
+    if has_schedule is not None:
+        return True
+    has_event = db.exec(select(Event.id).where(col(Event.user_id) == user_id).limit(1)).first()
+    if has_event is not None:
+        return True
+    has_automation = db.exec(
+        select(Automation.id)
+        .join(Event, col(Automation.event_id) == col(Event.id))
+        .where(col(Event.user_id) == user_id)
+        .limit(1)
+    ).first()
+    return has_automation is not None
+
+
 def relative_label(at_utc: datetime) -> str:
     seconds = max(0, int((utcnow() - at_utc).total_seconds()))
     if seconds < 60:
