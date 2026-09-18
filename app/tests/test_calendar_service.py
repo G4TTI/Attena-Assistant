@@ -1002,6 +1002,48 @@ async def test_delete_internal_event_keeps_local_row_when_google_delete_fails(mo
         assert db.get(Event, event_id) is not None  # não excluído localmente
 
 
+async def test_delete_internal_event_google_failure_leaves_automations_intact(monkeypatch, fake_google, frozen_clock, test_user):
+    """Bug: as automações eram canceladas e apagadas ANTES da chamada ao
+    Google — se o Google falhasse, o usuário lia "o evento não foi excluído"
+    mas o evento ficava sem as automações."""
+    monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
+    with Session(get_engine()) as db:
+        _, cal = make_google_calendar(db, test_user.id)
+        event = await calendar_service.create_internal_event(
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=5),
+            end_local=FROZEN + timedelta(hours=6), timezone_name="America/Sao_Paulo",
+            target_calendar_id=cal.id,
+        )
+        event_id = event.id
+        calendar_service.create_event_automation(
+            db, event_id=event_id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["5511999998888"], messages=["Lembrete"],
+            offset_amount=1, offset_unit="hours", offset_direction="before",
+        )
+
+    fake_google.delete_event_error = CalendarProviderError("500 boom")
+    with Session(get_engine()) as db:
+        with pytest.raises(ValidationError):
+            await calendar_service.delete_internal_event(db, event_id, user_id=test_user.id, also_delete_google=True)
+
+    with Session(get_engine()) as db:
+        assert len(db.exec(select(Automation).where(col(Automation.event_id) == event_id)).all()) == 1
+        assert all(s.enabled for s in db.exec(select(Schedule).where(col(Schedule.user_id) == test_user.id)).all())
+
+
+async def test_create_internal_event_with_unavailable_target_calendar_creates_nothing(test_user):
+    """Bug: o evento era gravado ANTES de validar o calendário de destino —
+    um calendário inválido dava erro na tela mas deixava o evento criado."""
+    with Session(get_engine()) as db:
+        with pytest.raises(ValidationError):
+            await calendar_service.create_internal_event(
+                db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+                end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
+                target_calendar_id="calendario-que-nao-existe",
+            )
+        assert db.exec(select(Event).where(col(Event.user_id) == test_user.id)).all() == []
+
+
 async def test_delete_internal_event_app_only_leaves_google_event_alone(monkeypatch, fake_google, frozen_clock, test_user):
     monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
     with Session(get_engine()) as db:

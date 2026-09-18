@@ -104,24 +104,49 @@ def test_automation_modal_shows_repeat_toggle_defaulting_to_no_without_querying_
     assert "select-all-similar-events" not in resp.text  # checklist não veio pré-carregada
 
 
-def test_lazy_similar_events_endpoint_lists_future_matches_when_repeat_choice_is_sim(client):
+def test_choosing_sim_opens_the_box_first_without_running_the_search(client, monkeypatch):
+    """Passo 1: escolher "Sim" só abre a caixa (com a bolinha) — a varredura
+    de eventos iguais não pode rodar aqui, só quando a caixa dispara o passo 2."""
+    def boom(*args, **kwargs):
+        raise AssertionError("abrir a caixa não deveria buscar eventos iguais")
+
+    monkeypatch.setattr(calendar_service, "similar_events", boom)
+
+    now = utcnow()
+    event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
+
+    resp = client.get(f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim"})
+    assert resp.status_code == 200
+    assert "Buscando quando este evento se repete" in resp.text
+    # a caixa dispara a busca sozinha, e fixa o próprio alvo (o <form> pai tem
+    # hx-target="#modal-root", que o htmx herdaria e apagaria o modal inteiro)
+    assert 'hx-trigger="load"' in resp.text
+    assert 'hx-target="this"' in resp.text
+    assert "search=1" in resp.text
+
+
+def test_similar_events_search_step_lists_future_matches(client):
     now = utcnow()
     event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
     _make_event(client.user.id, "Aula Tales", now + timedelta(days=8), now + timedelta(days=8, hours=1))
 
-    resp = client.get(f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim"})
+    resp = client.get(
+        f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim", "search": 1}
+    )
     assert resp.status_code == 200
-    assert "Selecionar todos (1)" in resp.text
+    assert "Selecionar todas (1)" in resp.text
     assert "similar-event-checkbox" in resp.text
 
 
-def test_lazy_similar_events_endpoint_empty_state_when_no_matches(client):
+def test_similar_events_search_step_empty_state_when_no_matches(client):
     now = utcnow()
     event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
 
-    resp = client.get(f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim"})
+    resp = client.get(
+        f"/ui/calendario/events/{event_a}/similar-events", params={"repeat_choice": "sim", "search": 1}
+    )
     assert resp.status_code == 200
-    assert "Nenhum evento igual encontrado" in resp.text
+    assert "não se repete" in resp.text
 
 
 def test_lazy_similar_events_endpoint_returns_nothing_and_skips_the_query_when_repeat_choice_is_not_sim(client, monkeypatch):

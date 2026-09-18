@@ -619,26 +619,30 @@ def ui_calendario_similar_events(
     request: Request,
     event_id: str,
     repeat_choice: str = Query("nao"),
+    search: int = Query(0),
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    """Checklist de "eventos iguais" do modal de automação — carregado à
-    parte (v1.3.1), só quando o usuário escolhe "Sim" em "Repetir esta
-    automação". Antes disso rodava em toda abertura do modal (mesmo quando
-    ninguém ia usar) e virou o novo gargalo depois que resolvemos o dos
-    contatos: `similar_events` varre todos os eventos futuros do usuário
-    dentro da janela de sincronização — caro para quem tem muita coisa no
-    calendário, e não deveria custar nada pra quem nunca marca "Sim".
+    """"Repetir esta automação em eventos iguais?" do modal de automação, em
+    dois passos — a varredura de `similar_events` (todos os eventos futuros
+    do usuário na janela de sincronização) é cara e a maioria das pessoas
+    nunca marca "Sim":
 
-    O próprio seletor dispara esta rota em QUALQUER mudança (não só
-    "sim"), com `repeat_choice` vindo junto (htmx sempre manda o valor do
-    elemento que disparou) — mais simples e mais robusto do que um
-    `onchange` em paralelo tentando limpar o painel no cliente: um único
-    caminho, decidido no servidor, sem depender de ordem de eventos entre
-    o listener do htmx e um handler inline."""
+    - `repeat_choice != "sim"`: resposta vazia (limpa a caixa; sem consulta).
+    - `repeat_choice == "sim"`, sem `search`: só a caixa, instantânea, já com
+      a bolinha de carregamento — e ela mesma dispara o passo seguinte
+      (`hx-trigger="load"`), então a caixa aparece ANTES da busca começar.
+    - `search=1`: aí sim roda a busca e devolve a lista de datas.
+
+    O seletor dispara esta rota em QUALQUER mudança, com `repeat_choice`
+    vindo junto (htmx sempre manda o valor do elemento que disparou) — um
+    caminho só, decidido no servidor, sem `onchange` no cliente brigando
+    com o listener do htmx por ordem de eventos."""
     event = _load_event(db, event_id, current_user.id)
     if repeat_choice != "sim":
         return HTMLResponse("")
+    if not search:
+        return templates.TemplateResponse("_similar_events_box.html", {"request": request, "event": event})
     similar = calendar_service.similar_events(db, event, current_user.id)
     return templates.TemplateResponse(
         "_similar_events_checklist.html",
@@ -652,7 +656,7 @@ def ui_calendario_similar_events(
 
 
 @router.get("/ui/calendario/events/{event_id}/automation/new", response_class=HTMLResponse)
-async def ui_automation_new(
+def ui_automation_new(
     request: Request,
     event_id: str,
     year: int = Query(...),
@@ -668,7 +672,7 @@ async def ui_automation_new(
 
 
 @router.get("/ui/calendario/automations/{automation_id}/edit", response_class=HTMLResponse)
-async def ui_automation_edit(
+def ui_automation_edit(
     request: Request,
     automation_id: str,
     year: int = Query(...),
@@ -712,11 +716,16 @@ async def ui_automation_create(
         # nos ids que o formulário mandou (poderiam ter sido adulterados pra
         # apontar pro evento de outro usuário).
         selected_ids = set(apply_to_event_ids)
-        target_events = [event] + [
-            e for e in calendar_service.similar_events(db, event, current_user.id) if e.id in selected_ids
-        ]
 
         def _create_for_all_targets() -> None:
+            # A varredura de "eventos iguais" só roda se o usuário marcou
+            # algum (o padrão é "Não repetir") e, quando roda, também fica
+            # aqui dentro da thread — não na coroutine.
+            target_events = [event]
+            if selected_ids:
+                target_events += [
+                    e for e in calendar_service.similar_events(db, event, current_user.id) if e.id in selected_ids
+                ]
             # "Repetir esta automação" pode significar dezenas de eventos
             # (ex.: uma aula recorrente semanal já com um ano de ocorrências).
             # Cada create_event_automation faz vários commits no SQLite; feito
@@ -747,7 +756,7 @@ async def ui_automation_create(
 
 
 @router.post("/ui/calendario/automations/{automation_id}", response_class=HTMLResponse)
-async def ui_automation_update(
+def ui_automation_update(
     request: Request,
     automation_id: str,
     recipients: list[str] = Form([]),

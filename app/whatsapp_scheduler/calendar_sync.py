@@ -260,6 +260,19 @@ def _reconcile_event(db: Session, calendar: Calendar, user_id: str | None, remot
         existing = Event(
             user_id=user_id, source=EventSource.google, calendar_id=calendar.id, external_id=remote.external_id
         )
+    elif (
+        (existing.user_id or user_id) == existing.user_id
+        and existing.title == remote.title
+        and existing.description == remote.description
+        and existing.start_utc == remote.start_utc
+        and existing.end_utc == remote.end_utc
+        and existing.timezone == (remote.timezone or calendar.time_zone)
+        and existing.all_day == remote.all_day
+        and existing.status == EventStatus.confirmed
+        and existing.recurring_event_id == remote.recurring_event_id
+        and existing.provider_updated_at == remote.provider_updated_at
+    ):
+        return  # nada mudou — um sync completo relia (e regravava) o calendário inteiro à toa
 
     existing.user_id = existing.user_id or user_id  # backfill se o evento foi sincronizado antes da conexão ter dono
     existing.title = remote.title
@@ -306,8 +319,17 @@ async def sync_calendar(
         time_min, time_max = _bounds()
         page = await provider.list_events(tokens, remote_calendar, time_min=time_min, time_max=time_max)
 
-    for remote_event in page.events:
-        _reconcile_event(db, calendar, user_id, remote_event, now)
+    def _reconcile_page() -> None:
+        for remote_event in page.events:
+            _reconcile_event(db, calendar, user_id, remote_event, now)
+
+    # Um sync completo (primeira vez, ou token expirado) traz centenas de
+    # eventos e cada um faz consulta + commit em SQLite. Direto na coroutine,
+    # isso segurava o único event loop do processo — o app inteiro (modais,
+    # sidebar, outros usuários) ficava travado enquanto o Google sincronizava.
+    # Mesmo padrão de `asyncio.to_thread` que o scheduler já usa; o mesmo `db`
+    # é usado de forma sequencial (nunca concorrente), então é seguro.
+    await asyncio.to_thread(_reconcile_page)
 
     calendar.sync_token = page.next_sync_token
     calendar.updated_at = now

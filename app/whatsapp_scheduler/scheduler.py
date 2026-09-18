@@ -84,14 +84,23 @@ def _compute_next_utc(sch: Schedule, last: Dispatch | None, now: datetime) -> da
     return next_run_utc(cron, sch.timezone, after)
 
 
-def _materialize_schedule(db: Session, sch: Schedule, now: datetime) -> Dispatch | None:
-    already_open = db.exec(
-        select(Dispatch)
-        .where(col(Dispatch.schedule_id) == sch.id)
-        .where(col(Dispatch.status).in_(list(OPEN_STATUSES)))
-    ).first()
-    if already_open is not None:
-        return None
+def _materialize_schedule(
+    db: Session, sch: Schedule, now: datetime, *, known_open: set[str] | None = None
+) -> Dispatch | None:
+    """`known_open`: ids de schedules que o chamador já sabe (numa consulta só)
+    terem dispatch aberta — evita 1 consulta por regra a cada tick, que com
+    centenas de mensagens de automação agendadas era quase tudo trabalho à toa."""
+    if known_open is not None:
+        if sch.id in known_open:
+            return None
+    else:
+        already_open = db.exec(
+            select(Dispatch)
+            .where(col(Dispatch.schedule_id) == sch.id)
+            .where(col(Dispatch.status).in_(list(OPEN_STATUSES)))
+        ).first()
+        if already_open is not None:
+            return None
 
     gate = _dependency_gate(db, sch)
     if gate == "wait":
@@ -144,9 +153,12 @@ def materialize_due() -> None:
     with Session(get_engine()) as db:
         _recover_stuck(db, now)
         schedules = db.exec(select(Schedule).where(col(Schedule.enabled).is_(True))).all()
+        open_ids = set(
+            db.exec(select(Dispatch.schedule_id).where(col(Dispatch.status).in_(list(OPEN_STATUSES)))).all()
+        )
         for sch in schedules:
             try:
-                _materialize_schedule(db, sch, now)
+                _materialize_schedule(db, sch, now, known_open=open_ids)
             except Exception:  # não deixa uma regra ruim travar as outras
                 logger.exception("falha ao materializar schedule %s", sch.id)
         db.commit()

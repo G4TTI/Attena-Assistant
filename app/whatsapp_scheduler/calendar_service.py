@@ -470,7 +470,7 @@ def similar_events(db: Session, event: Event, user_id: str) -> list[Event]:
     Nunca inclui o próprio evento nem eventos cancelados/passados.
     """
     now = utcnow()
-    candidates = db.exec(
+    query = (
         select(Event)
         .where(col(Event.user_id) == user_id)
         .where(col(Event.id) != event.id)
@@ -478,13 +478,17 @@ def similar_events(db: Session, event: Event, user_id: str) -> list[Event]:
         .where(col(Event.start_utc) >= now)
         .where(col(Event.start_utc) <= now + timedelta(days=settings.calendar_sync_window_future_days))
         .order_by(col(Event.start_utc))
-    ).all()
+    )
     if event.recurring_event_id:
-        return [e for e in candidates if e.recurring_event_id == event.recurring_event_id]
+        # Filtro no próprio SQL: só a série do evento vem do banco, em vez de
+        # carregar todo o calendário futuro e filtrar em Python.
+        return list(db.exec(query.where(col(Event.recurring_event_id) == event.recurring_event_id)).all())
     title = (event.title or "").strip().lower()
     if not title:
         return []
-    return [e for e in candidates if (e.title or "").strip().lower() == title]
+    # Título comparado em Python (str.lower() entende acentos; o lower() do
+    # SQLite só entende ASCII e daria resultado diferente).
+    return [e for e in db.exec(query).all() if (e.title or "").strip().lower() == title]
 
 
 def _owned_automation(db: Session, automation_id: str, user_id: str) -> Automation | None:
@@ -848,6 +852,15 @@ async def create_internal_event(
     (`external_id=None`) e o erro fica em `EventSyncStatus` pro usuário ver
     e tentar de novo depois."""
     title, description = _validate_event_fields(title, description, start_local, end_local, timezone_name)
+    # Valida o calendário de destino ANTES de gravar qualquer coisa: antes, um
+    # calendário inválido levantava o erro só depois do evento já ter sido
+    # commitado — o usuário via a mensagem de erro, mas o evento ficava criado.
+    calendar = None
+    if target_calendar_id:
+        calendar = _owned_calendar(db, target_calendar_id, user_id)
+        if calendar is None or not calendar.enabled:
+            raise ValidationError("Calendário Google selecionado não está disponível.")
+
     event = Event(
         user_id=user_id,
         source=EventSource.internal,
@@ -861,10 +874,7 @@ async def create_internal_event(
     db.commit()
     db.refresh(event)
 
-    if target_calendar_id:
-        calendar = _owned_calendar(db, target_calendar_id, user_id)
-        if calendar is None or not calendar.enabled:
-            raise ValidationError("Calendário Google selecionado não está disponível.")
+    if calendar is not None:
         try:
             provider, tokens = await _google_provider_and_tokens(db, calendar)
             external_id = await provider.create_event(
@@ -969,13 +979,10 @@ async def delete_internal_event(db: Session, event_id: str, *, user_id: str, als
     if event.source != EventSource.internal:
         raise ValidationError("Eventos sincronizados do Google não podem ser excluídos aqui.")
 
-    # Ordem obrigatória (PRAGMA foreign_keys=ON, sem Relationship() do ORM
-    # pra ordenar sozinho): cancelar os schedules primeiro (preserva
-    # Schedule/Dispatch como histórico), depois as linhas de ligação, só
-    # então o evento.
-    cancel_event_automations(db, event)
-    _delete_automations_for_event(db, event_id)
-
+    # O Google vem PRIMEIRO: se ele falhar, nada local foi tocado e a mensagem
+    # "o evento não foi excluído" é verdadeira. Antes, as automações já tinham
+    # sido canceladas e apagadas quando o erro aparecia — o evento continuava
+    # lá, mas sem as automações.
     if event.calendar_id and event.external_id and also_delete_google:
         calendar = db.get(Calendar, event.calendar_id)
         if calendar is not None:
@@ -986,6 +993,13 @@ async def delete_internal_event(db: Session, event_id: str, *, user_id: str, als
                 raise ValidationError(
                     f"Não consegui excluir no Google Agenda ({exc}). O evento não foi excluído — tente de novo."
                 ) from exc
+
+    # Ordem obrigatória (PRAGMA foreign_keys=ON, sem Relationship() do ORM
+    # pra ordenar sozinho): cancelar os schedules primeiro (preserva
+    # Schedule/Dispatch como histórico), depois as linhas de ligação, só
+    # então o evento.
+    cancel_event_automations(db, event)
+    _delete_automations_for_event(db, event_id)
 
     sync_row = db.get(EventSyncStatus, event_id)
     if sync_row is not None:

@@ -6,6 +6,8 @@ mesmo padrão que `web/routes.py` já usa hoje para a sessão única.
 
 from __future__ import annotations
 
+import asyncio
+
 from sqlmodel import Session, col, select
 
 from .clock import utcnow
@@ -143,14 +145,17 @@ async def status_rows(waha: WahaClient, sessions: list[WhatsAppSession]) -> list
     """Status ao vivo (nunca cacheado — mesma escolha da sessão única antes)
     de cada conexão, uma chamada ao WAHA por sessão. Usado pela página
     `/whatsapps`, pelo card do Dashboard e pela sidebar."""
-    rows = []
-    for session in sessions:
+    # Em paralelo: a sidebar consulta isto a cada poucos segundos, e com N
+    # WhatsApps a versão sequencial somava a latência de todos (ou o timeout
+    # inteiro de cada um que estivesse fora do ar).
+    async def _one(session: WhatsAppSession) -> dict:
         try:
             info = await waha.get_session_status(session.session_name)
-            rows.append({"session": session, "status": info, "status_error": None})
+            return {"session": session, "status": info, "status_error": None}
         except WahaError as exc:
-            rows.append({"session": session, "status": None, "status_error": str(exc)})
-    return rows
+            return {"session": session, "status": None, "status_error": str(exc)}
+
+    return list(await asyncio.gather(*(_one(s) for s in sessions)))
 
 
 async def overall_status(waha: WahaClient, sessions: list[WhatsAppSession]) -> str:

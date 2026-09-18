@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
         await waha.aclose()
 
 
-app = FastAPI(title="Attena Assistant", version="1.2.0-alpha", lifespan=lifespan)
+app = FastAPI(title="Attena Assistant", version="1.3.0", lifespan=lifespan)
 app.include_router(auth_routes.router)
 app.include_router(schedules_api.router)
 app.include_router(session_api.router)
@@ -139,12 +140,18 @@ _ONBOARDING_EXEMPT_PREFIXES = (
 )
 
 
+def _needs_onboarding(request: Request) -> bool:
+    with Session(get_engine()) as db:
+        user = auth.get_current_user_optional(request, db)
+        return user is not None and user.onboarding_completed_at is None
+
+
 @app.middleware("http")
 async def _onboarding_gate(request: Request, call_next):
     path = request.url.path
     if request.method == "GET" and not path.startswith(_ONBOARDING_EXEMPT_PREFIXES):
-        with Session(get_engine()) as db:
-            user = auth.get_current_user_optional(request, db)
-            if user is not None and user.onboarding_completed_at is None:
-                return RedirectResponse(url="/onboarding", status_code=303)
+        # Consulta de banco síncrona: numa thread, pra não parar o event loop
+        # a cada navegação de página.
+        if await asyncio.to_thread(_needs_onboarding, request):
+            return RedirectResponse(url="/onboarding", status_code=303)
     return await call_next(request)

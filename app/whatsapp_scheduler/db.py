@@ -56,6 +56,13 @@ def get_engine() -> Engine:
     def _set_sqlite_pragma(dbapi_connection, _connection_record):  # noqa: ANN001
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
+        # NORMAL em WAL não faz fsync a cada commit (só nos checkpoints): a
+        # recomendação padrão do SQLite pra WAL, sem risco de corromper o
+        # banco — o pior caso numa queda de energia é perder os últimos
+        # commits, nunca o arquivo. Com o banco num bind mount do Docker no
+        # Windows, cada fsync custa dezenas de ms e criar/sincronizar dezenas
+        # de registros virava segundos de servidor travado.
+        cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
@@ -71,6 +78,22 @@ def _apply_column_migrations(engine: Engine) -> None:
                 conn.execute(text(ddl))
 
 
+# Índices compostos para as consultas quentes (grade/agenda do calendário e o
+# tick do scheduler) — `create_all` não adiciona índice a tabela que já
+# existe, então entram aqui, idempotentes e aditivos (não mexem em dado).
+_INDEX_MIGRATIONS: list[str] = [
+    "CREATE INDEX IF NOT EXISTS ix_events_user_start ON events (user_id, start_utc)",
+    "CREATE INDEX IF NOT EXISTS ix_dispatches_status_scheduled ON dispatches (status, scheduled_at_utc)",
+    "CREATE INDEX IF NOT EXISTS ix_dispatches_schedule_status ON dispatches (schedule_id, status)",
+]
+
+
+def _apply_index_migrations(engine: Engine) -> None:
+    with engine.begin() as conn:
+        for ddl in _INDEX_MIGRATIONS:
+            conn.execute(text(ddl))
+
+
 def init_db() -> None:
     # importa os modelos para registrar as tabelas no metadata
     from . import models  # noqa: F401
@@ -78,6 +101,7 @@ def init_db() -> None:
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
     _apply_column_migrations(engine)
+    _apply_index_migrations(engine)
 
 
 def get_session() -> Iterator[Session]:
