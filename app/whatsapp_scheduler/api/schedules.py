@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, col, select
 
-from .. import auth
+from .. import auth, whatsapp_service
 from ..db import get_session
 from ..models import Dispatch, Schedule, User
 from ..schemas import DispatchRead, ScheduleCreate, ScheduleRead
@@ -35,11 +35,24 @@ def _dispatches(db: Session, schedule_id: str) -> list[Dispatch]:
 def create(
     payload: ScheduleCreate, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
 ) -> ScheduleRead:
+    if payload.session:
+        # Nunca confia num session_name cru vindo do cliente sem checar que é
+        # realmente uma conexão do usuário autenticado (Parte 42 — impede
+        # gravar em Schedule.session a sessão de outra conta por adivinhação).
+        owned = whatsapp_service.session_by_name(db, current_user.id, payload.session)
+        if owned is None:
+            raise HTTPException(status_code=422, detail="Sessão WhatsApp inválida ou de outro usuário.")
+        session_name = owned.session_name
+    else:
+        primary = whatsapp_service.primary_session(db, current_user.id)
+        if primary is None:
+            raise HTTPException(status_code=422, detail="Conecte um WhatsApp antes de criar um agendamento.")
+        session_name = primary.session_name
     try:
         schedule = create_schedule(
             db,
             user_id=current_user.id,
-            session=payload.session or current_user.waha_session,
+            session=session_name,
             recipient=payload.recipient,
             text=payload.text,
             send_at=payload.send_at,

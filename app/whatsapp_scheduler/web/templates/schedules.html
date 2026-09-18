@@ -30,6 +30,17 @@
         <label for="send_at">Primeiro envio</label>
         <input id="send_at" name="send_at" type="datetime-local" required>
       </div>
+      <div class="field">
+        <label for="whatsapp_session_id">Enviar através de</label>
+        <select id="whatsapp_session_id" name="whatsapp_session_id" required>
+          {% for wa in whatsapp_sessions %}
+          <option value="{{ wa.id }}">{{ wa.name }}</option>
+          {% endfor %}
+        </select>
+        {% if not whatsapp_sessions %}
+        <p class="hint">Nenhum WhatsApp conectado — <a href="/whatsapps">conecte um</a> antes de agendar.</p>
+        {% endif %}
+      </div>
       <div class="field full">
         <label for="text">Mensagem</label>
         <textarea id="text" name="text" required maxlength="4096" placeholder="Texto que será enviado..."></textarea>

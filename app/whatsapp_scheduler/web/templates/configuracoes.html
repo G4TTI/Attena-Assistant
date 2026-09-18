@@ -66,10 +66,10 @@
 <div class="card">
   <div class="card-hd">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"></path><path d="M13 6.7l1.8-1.8a3.6 3.6 0 0 1 5.1 5.1L18.1 11.8"></path><path d="M11 17.3l-1.8 1.8a3.6 3.6 0 0 1-5.1-5.1L5.9 12.2"></path></svg>
-    <h2>WhatsApp</h2>
+    <h2>WhatsApps</h2>
   </div>
-  <div id="session-panel" class="card-bd" hx-get="/ui/session" hx-trigger="load, every 5s" hx-swap="innerHTML">
-    {% include "_session.html" %}
+  <div id="whatsapp-list" class="card-bd">
+    {% include "_whatsapp_list.html" %}
   </div>
 </div>
 

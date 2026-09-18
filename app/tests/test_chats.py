@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from tests.conftest import FakeWaha, register_and_login
+from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
 from whatsapp_scheduler import chatsvc
 from whatsapp_scheduler.db import get_engine
 from whatsapp_scheduler.main import app
@@ -100,37 +100,48 @@ async def test_send_now_records_outgoing_message(db: Session, test_user):
 
 
 def test_api_list_chats(client):
-    data = client.get("/api/chats").json()
+    sid = whatsapp_session_id(client)
+    data = client.get(f"/api/whatsapp-sessions/{sid}/chats").json()
     assert {c["id"] for c in data} == {"5511999998888@c.us", "12036300000000@g.us"}
 
 
 def test_api_messages(client):
-    data = client.get("/api/chats/messages", params={"chat": "5511999998888@c.us"}).json()
+    sid = whatsapp_session_id(client)
+    data = client.get(f"/api/whatsapp-sessions/{sid}/chats/messages", params={"chat": "5511999998888@c.us"}).json()
     assert data["chat"] == "5511999998888@c.us"
     assert [m["text"] for m in data["messages"]] == ["oi", "ola", "[imagem]"]
 
 
+def test_api_chats_404_for_unowned_session(client):
+    assert client.get("/api/whatsapp-sessions/does-not-exist/chats").status_code == 404
+
+
 def test_api_send(client):
-    r = client.post("/api/chats/send", json={"chat": "5511999998888@c.us", "text": "oi"})
+    sid = whatsapp_session_id(client)
+    session_name = client.get("/api/whatsapp-sessions").json()[0]["session_name"]
+    r = client.post(f"/api/whatsapp-sessions/{sid}/chats/send", json={"chat": "5511999998888@c.us", "text": "oi"})
     assert r.status_code == 200
-    assert client.waha.sent[0] == {"session": "default", "chatId": "5511999998888@c.us", "text": "oi"}
+    assert client.waha.sent[0] == {"session": session_name, "chatId": "5511999998888@c.us", "text": "oi"}
 
 
 def test_api_send_rejects_empty(client):
-    assert client.post("/api/chats/send", json={"chat": "x@c.us", "text": "  "}).status_code == 422
+    sid = whatsapp_session_id(client)
+    assert client.post(f"/api/whatsapp-sessions/{sid}/chats/send", json={"chat": "x@c.us", "text": "  "}).status_code == 422
 
 
 def test_conversas_page_and_partials(client):
+    sid = whatsapp_session_id(client)
     assert client.get("/conversas").status_code == 200
-    assert "Fulano" in client.get("/ui/chats").text
-    view = client.get("/ui/chats/view", params={"chat": "5511999998888@c.us"})
+    assert "Fulano" in client.get(f"/ui/chats/{sid}").text
+    view = client.get(f"/ui/chats/{sid}/view", params={"chat": "5511999998888@c.us"})
     assert "Fulano" in view.text
     assert "5511999998888@c.us" in view.text
 
 
 def test_schedule_from_chat_view(client):
+    sid = whatsapp_session_id(client)
     r = client.post(
-        "/ui/chats/schedule",
+        f"/ui/chats/{sid}/schedule",
         data={
             "chat": "12036300000000@g.us",
             "text": "lembrete do grupo",

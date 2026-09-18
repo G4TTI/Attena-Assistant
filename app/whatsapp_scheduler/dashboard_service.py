@@ -16,7 +16,7 @@ from datetime import date, datetime, time, timedelta
 
 from sqlmodel import Session, col, select
 
-from . import calendar_service
+from . import calendar_service, whatsapp_service
 from .clock import utcnow
 from .config import settings
 from .models import (
@@ -138,6 +138,7 @@ def _message_count_for_schedule(db: Session, schedule_id: str) -> int:
 
 
 def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5) -> list[dict]:
+    wa_labels = whatsapp_service.labels_by_session_name(db, user_id)
     rows: list[dict] = []
     for dispatch in scheduled_dispatches(db, user_id)[:limit]:
         schedule = db.get(Schedule, dispatch.schedule_id)
@@ -149,6 +150,7 @@ def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5) -> list
                 "schedule": schedule,
                 "send_local": utc_to_local(dispatch.scheduled_at_utc, schedule.timezone),
                 "message_count": _message_count_for_schedule(db, schedule.id),
+                "whatsapp_label": wa_labels.get(schedule.session, schedule.session),
             }
         )
     return rows

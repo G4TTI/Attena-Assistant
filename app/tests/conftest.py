@@ -120,6 +120,15 @@ def register_and_login(client, *, name: str = "Tester", email: str = "tester@exa
         return user
 
 
+def whatsapp_session_id(client) -> str:
+    """Id da primeira conexão WhatsApp do usuário logado no `client` — criada
+    automaticamente no cadastro (`register_and_login` -> `register_user` ->
+    `whatsapp_service.ensure_first_session`)."""
+    sessions = client.get("/api/whatsapp-sessions").json()
+    assert sessions, "usuário de teste sem WhatsAppSession"
+    return sessions[0]["id"]
+
+
 class FakeWaha:
     """Stub do WahaClient para os testes do scheduler."""
 

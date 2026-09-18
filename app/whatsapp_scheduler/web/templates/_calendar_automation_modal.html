@@ -99,6 +99,21 @@
           </div>
         </div>
 
+        <div class="field full" style="margin-bottom:16px">
+          <label for="au_wa">Enviar através de</label>
+          <select id="au_wa" name="whatsapp_session_id" required>
+            {% if not whatsapp_sessions %}
+            <option value="" disabled selected>Nenhum WhatsApp conectado</option>
+            {% endif %}
+            {% for wa in whatsapp_sessions %}
+            <option value="{{ wa.id }}" {{ 'selected' if wa.id == selected_whatsapp_session_id }}>{{ wa.name }}</option>
+            {% endfor %}
+          </select>
+          {% if not whatsapp_sessions %}
+          <p class="hint">Nenhum WhatsApp conectado — <a href="/whatsapps">conecte um</a> antes de salvar.</p>
+          {% endif %}
+        </div>
+
         <div class="form-grid">
           <div class="field">
             <label for="au_dir">Quando enviar</label>

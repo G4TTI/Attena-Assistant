@@ -42,7 +42,7 @@
         <span class="dash-list-main">
           <span class="dash-list-title">{{ row.schedule.recipient_input }}</span>
           <span class="dash-list-meta">{{ row.schedule.text }}</span>
-          <span class="dash-list-meta">{{ row.message_count }} mensage{{ 'm' if row.message_count == 1 else 'ns' }} · WhatsApp</span>
+          <span class="dash-list-meta">{{ row.message_count }} mensage{{ 'm' if row.message_count == 1 else 'ns' }} · {{ row.whatsapp_label }}</span>
         </span>
       </div>
       {% endfor %}

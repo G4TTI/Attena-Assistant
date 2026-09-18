@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from sqlmodel import Session
 
-from .. import app_settings, auth, auth_service, calendar_service, time_sync
+from .. import app_settings, auth, auth_service, calendar_service, time_sync, whatsapp_service
 from ..calendar_providers.base import CalendarProviderError
 from ..clock import utcnow
 from ..config import settings
@@ -17,7 +17,7 @@ from ..db import get_session
 from ..models import User
 from ..recurrence import utc_to_local
 from ..service import ValidationError
-from .routes import _session_ctx, templates
+from .routes import templates
 
 router = APIRouter(tags=["ui-configuracoes"])
 
@@ -42,10 +42,14 @@ def _ctx(request: Request, current_user: User, **extra: object) -> dict:
     return {
         "request": request,
         "nav": "configuracoes",
-        "waha_session": current_user.waha_session,
         "current_user": current_user,
         **extra,
     }
+
+
+async def _whatsapp_ctx(request: Request, db: Session, user_id: str) -> dict:
+    sessions = whatsapp_service.list_sessions(db, user_id)
+    return {"rows": await whatsapp_service.status_rows(request.app.state.waha, sessions)}
 
 
 def _connections_ctx(db: Session, user_id: str) -> dict:
@@ -93,7 +97,7 @@ async def page_configuracoes(
         "configuracoes.html",
         {
             **_ctx(request, current_user), "ok": ok, "error": error, **_connections_ctx(db, current_user.id),
-            **_preferences_ctx(), **(await _session_ctx(request, current_user)),
+            **_preferences_ctx(), **(await _whatsapp_ctx(request, db, current_user.id)),
         },
     )
 

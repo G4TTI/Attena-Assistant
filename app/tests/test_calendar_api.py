@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from tests.conftest import register_and_login
+from tests.conftest import register_and_login, whatsapp_session_id
 from whatsapp_scheduler import crypto
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.db import get_engine
@@ -85,6 +85,7 @@ def test_create_automation_produces_one_of_each(client):
             "offset_amount": 2,
             "offset_unit": "hours",
             "offset_direction": "before",
+            "whatsapp_session_id": whatsapp_session_id(client),
         },
     )
     assert resp.status_code == 201, resp.text
@@ -109,6 +110,7 @@ def test_delete_automation_cancels_without_deleting_event(client):
             "offset_amount": 1,
             "offset_unit": "hours",
             "offset_direction": "before",
+            "whatsapp_session_id": whatsapp_session_id(client),
         },
     ).json()
     automation_id = created["id"]
@@ -130,6 +132,7 @@ def test_create_automation_with_multiple_messages_and_recipients(client):
             "offset_amount": 1,
             "offset_unit": "hours",
             "offset_direction": "before",
+            "whatsapp_session_id": whatsapp_session_id(client),
         },
     )
     assert resp.status_code == 201, resp.text
@@ -142,7 +145,10 @@ def test_create_automation_rejects_empty_recipients(client):
     _, _, event_id = make_connection_calendar_event(client.user.id)
     resp = client.post(
         f"/api/calendar/events/{event_id}/automations",
-        json={"recipients": [], "messages": ["x"], "offset_amount": 1, "offset_unit": "hours", "offset_direction": "before"},
+        json={
+            "recipients": [], "messages": ["x"], "offset_amount": 1, "offset_unit": "hours", "offset_direction": "before",
+            "whatsapp_session_id": whatsapp_session_id(client),
+        },
     )
     assert resp.status_code == 422
 

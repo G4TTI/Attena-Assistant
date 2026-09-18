@@ -14,13 +14,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session
 
-from .. import auth, calendar_service, dashboard_service
+from .. import auth, calendar_service, dashboard_service, whatsapp_service
 from ..config import settings
 from ..db import get_session
 from ..models import Event, User
 from ..recurrence import utc_to_local
-from ..waha import WahaError
-from .routes import _session_ctx, templates
+from .routes import templates
 
 router = APIRouter(tags=["ui-dashboard"])
 
@@ -37,18 +36,18 @@ def _format_date_long_pt(d: date) -> str:
     return f"{d.day} de {_MONTHS_PT_LOWER[d.month - 1]} de {d.year}"
 
 
-def _greeting_name(session: dict | None) -> str | None:
-    """Primeiro nome do perfil do WhatsApp conectado (session.me.pushName) —
-    dado real da sessão WAHA, não um nome fixo."""
-    if not isinstance(session, dict):
-        return None
-    me = session.get("me")
-    if not isinstance(me, dict):
-        return None
-    push_name = me.get("pushName")
-    if not isinstance(push_name, str) or not push_name.strip():
-        return None
-    return push_name.strip().split(" ")[0]
+def _greeting_name(whatsapp_rows: list[dict]) -> str | None:
+    """Primeiro nome do perfil da primeira conexão WhatsApp conectada
+    (session.me.pushName) — dado real da sessão WAHA, não um nome fixo."""
+    for row in whatsapp_rows:
+        info = row.get("status")
+        if not isinstance(info, dict):
+            continue
+        me = info.get("me")
+        push_name = me.get("pushName") if isinstance(me, dict) else None
+        if isinstance(push_name, str) and push_name.strip():
+            return push_name.strip().split(" ")[0]
+    return None
 
 
 def _event_row(event: Event) -> dict:
@@ -94,7 +93,9 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
         "cal_month": today.month,
         "next_event_for_automation": _event_row(next_upcoming[0]) if next_upcoming else None,
         "connection": dashboard_service.primary_calendar_connection(db, user_id),
-        **(await _session_ctx(request, current_user)),
+        "whatsapp_rows": await whatsapp_service.status_rows(
+            request.app.state.waha, whatsapp_service.list_sessions(db, user_id)
+        ),
     }
 
 
@@ -107,10 +108,9 @@ async def page_dashboard(
     ctx = {
         "request": request,
         "nav": "dashboard",
-        "waha_session": current_user.waha_session,
         "current_user": current_user,
         "today_label": _format_date_long_pt(today),
-        "greeting_name": _greeting_name(summary.get("session")),
+        "greeting_name": _greeting_name(summary.get("whatsapp_rows", [])),
         **summary,
     }
     return templates.TemplateResponse("dashboard.html", ctx)
@@ -122,21 +122,6 @@ async def ui_dashboard_summary(
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         "_dashboard_summary.html", {"request": request, **(await _summary_ctx(request, db, current_user))}
-    )
-
-
-@router.post("/ui/dashboard/whatsapp-card/reconnect", response_class=HTMLResponse)
-async def ui_dashboard_whatsapp_reconnect(
-    request: Request, current_user: User = Depends(auth.require_user_web)
-) -> HTMLResponse:
-    start_error = None
-    try:
-        await request.app.state.waha.restart_session(current_user.waha_session)
-    except WahaError as exc:
-        start_error = str(exc)
-    return templates.TemplateResponse(
-        "_dashboard_whatsapp_card.html",
-        {"request": request, "start_error": start_error, **(await _session_ctx(request, current_user))},
     )
 
 

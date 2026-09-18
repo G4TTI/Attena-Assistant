@@ -12,7 +12,7 @@ from datetime import timedelta
 from fastapi import Request
 from sqlmodel import Session, col, select
 
-from . import auth
+from . import auth, whatsapp_service
 from .clock import utcnow
 from .config import settings
 from .db import claim_orphan_data
@@ -83,8 +83,13 @@ def register_user(
     db.add(BillingProfile(user_id=user.id))
     db.commit()
 
+    # claim_orphan_data ANTES de criar a primeira WhatsAppSession: se este for
+    # o primeiro usuário, ela troca user.waha_session pro nome da sessão WAHA
+    # já pareada antes de existir autenticação — criar a sessão depois de
+    # trocar (não antes) é o que preserva o pareamento sem exigir novo QR.
     if claim_orphan_data(db, user):
         logger.info("dados anteriores à autenticação foram associados ao primeiro usuário cadastrado (%s)", user.email)
+    whatsapp_service.ensure_first_session(db, user)
 
     request_email_verification(db, user)
     log_event(db, AuditEventType.register, user_id=user.id, request=request)

@@ -22,7 +22,7 @@ from .scheduler import SchedulerService
 from .time_sync import ClockSyncService
 from .waha import WahaClient
 from .web import routes as web_routes
-from .web import auth_routes, calendar_routes, dashboard_routes, settings_routes
+from .web import auth_routes, calendar_routes, dashboard_routes, settings_routes, whatsapp_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +76,7 @@ app.include_router(web_routes.router)
 app.include_router(calendar_routes.router)
 app.include_router(settings_routes.router)
 app.include_router(dashboard_routes.router)
+app.include_router(whatsapp_routes.router)
 
 
 @app.exception_handler(NotAuthenticated)

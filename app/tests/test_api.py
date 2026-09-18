@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import FakeWaha, register_and_login
+from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
 from whatsapp_scheduler.main import app
 from whatsapp_scheduler.waha import WahaError
 
@@ -80,37 +80,45 @@ def test_run_now_creates_immediate_dispatch(client):
 
 
 def test_session_status_and_qr(client):
-    assert client.get("/api/session").json()["status"] == "WORKING"
-    qr = client.get("/api/session/qr")
+    sid = whatsapp_session_id(client)
+    assert client.get(f"/api/whatsapp-sessions/{sid}").json()["status"] == "WORKING"
+    qr = client.get(f"/api/whatsapp-sessions/{sid}/qr")
     assert qr.status_code == 200
     assert qr.content == b"PNGDATA"
 
 
 def test_session_start_restarts_a_failed_session(client):
+    sid = whatsapp_session_id(client)
     client.waha.status = "FAILED"
 
-    resp = client.post("/api/session/start")
+    resp = client.post(f"/api/whatsapp-sessions/{sid}/start")
     assert resp.status_code == 202
     assert client.waha.restart_calls == 1
     # o status "no lado do WAHA" já reflete a tentativa de reconexão
-    assert client.get("/api/session").json()["status"] == "STARTING"
+    assert client.get(f"/api/whatsapp-sessions/{sid}").json()["status"] == "STARTING"
 
 
-def test_ui_session_start_renders_updated_panel_with_feedback(client):
+def test_session_status_and_start_404_for_unowned_session(client):
+    assert client.get("/api/whatsapp-sessions/does-not-exist").status_code == 404
+    assert client.post("/api/whatsapp-sessions/does-not-exist/start").status_code == 404
+
+
+def test_ui_whatsapp_start_renders_updated_list_with_feedback(client):
+    sid = whatsapp_session_id(client)
     client.waha.status = "FAILED"
 
-    resp = client.post("/ui/session/start")
+    resp = client.post(f"/whatsapps/{sid}/start")
     assert resp.status_code == 200
     assert client.waha.restart_calls == 1
-    # depois do restart o painel já deve mostrar o novo estado, não a tela travada
-    assert "FAILED" not in resp.text
-    assert "starting" in resp.text.lower()
+    # depois do restart a lista já deve mostrar o novo estado (pareando), não mais desconectado
+    assert "conectando" in resp.text.lower()
 
 
-def test_ui_session_start_shows_error_when_waha_unreachable(client):
+def test_ui_whatsapp_start_shows_error_when_waha_unreachable(client):
+    sid = whatsapp_session_id(client)
     client.waha.restart_error = WahaError("conexão recusada")
 
-    resp = client.post("/ui/session/start")
+    resp = client.post(f"/whatsapps/{sid}/start")
     assert resp.status_code == 200
     assert "conexão recusada" in resp.text
 

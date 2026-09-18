@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, col, select
 
-from .. import auth, calendar_service
+from .. import auth, calendar_service, whatsapp_service
 from ..config import settings
 from ..db import get_session
 from ..models import Automation, AutomationMessage, AutomationSchedule, Calendar, Event, EventSyncStatus, Schedule, User
@@ -59,7 +59,7 @@ def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
 
 
 def _ctx(request: Request, current_user: User, **extra: object) -> dict:
-    return {"request": request, "nav": "calendario", "waha_session": current_user.waha_session, **extra}
+    return {"request": request, "nav": "calendario", **extra}
 
 
 def _current_year_month(year: int | None, month: int | None) -> tuple[int, int]:
@@ -201,10 +201,11 @@ async def _contacts_ctx(request: Request, waha_session: str) -> dict:
 
 
 def _automation_modal_ctx(
-    db: Session, event: Event, *, year: int, month: int, automation_id: str | None = None
+    db: Session, event: Event, *, user_id: str, year: int, month: int, automation_id: str | None = None
 ) -> dict:
     tz = event.timezone or settings.default_timezone
     prefill = None
+    selected_whatsapp_session_id = None
     if automation_id:
         automation = db.get(Automation, automation_id)
         if automation is None:
@@ -239,12 +240,20 @@ def _automation_modal_ctx(
             "offset_direction": str(automation.offset_direction),
             "custom_time_local": automation.custom_time_local,
         }
+        # Todas as mensagens/destinatários de uma automação sempre usam o
+        # mesmo WhatsApp (ver create_event_automation) — basta olhar 1 schedule.
+        any_schedule = next(iter(schedules.values()), None)
+        if any_schedule is not None:
+            existing = whatsapp_service.session_by_name(db, user_id, any_schedule.session)
+            selected_whatsapp_session_id = existing.id if existing else None
     return {
         "event": event,
         "start_local": utc_to_local(event.start_utc, tz),
         "year": year,
         "month": month,
         "prefill": prefill,
+        "whatsapp_sessions": whatsapp_service.list_sessions(db, user_id),
+        "selected_whatsapp_session_id": selected_whatsapp_session_id,
     }
 
 
@@ -490,6 +499,25 @@ async def ui_event_delete(
 # --------------------------------------------------------------------------- #
 # Automação: criar / editar / remover (modal flutuante)
 # --------------------------------------------------------------------------- #
+def _resolve_waha_session(db: Session, user_id: str, whatsapp_session_id: str | None) -> str | None:
+    """Sessão explicitamente escolhida no seletor "Enviar através de"; sem
+    escolha (GET inicial do modal), cai pra conexão mais antiga só como
+    conveniência de pré-seleção (nunca lido de volta como fonte de verdade,
+    ver `whatsapp_service.primary_session`)."""
+    if whatsapp_session_id:
+        session = whatsapp_service.get_session(db, whatsapp_session_id, user_id)
+    else:
+        session = whatsapp_service.primary_session(db, user_id)
+    return session.session_name if session else None
+
+
+async def _contacts_for(request: Request, db: Session, user_id: str, whatsapp_session_id: str | None) -> dict:
+    session_name = _resolve_waha_session(db, user_id, whatsapp_session_id)
+    if session_name is None:
+        return {"contacts": [], "contacts_error": "Conecte um WhatsApp em /whatsapps para importar contatos."}
+    return await _contacts_ctx(request, session_name)
+
+
 @router.get("/ui/calendario/events/{event_id}/automation/new", response_class=HTMLResponse)
 async def ui_automation_new(
     request: Request,
@@ -500,10 +528,13 @@ async def ui_automation_new(
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     event = _load_event(db, event_id, current_user.id)
-    ctx = _automation_modal_ctx(db, event, year=year, month=month)
+    ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
     return templates.TemplateResponse(
         "_calendar_automation_modal.html",
-        {"request": request, "form_error": None, **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+        {
+            "request": request, "form_error": None, **ctx,
+            **await _contacts_for(request, db, current_user.id, ctx["selected_whatsapp_session_id"]),
+        },
     )
 
 
@@ -520,10 +551,13 @@ async def ui_automation_edit(
     if automation is None:
         raise HTTPException(status_code=404, detail="Automação não encontrada.")
     event = _load_event(db, automation.event_id, current_user.id)
-    ctx = _automation_modal_ctx(db, event, year=year, month=month, automation_id=automation_id)
+    ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
     return templates.TemplateResponse(
         "_calendar_automation_modal.html",
-        {"request": request, "form_error": None, **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+        {
+            "request": request, "form_error": None, **ctx,
+            **await _contacts_for(request, db, current_user.id, ctx["selected_whatsapp_session_id"]),
+        },
     )
 
 
@@ -536,24 +570,31 @@ async def ui_automation_create(
     offset_interval: str = Form(...),
     offset_direction: str = Form(...),
     custom_time: str = Form(""),
+    whatsapp_session_id: str = Form(""),
     year: int = Form(...),
     month: int = Form(...),
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     event = _load_event(db, event_id, current_user.id)
+    wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
     try:
+        if wa_session is None:
+            raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
         offset_amount, offset_unit = _parse_interval(offset_interval)
         calendar_service.create_event_automation(
-            db, event_id=event_id, user_id=current_user.id, waha_session=current_user.waha_session,
+            db, event_id=event_id, user_id=current_user.id, waha_session=wa_session.session_name,
             recipients=recipients, messages=messages, offset_amount=offset_amount,
             offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
         )
     except ValidationError as exc:
-        ctx = _automation_modal_ctx(db, event, year=year, month=month)
+        ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
         return templates.TemplateResponse(
             "_calendar_automation_modal.html",
-            {"request": request, "form_error": str(exc), **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+            {
+                "request": request, "form_error": str(exc), **ctx,
+                **await _contacts_for(request, db, current_user.id, whatsapp_session_id),
+            },
         )
     return templates.TemplateResponse(
         "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
@@ -569,6 +610,7 @@ async def ui_automation_update(
     offset_interval: str = Form(...),
     offset_direction: str = Form(...),
     custom_time: str = Form(""),
+    whatsapp_session_id: str = Form(""),
     year: int = Form(...),
     month: int = Form(...),
     db: Session = Depends(get_session),
@@ -578,18 +620,24 @@ async def ui_automation_update(
     if automation is None:
         raise HTTPException(status_code=404, detail="Automação não encontrada.")
     event = _load_event(db, automation.event_id, current_user.id)
+    wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
     try:
+        if wa_session is None:
+            raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
         offset_amount, offset_unit = _parse_interval(offset_interval)
         calendar_service.update_event_automation(
-            db, automation_id, user_id=current_user.id, waha_session=current_user.waha_session,
+            db, automation_id, user_id=current_user.id, waha_session=wa_session.session_name,
             recipients=recipients, messages=messages, offset_amount=offset_amount,
             offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
         )
     except ValidationError as exc:
-        ctx = _automation_modal_ctx(db, event, year=year, month=month, automation_id=automation_id)
+        ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
         return templates.TemplateResponse(
             "_calendar_automation_modal.html",
-            {"request": request, "form_error": str(exc), **ctx, **await _contacts_ctx(request, current_user.waha_session)},
+            {
+                "request": request, "form_error": str(exc), **ctx,
+                **await _contacts_for(request, db, current_user.id, whatsapp_session_id),
+            },
         )
     return templates.TemplateResponse(
         "_calendar_month_grid.html", {"request": request, **_grid_ctx(db, current_user.id, year, month, oob=True)}
