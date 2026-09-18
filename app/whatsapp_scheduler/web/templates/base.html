@@ -692,6 +692,21 @@
       });
     }
 
+    /* ---------------- Automação: repetir em eventos iguais ---------------- */
+    function toggleAllSimilarEvents(selectAllCheckbox){
+      var field = selectAllCheckbox.closest('.field');
+      field.querySelectorAll('.similar-event-checkbox').forEach(function(cb){
+        cb.checked = selectAllCheckbox.checked;
+      });
+    }
+    function syncSelectAllSimilarEvents(checkbox){
+      var field = checkbox.closest('.field');
+      var all = field.querySelectorAll('.similar-event-checkbox');
+      var checked = field.querySelectorAll('.similar-event-checkbox:checked');
+      var selectAll = field.querySelector('.select-all-similar-events');
+      if(selectAll) selectAll.checked = all.length === checked.length;
+    }
+
     /* ---------------- Automação: prévia do horário calculado ---------------- */
     function refreshAutomationPreview(el){
       var form = el.closest ? el.closest('form.automation-form') : null;

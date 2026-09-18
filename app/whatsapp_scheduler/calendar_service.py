@@ -460,6 +460,33 @@ def create_event_automation(
     return automation
 
 
+def similar_events(db: Session, event: Event, user_id: str) -> list[Event]:
+    """Outros eventos FUTUROS "iguais" a este (v1.3) — usado pra oferecer
+    "repetir esta automação" sem precisar recriá-la manualmente em cada
+    ocorrência. "Igual" quer dizer: mesma série recorrente do Google
+    (`recurring_event_id`) quando o evento vem de lá; senão, mesmo título
+    (comparação exata, sem acento/case-fold — cobre o caso comum de eventos
+    internos criados um a um com o mesmo nome, ex. "Aula Tales" toda semana).
+    Nunca inclui o próprio evento nem eventos cancelados/passados.
+    """
+    now = utcnow()
+    candidates = db.exec(
+        select(Event)
+        .where(col(Event.user_id) == user_id)
+        .where(col(Event.id) != event.id)
+        .where(col(Event.status) == EventStatus.confirmed)
+        .where(col(Event.start_utc) >= now)
+        .where(col(Event.start_utc) <= now + timedelta(days=settings.calendar_sync_window_future_days))
+        .order_by(col(Event.start_utc))
+    ).all()
+    if event.recurring_event_id:
+        return [e for e in candidates if e.recurring_event_id == event.recurring_event_id]
+    title = (event.title or "").strip().lower()
+    if not title:
+        return []
+    return [e for e in candidates if (e.title or "").strip().lower() == title]
+
+
 def _owned_automation(db: Session, automation_id: str, user_id: str) -> Automation | None:
     automation = db.get(Automation, automation_id)
     if automation is None:

@@ -149,6 +149,31 @@
           ⚠️ O horário personalizado está depois do horário do evento.
         </p>
 
+        {% if not prefill and similar_events %}
+        <div class="field full" style="margin-top:16px">
+          <label>
+            Repetir esta automação
+            <b>({{ similar_events|length }} evento{{ 's' if similar_events|length != 1 }} igual{{ 'is' if similar_events|length != 1 }})</b>
+          </label>
+          <p class="hint" style="margin:0 0 8px">
+            Aplica os mesmos destinatários, mensagens e horário também nestes outros eventos — cada um no seu próprio dia.
+          </p>
+          <label class="calendar-check-item" style="font-weight:600">
+            <input type="checkbox" class="select-all-similar-events" onchange="toggleAllSimilarEvents(this)">
+            Selecionar todos
+          </label>
+          <div class="calendar-checklist" style="max-height:190px;overflow-y:auto">
+            {% for se in similar_events %}
+            <label class="calendar-check-item">
+              <input type="checkbox" name="apply_to_event_ids" value="{{ se.event.id }}"
+                     class="similar-event-checkbox" onchange="syncSelectAllSimilarEvents(this)">
+              {{ se.start_local.strftime('%d/%m/%Y %H:%M') }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
         <div class="automation-preview" style="margin-top:16px">
           <div>Disparo <span class="automation-preview-value">—</span></div>
           <div class="automation-preview-summary"></div>

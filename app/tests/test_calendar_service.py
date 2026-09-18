@@ -20,11 +20,13 @@ from whatsapp_scheduler.models import (
     Event,
     EventAutomation,
     EventSource,
+    EventStatus,
     EventSyncStatus,
     OffsetDirection,
     OffsetUnit,
     Schedule,
 )
+from whatsapp_scheduler.clock import utcnow as _real_utcnow
 from whatsapp_scheduler.service import ValidationError, create_schedule
 
 FROZEN = datetime(2026, 6, 1, 12, 0, 0)
@@ -531,6 +533,88 @@ def test_day_events_ordered_chronologically(frozen_clock, test_user):
         events = calendar_service.day_events(db, test_user.id, date(2026, 9, 15), "America/Sao_Paulo")
 
     assert [e.title for e in events] == ["Manhã", "Tarde"]
+
+
+# --------------------------------------------------------------------------- #
+# similar_events — "repetir esta automação" (v1.3)
+#
+# Usa o relógio real (não `frozen_clock`): `calendar_service.py` faz
+# `from .clock import utcnow`, uma referência de nome ligada em tempo de
+# import — o monkeypatch de `frozen_clock` em `whatsapp_scheduler.clock.
+# utcnow` não alcança essa referência já vinculada, então `similar_events`
+# (que usa `now` pra limitar a janela futura) sempre vê o horário real.
+# --------------------------------------------------------------------------- #
+def _make_event(*, user_id: str, title: str, start, status=EventStatus.confirmed, recurring_event_id=None, source=EventSource.internal) -> Event:
+    with Session(get_engine()) as db:
+        event = Event(
+            user_id=user_id, source=source, title=title, start_utc=start, end_utc=start + timedelta(hours=1),
+            timezone="America/Sao_Paulo", status=status, recurring_event_id=recurring_event_id,
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+        return event
+
+
+def test_similar_events_matches_by_recurring_event_id_when_present(test_user):
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula de yoga", start=now + timedelta(days=1), recurring_event_id="series-1", source=EventSource.google)
+    b = _make_event(user_id=test_user.id, title="Aula de yoga", start=now + timedelta(days=8), recurring_event_id="series-1", source=EventSource.google)
+    # mesmo título, série DIFERENTE — não deveria casar quando recurring_event_id existe.
+    _make_event(user_id=test_user.id, title="Aula de yoga", start=now + timedelta(days=15), recurring_event_id="series-2", source=EventSource.google)
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert [e.id for e in matches] == [b.id]
+
+
+def test_similar_events_falls_back_to_title_match_for_internal_events(test_user):
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=1))
+    b = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=8))
+    _make_event(user_id=test_user.id, title="Aula Ana", start=now + timedelta(days=8))
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert [e.id for e in matches] == [b.id]
+
+
+def test_similar_events_excludes_past_and_cancelled(test_user):
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=1))
+    _make_event(user_id=test_user.id, title="Aula Tales", start=now - timedelta(days=8))  # passado
+    _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=8), status=EventStatus.cancelled)
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert matches == []
+
+
+def test_similar_events_never_crosses_users(test_user):
+    with Session(get_engine()) as db:
+        from whatsapp_scheduler.auth import hash_password
+        from whatsapp_scheduler.models import User
+
+        other = User(name="Outro", email="similar-other@example.com", password_hash=hash_password("testpass123"))
+        db.add(other)
+        db.commit()
+        db.refresh(other)
+
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=1))
+    _make_event(user_id=other.id, title="Aula Tales", start=now + timedelta(days=8))
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert matches == []
 
 
 # --------------------------------------------------------------------------- #

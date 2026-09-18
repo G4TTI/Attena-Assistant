@@ -285,6 +285,7 @@ def _automation_modal_ctx(
         if any_schedule is not None:
             existing = whatsapp_service.session_by_name(db, user_id, any_schedule.session)
             selected_whatsapp_session_id = existing.id if existing else None
+    similar = [] if automation_id else calendar_service.similar_events(db, event, user_id)
     return {
         "event": event,
         "start_local": utc_to_local(event.start_utc, tz),
@@ -293,6 +294,9 @@ def _automation_modal_ctx(
         "prefill": prefill,
         "whatsapp_sessions": whatsapp_service.list_sessions(db, user_id),
         "selected_whatsapp_session_id": selected_whatsapp_session_id,
+        "similar_events": [
+            {"event": e, "start_local": utc_to_local(e.start_utc, e.timezone)} for e in similar
+        ],
     }
 
 
@@ -649,6 +653,7 @@ async def ui_automation_create(
     offset_direction: str = Form(...),
     custom_time: str = Form(""),
     whatsapp_session_id: str = Form(""),
+    apply_to_event_ids: list[str] = Form([]),
     year: int = Form(...),
     month: int = Form(...),
     db: Session = Depends(get_session),
@@ -660,11 +665,19 @@ async def ui_automation_create(
         if wa_session is None:
             raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
         offset_amount, offset_unit = _parse_interval(offset_interval)
-        calendar_service.create_event_automation(
-            db, event_id=event_id, user_id=current_user.id, waha_session=wa_session.session_name,
-            recipients=recipients, messages=messages, offset_amount=offset_amount,
-            offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
-        )
+        # Recalcula quem é "igual" a este evento no servidor — nunca confia
+        # nos ids que o formulário mandou (poderiam ter sido adulterados pra
+        # apontar pro evento de outro usuário).
+        selected_ids = set(apply_to_event_ids)
+        target_events = [event] + [
+            e for e in calendar_service.similar_events(db, event, current_user.id) if e.id in selected_ids
+        ]
+        for target in target_events:
+            calendar_service.create_event_automation(
+                db, event_id=target.id, user_id=current_user.id, waha_session=wa_session.session_name,
+                recipients=recipients, messages=messages, offset_amount=offset_amount,
+                offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
+            )
     except ValidationError as exc:
         ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
         return templates.TemplateResponse(
