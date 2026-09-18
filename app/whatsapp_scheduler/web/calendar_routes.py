@@ -15,6 +15,7 @@ editar o recurso de outro só trocando o id na URL.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -672,12 +673,26 @@ async def ui_automation_create(
         target_events = [event] + [
             e for e in calendar_service.similar_events(db, event, current_user.id) if e.id in selected_ids
         ]
-        for target in target_events:
-            calendar_service.create_event_automation(
-                db, event_id=target.id, user_id=current_user.id, waha_session=wa_session.session_name,
-                recipients=recipients, messages=messages, offset_amount=offset_amount,
-                offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
-            )
+
+        def _create_for_all_targets() -> None:
+            # "Repetir esta automação" pode significar dezenas de eventos
+            # (ex.: uma aula recorrente semanal já com um ano de ocorrências).
+            # Cada create_event_automation faz vários commits no SQLite; feito
+            # direto na coroutine, isso bloquearia o único event loop do
+            # processo (nada mais responde — nem o poll da sidebar, nem outro
+            # usuário) pelo tempo inteiro da soma de todos. `asyncio.to_thread`
+            # tira esse trabalho síncrono do event loop, mesmo padrão que
+            # `scheduler.materialize_due` já usa. O mesmo `db` (SQLite com
+            # `check_same_thread=False`, ver db.py) é reaproveitado — chamado
+            # de forma sequencial, nunca concorrente, então é seguro.
+            for target in target_events:
+                calendar_service.create_event_automation(
+                    db, event_id=target.id, user_id=current_user.id, waha_session=wa_session.session_name,
+                    recipients=recipients, messages=messages, offset_amount=offset_amount,
+                    offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
+                )
+
+        await asyncio.to_thread(_create_for_all_targets)
     except ValidationError as exc:
         ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
         return templates.TemplateResponse(

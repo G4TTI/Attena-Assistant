@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -156,3 +157,42 @@ def test_create_automation_ignores_another_users_event_id_even_if_submitted(clie
 
     assert len(_automations_of(event_a)) == 1
     assert len(_automations_of(event_other)) == 0
+
+
+def test_bulk_automation_creation_is_offloaded_to_a_worker_thread(client, monkeypatch):
+    """Regressão de performance: uma recorrência com muitas ocorrências (ex.:
+    uma aula semanal com um ano de eventos) marcada em "Selecionar todos"
+    dispara dezenas de create_event_automation, cada um com vários commits no
+    SQLite. Feito direto na coroutine da rota, isso bloquearia o único event
+    loop do processo pelo tempo somado de todos — nem o poll da sidebar nem
+    outro usuário seriam atendidos nesse meio tempo (foi exatamente o que
+    deixou "o sistema lento" depois desta feature). A rota precisa despachar
+    esse trabalho via asyncio.to_thread."""
+    from whatsapp_scheduler.web import calendar_routes
+
+    calls = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy_to_thread(func, *args, **kwargs):
+        calls.append(func)
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(calendar_routes.asyncio, "to_thread", spy_to_thread)
+
+    now = utcnow()
+    event_a = _make_event(client.user.id, "Aula Tales", now + timedelta(days=1), now + timedelta(days=1, hours=1))
+    event_b = _make_event(client.user.id, "Aula Tales", now + timedelta(days=8), now + timedelta(days=8, hours=1))
+    wa_id = whatsapp_session_id(client)
+
+    resp = client.post(
+        f"/ui/calendario/events/{event_a}/automation",
+        data={
+            "recipients": ["5511999998888"], "messages": ["Lembrete"],
+            "offset_interval": "1:hours", "offset_direction": "before",
+            "whatsapp_session_id": wa_id, "apply_to_event_ids": [event_b], "year": 2026, "month": 9,
+        },
+    )
+    assert resp.status_code == 200
+    assert len(calls) == 1  # a criação em lote foi despachada via asyncio.to_thread, não direto na coroutine
+    assert len(_automations_of(event_a)) == 1
+    assert len(_automations_of(event_b)) == 1
