@@ -43,3 +43,41 @@ def test_dashboard_no_longer_links_the_old_whatsapps_page(client):
     assert resp.status_code == 200
     assert 'href="/whatsapps"' not in resp.text
     assert 'href="/configuracoes?tab=conexoes"' in resp.text
+
+
+# --- lista de conexões: atualiza sozinha e não mostra QR fantasma ----------- #
+def test_connections_list_polls_fast_until_the_whatsapp_is_connected(client):
+    """Regressão: depois de escanear o QR o cartão ficava em "conectando" pra
+    sempre, porque a lista (aba Conexões) não tinha nenhuma atualização."""
+    client.waha.status = "SCAN_QR_CODE"
+    html = client.get("/ui/whatsapps").text
+    assert 'hx-get="/ui/whatsapps"' in html
+    assert "every 3s" in html
+
+    client.waha.status = "WORKING"
+    html = client.get("/ui/whatsapps").text
+    assert "every 15s" in html and "every 3s" not in html
+    assert "conectado" in html
+
+
+def test_connections_list_only_shows_the_qr_when_waha_has_one(client):
+    client.waha.status = "STARTING"
+    starting = client.get("/ui/whatsapps").text
+    assert 'alt="QR code"' not in starting
+    assert "Conectando ao WhatsApp" in starting
+    assert "Escaneie o QR" not in starting
+
+    client.waha.status = "SCAN_QR_CODE"
+    ready = client.get("/ui/whatsapps").text
+    assert 'alt="QR code"' in ready
+    assert "Escaneie o QR" in ready
+
+
+def test_connections_list_keeps_polling_after_a_waha_error(client):
+    """Erro de status (WAHA fora do ar) não pode parar a atualização: quando
+    o WAHA volta, o cartão precisa se corrigir sozinho."""
+    from whatsapp_scheduler.waha import WahaError
+
+    client.waha.status_error = WahaError("Falha de conexão com o WAHA")
+    html = client.get("/ui/whatsapps").text
+    assert "every 3s" in html

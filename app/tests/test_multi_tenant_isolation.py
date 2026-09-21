@@ -148,3 +148,24 @@ def test_timezone_preference_never_leaks_between_users(client):
 
     a_prefs = client.get("/configuracoes", **_as(token_a)).text
     assert 'value="Asia/Tokyo" selected' in a_prefs
+
+
+def test_qr_code_is_only_served_to_the_owner_of_the_whatsapp_session(client):
+    """O QR de pareamento dá controle total do WhatsApp de quem escanear: tem de
+    ser entregue só ao dono da conexão, mesmo sabendo o id (IDOR), e nunca em
+    cache compartilhado (Cloudflare/proxy)."""
+    token_a, user_a = _login_cookie(client, name="A", email="qr-a@example.com")
+    token_b, _ = _login_cookie(client, name="B", email="qr-b@example.com")
+    with Session(get_engine()) as db:
+        session_a = whatsapp_service.primary_session(db, user_a.id)
+        session_id_a = session_a.id
+
+    for route in (f"/ui/whatsapps/{session_id_a}/qr", f"/api/whatsapp-sessions/{session_id_a}/qr"):
+        own = client.get(route, **_as(token_a))
+        assert own.status_code == 200, route
+        assert own.headers["cache-control"] == "no-store", route
+
+        assert client.get(route, **_as(token_b)).status_code == 404, route
+
+    anonymous = TestClient(app, follow_redirects=False)
+    assert anonymous.get(f"/ui/whatsapps/{session_id_a}/qr").status_code in (303, 401)

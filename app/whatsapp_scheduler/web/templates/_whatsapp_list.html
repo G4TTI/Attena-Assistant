@@ -1,4 +1,16 @@
 {% set STATUS_LABEL = {'WORKING': 'conectado', 'SCAN_QR_CODE': 'aguardando QR', 'STARTING': 'conectando'} %}
+{# Esta lista virou uma aba de Configurações sem nenhuma atualização automática
+   (a página antiga tinha um botão "Atualizar", que sumiu): depois de escanear o
+   QR o cartão ficava parado em "conectando" até recarregar a página.
+   3s enquanto alguma conexão não está WORKING, 15s depois (pega queda do
+   WhatsApp). Pausa com um campo de texto focado, senão o poll apaga o que a
+   pessoa está digitando (nome da conexão / renomear), e com a aba escondida.
+   Quem pausa é o listener `htmx:beforeRequest` em base.html (`data-pause-on-input`):
+   o filtro `[expr]` do htmx usa eval e a CSP o bloqueia. #}
+{% set ns = namespace(pending=false) %}
+{% for row in rows %}{% if not row.status or row.status.status != 'WORKING' %}{% set ns.pending = true %}{% endif %}{% endfor %}
+<div hx-get="/ui/whatsapps" hx-target="#whatsapp-list" hx-swap="innerHTML"
+     hx-trigger="every {{ '3s' if ns.pending else '15s' }}" data-pause-on-input>
 <form hx-post="/whatsapps" hx-target="#whatsapp-list" hx-swap="innerHTML" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
   <div class="field" style="flex:1 1 220px;margin:0">
     <label for="wa_new_name">Nome da conexão</label>
@@ -41,8 +53,10 @@
         {{ '+' ~ row.status.me.id.split('@')[0] if row.status.me else session.session_name }}
         {% if row.status | engine_label != '—' %} · {{ row.status | engine_label }}{% endif %}
       </p>
-    {% elif status in ("SCAN_QR_CODE", "STARTING") %}
+    {% elif status == "SCAN_QR_CODE" %}
       <p class="muted" style="margin:0">Escaneie o QR no WhatsApp &rarr; Aparelhos conectados.</p>
+    {% elif status == "STARTING" %}
+      <p class="muted" style="margin:0">Conectando ao WhatsApp… leva alguns segundos.</p>
     {% else %}
       <p class="muted" style="margin:0">{{ status or 'sessão parada' }}</p>
     {% endif %}
@@ -50,7 +64,7 @@
       <p class="muted" style="color:var(--err);margin:0">{{ row.status_error }}</p>
     {% endif %}
 
-    {% if status in ("SCAN_QR_CODE", "STARTING") %}
+    {% if status == "SCAN_QR_CODE" %}
     <div class="qr-box" style="align-self:flex-start">
       <img class="qr" alt="QR code" src="/ui/whatsapps/{{ session.id }}/qr?ts={{ range(100000)|random }}">
       <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
@@ -80,4 +94,5 @@
     </div>
   </div>
   {% endfor %}
+</div>
 </div>

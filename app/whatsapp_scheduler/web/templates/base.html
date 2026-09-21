@@ -578,6 +578,21 @@
       if(e.target && e.target.id === 'calendar-grid') applyCalendarFilter();
     });
 
+    /* Polling que não atropela quem está digitando. O filtro nativo do htmx
+       ("every 3s [expressão]") avalia a expressão com eval, que a CSP bloqueia:
+       o filtro era ignorado em silêncio e o poll nunca pausava (apagava o campo
+       que a pessoa estava preenchendo). Por isso o cancelamento é feito aqui,
+       por evento, sem eval. Marque o elemento que faz o polling com
+       data-pause-on-input: ele pula o ciclo se há um campo de texto focado
+       dentro dele ou se ele está escondido (ex.: outra aba de Configurações). */
+    document.body.addEventListener('htmx:beforeRequest', function(e){
+      var el = e.detail && e.detail.elt;
+      if(!el || !el.hasAttribute || !el.hasAttribute('data-pause-on-input')) return;
+      var a = document.activeElement;
+      var typing = a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+      if(typing || el.offsetParent === null) e.preventDefault();
+    });
+
     /* ---------------- Automação: seletor de contatos (popover + busca + chips) ---------------- */
     function contactPopoverOpen(input){
       var wrap = input.closest('.contact-search-wrap');

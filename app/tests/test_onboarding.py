@@ -199,3 +199,17 @@ def test_passive_status_polling_never_creates_sessions(client):
     client.get("/ui/sidebar-status")
     client.get("/ui/dashboard/summary")
     assert client.waha.created == []
+
+
+def test_failed_session_offers_a_way_to_generate_a_new_qr(client):
+    """Servidor sobrecarregado: o WEBJS pode estourar o tempo de subida e a
+    sessão ir pra FAILED. A pessoa não pode ficar olhando um quadrado vazio."""
+    client.waha.status = "FAILED"
+    html = client.get("/ui/onboarding/whatsapp").text
+    assert 'alt="QR code"' not in html
+    assert "Não foi possível gerar o QR" in html
+    assert "Gerar novo QR" in html
+
+    resp = client.post("/onboarding/whatsapp/start", data={"phone": ""})
+    assert resp.status_code == 200
+    assert client.waha.restart_calls == 1
