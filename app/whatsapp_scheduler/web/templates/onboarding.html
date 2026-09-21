@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Primeiros passos 👋</h1>
+    <p class="sub">Vamos configurar seu Attena. Leva menos de 2 minutos — e nada aqui é obrigatório.</p>
+  </div>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:4px">
+  {% for n, label in [(1, 'WhatsApp'), (2, 'Google Agenda'), (3, 'Fuso horário'), (4, 'Concluído')] %}
+  <div style="flex:1;text-align:center">
+    <div style="height:4px;border-radius:2px;background:{{ 'var(--accent)' if step >= n else 'var(--bd)' }};margin-bottom:6px"></div>
+    <span class="muted" style="font-size:11px">{{ label }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+{% if step == 1 %}
+<div class="card card-pad">
+  <h2 class="section-label">Conecte seu WhatsApp</h2>
+  {% include "_onboarding_whatsapp_step.html" %}
+</div>
+
+{% elif step == 2 %}
+<div class="card card-pad">
+  <h2 class="section-label">Conecte seu calendário</h2>
+  <p class="muted" style="margin:0 0 14px">
+    Conecte o Google Agenda para importar seus eventos automaticamente e agendar mensagens a partir deles.
+  </p>
+  {% if missing_config_google %}
+  <div class="notice">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l8.5 15h-17z"></path><path d="M12 10v4M12 17h.01"></path></svg>
+    <span>Integração com Google Agenda não configurada neste servidor — pulando esta etapa.</span>
+  </div>
+  {% else %}
+  <form method="post" action="/configuracoes/google/connect">
+    <button type="submit">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
+      Conectar Google Agenda
+    </button>
+  </form>
+  {% endif %}
+  <div class="modal-ft" style="padding:16px 0 0;justify-content:flex-end">
+    <a class="ghost-link" href="/onboarding?step=3">Pular por enquanto</a>
+  </div>
+</div>
+
+{% elif step == 3 %}
+<div class="card card-pad">
+  <h2 class="section-label">Seu fuso horário</h2>
+  <p class="muted" style="margin:0 0 14px">
+    Os horários dos seus eventos e mensagens serão calculados usando este fuso.
+  </p>
+  {% if tz_error %}<div class="alert err">{{ tz_error }}</div>{% endif %}
+  <form method="post" action="/onboarding/timezone" id="onboarding-tz-form">
+    <div class="form-grid">
+      <div class="field">
+        <label for="onb_tz">Fuso horário</label>
+        <select id="onb_tz" name="timezone_name">
+          {% for value, label in common_timezones %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="onb_tz_custom">Outro fuso (IANA) <b>(opcional)</b></label>
+        <input id="onb_tz_custom" name="custom_timezone" placeholder="ex.: Europe/Lisbon">
+      </div>
+    </div>
+    <div class="modal-ft" style="padding:16px 0 0;justify-content:space-between">
+      <a class="ghost-link" href="/onboarding?step=4">Pular por enquanto</a>
+      <button type="submit">Salvar e continuar</button>
+    </div>
+  </form>
+</div>
+<script>
+  (function(){
+    try{
+      var detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      var select = document.getElementById('onb_tz');
+      if(detected && select){
+        var opt = Array.from(select.options).find(function(o){ return o.value === detected; });
+        if(opt) opt.selected = true;
+        else document.getElementById('onb_tz_custom').value = detected;
+      }
+    }catch(e){}
+  })();
+</script>
+
+{% else %}
+<div class="card card-pad" style="text-align:center;padding:40px 24px">
+  <h2 style="font-family:var(--font-display);font-size:22px;font-weight:500;margin:0 0 18px">Tudo pronto! 🚀</h2>
+  <div style="display:flex;flex-direction:column;gap:8px;max-width:280px;margin:0 auto 24px;text-align:left">
+    <span>{{ '🟢' if whatsapp_connected else '⚪' }} WhatsApp {{ 'conectado' if whatsapp_connected else 'pulado por enquanto' }}</span>
+    <span>{{ '🟢' if google_connected else '⚪' }} Google Agenda {{ 'conectado' if google_connected else 'pulado por enquanto' }}</span>
+    <span>{{ '🟢' if timezone_set else '⚪' }} Fuso horário {{ ('configurado (' ~ current_user.timezone ~ ')') if timezone_set else 'pulado por enquanto' }}</span>
+  </div>
+  <form method="post" action="/onboarding/finish">
+    <button type="submit">Ir para o Dashboard</button>
+  </form>
+</div>
+{% endif %}
+
+{% endblock %}

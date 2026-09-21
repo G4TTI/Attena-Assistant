@@ -1,0 +1,25 @@
+{# Mensagens agendadas DENTRO da conversa — uma bolha por mensagem (nunca juntadas), com o status
+   (🕐 agendada · ⏳ enviando · ✓ enviada · ⚠ falhou · ○ cancelada) e o horário real do disparo,
+   no fuso do usuário. Vêm do banco, então aparecem na hora, sem esperar o histórico do WhatsApp. #}
+{% from "_components.html" import status_icon %}
+<span id="chat-open-count" data-open="{{ open_count }}" hidden></span>
+{% if scheduled_items %}
+<div class="sched-divider">Mensagens agendadas</div>
+{% for m in scheduled_items %}
+<div class="bubble me scheduled {{ m.status }}" data-status="{{ m.status }}">
+  <div class="text">{{ m.text }}</div>
+  <div class="sched-meta">
+    <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
+    <span class="when" title="{{ m.when_local.strftime('%d/%m/%Y %H:%M:%S') }}">{{ m.when_local.strftime('%d/%m/%Y · %H:%M') }}</span>
+    {% if m.can_cancel %}
+    <button type="button" class="sched-cancel"
+            hx-post="/ui/chats/{{ session_id }}/scheduled/{{ m.schedule.id }}/cancel"
+            hx-vals='{{ {"chat": chat_id} | tojson }}'
+            hx-target="#chat-scheduled" hx-swap="innerHTML"
+            hx-confirm="Cancelar esta mensagem agendada? Ela não será enviada.">cancelar</button>
+    {% endif %}
+    {% if m.error and m.status in ('failed', 'skipped') %}<div class="sched-err">{{ m.error }}</div>{% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endif %}

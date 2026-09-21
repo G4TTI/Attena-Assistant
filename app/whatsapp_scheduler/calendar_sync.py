@@ -7,9 +7,9 @@ Fluxo por calendário ativado (`sync_calendar`):
      provedor disser que o token expirou, refaz um sync completo na mesma
      chamada;
   3. reconcilia cada evento (`_reconcile_event`): cria/atualiza o `Event`;
-     se o horário mudou e há automações ligadas, recalcula o agendamento
-     *no lugar* (`_reschedule_automations`); se foi cancelado, cancela as
-     automações via `cancel_schedule` (de `service.py`, intocado).
+     se o horário mudou e há automações ligadas, remarca o agendamento *no
+     lugar* (`_reschedule_automations` -> `service.reschedule_group`); se foi
+     cancelado, cancela as automações via `service.cancel_schedules`.
 
 Roda como um serviço de background separado do `SchedulerService` de
 WhatsApp (`CalendarSyncService`, mesmo formato start/stop/run_once) — cadência
@@ -22,14 +22,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
-from datetime import time as dt_time
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
-from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
-from . import crypto
+from . import crypto, timing
 from .calendar_providers import CalendarProvider, available_providers
 from .calendar_providers.base import CalendarProviderError, OAuthTokens, RemoteCalendar, RemoteEvent
 from .clock import utcnow
@@ -37,20 +34,22 @@ from .config import settings
 from .db import get_engine
 from .models import (
     Automation,
-    AutomationMessage,
     AutomationSchedule,
     Calendar,
     CalendarConnection,
     CalendarConnectionStatus,
-    Dispatch,
-    DispatchStatus,
     Event,
     EventSource,
     EventStatus,
     Schedule,
+    ScheduleGroup,
 )
-from .recurrence import local_to_utc, parse_hhmm, utc_to_local
-from .service import cancel_schedule
+from .service import backfill_groups, cancel_schedules, reschedule_group
+
+# O cálculo de horário mora em `timing.py`; estes nomes continuam exportados
+# daqui só porque testes e chamadores antigos os importam de `calendar_sync`.
+target_utc_for_message = timing.target_utc_for_message
+target_utc_for_offset = timing.target_utc_for_offset
 
 logger = logging.getLogger("whatsapp_scheduler.calendar_sync")
 
@@ -87,126 +86,45 @@ async def ensure_fresh_tokens(db: Session, connection: CalendarConnection, provi
     return fresh
 
 
-def _offset_timedelta(amount: int, unit: str) -> timedelta:
-    if unit == "minutes":
-        return timedelta(minutes=amount)
-    if unit == "hours":
-        return timedelta(hours=amount)
-    if unit == "days":
-        return timedelta(days=amount)
-    if unit == "weeks":
-        return timedelta(weeks=amount)
-    raise ValueError(f"Unidade de offset desconhecida: {unit!r}")
-
-
-def _custom_target_utc(event_start_utc: datetime, custom_time_local: str, event_timezone: str) -> datetime:
-    """"custom": horário ABSOLUTO (não offset) — pega a data local do
-    evento (na timezone do próprio evento) e combina com o horário
-    escolhido. Recalculado a cada edição do evento, então se o evento mudar
-    de dia o disparo acompanha a nova data, sempre no mesmo horário-do-dia."""
-    hour, minute = parse_hhmm(custom_time_local)
-    event_date = utc_to_local(event_start_utc, event_timezone).date()
-    target_local = datetime.combine(event_date, dt_time(hour, minute))
-    return local_to_utc(target_local, event_timezone)
-
-
-def target_utc_for_offset(
-    event_start_utc: datetime,
-    amount: int,
-    unit: str,
-    direction: str,
-    *,
-    custom_time_local: str | None = None,
-    event_timezone: str = "UTC",
-) -> datetime:
-    if direction == "custom":
-        if not custom_time_local:
-            raise ValueError("custom_time_local é obrigatório quando direction == 'custom'")
-        return _custom_target_utc(event_start_utc, custom_time_local, event_timezone)
-    delta = _offset_timedelta(amount, unit)
-    if direction == "before":
-        return event_start_utc - delta
-    if direction == "after":
-        return event_start_utc + delta
-    return event_start_utc  # "at"
-
-
-def target_utc_for_message(
-    event_start_utc: datetime,
-    amount: int,
-    unit: str,
-    direction: str,
-    position: int,
-    gap_seconds: int,
-    *,
-    custom_time_local: str | None = None,
-    event_timezone: str = "UTC",
-) -> datetime:
-    """Igual a `target_utc_for_offset`, mais o intervalo acumulado até a
-    mensagem `position` (0 = primeira, sem gap) de uma automação de várias
-    mensagens. Usado tanto na criação quanto no recálculo — se o recálculo
-    não reaplicar o gap por posição, uma edição de horário do evento
-    colapsaria todas as mensagens da automação no mesmo instante."""
-    base = target_utc_for_offset(
-        event_start_utc, amount, unit, direction, custom_time_local=custom_time_local, event_timezone=event_timezone
+def _automation_target_utc(automation: Automation, event: Event) -> datetime:
+    """Novo horário de INÍCIO de uma automação para o horário atual do evento —
+    o cálculo é o de `timing` (o mesmo da criação e do preview)."""
+    return timing.target_utc_for_offset(
+        event.start_utc,
+        automation.offset_amount,
+        str(automation.offset_unit),
+        str(automation.offset_direction),
+        custom_time_local=automation.custom_time_local,
+        event_timezone=event.timezone or settings.default_timezone,
     )
-    return base + timedelta(seconds=position * gap_seconds)
 
 
 def _reschedule_automations(db: Session, event: Event, now: datetime) -> None:
-    """Evento com novo horário: recalcula cada automação ligada, no lugar (sem duplicar)."""
+    """Evento com novo horário: remarca cada agendamento (grupo) das automações
+    ligadas, no lugar (sem duplicar) — `service.reschedule_group` é o mesmo
+    caminho usado ao editar o horário de um agendamento."""
     automations = db.exec(select(Automation).where(col(Automation.event_id) == event.id)).all()
+    if not automations:
+        return
+    if event.user_id:
+        backfill_groups(db, event.user_id)  # schedules antigos ainda sem grupo
     for automation in automations:
         links = db.exec(
             select(AutomationSchedule).where(col(AutomationSchedule.automation_id) == automation.id)
         ).all()
-        if not links:
+        schedule_ids = [link.schedule_id for link in links]
+        if not schedule_ids:
             continue
-        messages_by_id = {
-            m.id: m
-            for m in db.exec(
-                select(AutomationMessage).where(col(AutomationMessage.automation_id) == automation.id)
-            ).all()
+        group_ids = {
+            gid
+            for gid in db.exec(select(Schedule.group_id).where(col(Schedule.id).in_(schedule_ids))).all()
+            if gid is not None
         }
-        for link in links:
-            message = messages_by_id.get(link.message_id)
-            schedule = db.get(Schedule, link.schedule_id)
-            if message is None or schedule is None or not schedule.enabled:
-                continue
-
-            target_utc = target_utc_for_message(
-                event.start_utc,
-                automation.offset_amount,
-                str(automation.offset_unit),
-                str(automation.offset_direction),
-                message.position,
-                automation.message_gap_seconds,
-                custom_time_local=automation.custom_time_local,
-                event_timezone=event.timezone or settings.default_timezone,
-            )
-            # first_run_local é ingênuo, na timezone do próprio schedule — mesma
-            # convenção usada por service.create_schedule.
-            new_local = (
-                target_utc.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(schedule.timezone)).replace(tzinfo=None)
-            )
-            schedule.first_run_local = new_local
-            schedule.updated_at = now
-            db.add(schedule)
-
-            # UPDATE condicional guardado (não ler → mudar atributo → commitar):
-            # a sincronização pode intercalar com dispatch_due() reivindicando a
-            # mesma dispatch (ambos rodam no mesmo loop assíncrono, e há um
-            # `await` de rede entre a leitura do evento e este ponto). Se a
-            # dispatch já saiu de "pending" nesse meio-tempo, este UPDATE
-            # simplesmente não afeta nenhuma linha — não sobrescreve um envio já
-            # em andamento nem cria uma linha duplicada.
-            db.exec(
-                sa_update(Dispatch)
-                .where(col(Dispatch.schedule_id) == schedule.id)
-                .where(col(Dispatch.status) == DispatchStatus.pending)
-                .values(scheduled_at_utc=target_utc, updated_at=now)
-            )
-    db.commit()
+        new_start_utc = _automation_target_utc(automation, event)
+        for group_id in group_ids:
+            group = db.get(ScheduleGroup, group_id)
+            if group is not None:
+                reschedule_group(db, group, new_start_utc)
 
 
 def _cancel_automations(db: Session, event: Event) -> None:
@@ -215,8 +133,7 @@ def _cancel_automations(db: Session, event: Event) -> None:
         links = db.exec(
             select(AutomationSchedule).where(col(AutomationSchedule.automation_id) == automation.id)
         ).all()
-        for link in links:
-            cancel_schedule(db, link.schedule_id)
+        cancel_schedules(db, [link.schedule_id for link in links])
 
 
 def reschedule_event_automations(db: Session, event: Event) -> None:
@@ -260,6 +177,19 @@ def _reconcile_event(db: Session, calendar: Calendar, user_id: str | None, remot
         existing = Event(
             user_id=user_id, source=EventSource.google, calendar_id=calendar.id, external_id=remote.external_id
         )
+    elif (
+        (existing.user_id or user_id) == existing.user_id
+        and existing.title == remote.title
+        and existing.description == remote.description
+        and existing.start_utc == remote.start_utc
+        and existing.end_utc == remote.end_utc
+        and existing.timezone == (remote.timezone or calendar.time_zone)
+        and existing.all_day == remote.all_day
+        and existing.status == EventStatus.confirmed
+        and existing.recurring_event_id == remote.recurring_event_id
+        and existing.provider_updated_at == remote.provider_updated_at
+    ):
+        return  # nada mudou — um sync completo relia (e regravava) o calendário inteiro à toa
 
     existing.user_id = existing.user_id or user_id  # backfill se o evento foi sincronizado antes da conexão ter dono
     existing.title = remote.title
@@ -306,8 +236,17 @@ async def sync_calendar(
         time_min, time_max = _bounds()
         page = await provider.list_events(tokens, remote_calendar, time_min=time_min, time_max=time_max)
 
-    for remote_event in page.events:
-        _reconcile_event(db, calendar, user_id, remote_event, now)
+    def _reconcile_page() -> None:
+        for remote_event in page.events:
+            _reconcile_event(db, calendar, user_id, remote_event, now)
+
+    # Um sync completo (primeira vez, ou token expirado) traz centenas de
+    # eventos e cada um faz consulta + commit em SQLite. Direto na coroutine,
+    # isso segurava o único event loop do processo — o app inteiro (modais,
+    # sidebar, outros usuários) ficava travado enquanto o Google sincronizava.
+    # Mesmo padrão de `asyncio.to_thread` que o scheduler já usa; o mesmo `db`
+    # é usado de forma sequencial (nunca concorrente), então é seguro.
+    await asyncio.to_thread(_reconcile_page)
 
     calendar.sync_token = page.next_sync_token
     calendar.updated_at = now

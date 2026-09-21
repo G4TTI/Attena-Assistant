@@ -1,141 +1,68 @@
+{% from "_components.html" import contact_picker, whatsapp_picker, message_sequence_editor, time_offset_picker, icon %}
+{% set is_edit = automation_id is not none and automation_id != '' %}
+{% set rule = prefill.rule if prefill else {'direction': 'before', 'interval_value': default_interval_value, 'custom_interval': '', 'custom_time': ''} %}
 <div class="modal-backdrop">
   <div class="modal modal-lg">
     <div class="modal-hd">
       <div>
-        <h2>{{ 'Editar automação' if prefill else 'Adicionar automação' }}</h2>
+        <h2>{{ 'Editar automação' if is_edit else 'Adicionar automação' }}</h2>
         <p class="sub">Evento: {{ event.title }} · {{ start_local.strftime('%d/%m/%Y') }} às {{ start_local.strftime('%H:%M') }}</p>
       </div>
-      <button type="button" class="icon-btn ghost sm" onclick="closeModal()">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-      </button>
+      <button type="button" class="icon-btn ghost sm" aria-label="Fechar" onclick="closeModal()">{{ icon('x', 13) }}</button>
     </div>
-    <form class="automation-form"
-          hx-post="{{ '/ui/calendario/automations/' ~ prefill.automation_id if prefill else '/ui/calendario/events/' ~ event.id ~ '/automation' }}"
+    <form class="automation-form schedule-form"
+          hx-post="{{ '/ui/calendario/automations/' ~ automation_id if is_edit else '/ui/calendario/events/' ~ event.id ~ '/automation' }}"
           hx-target="#modal-root" hx-swap="innerHTML"
-          data-event-start="{{ start_local.isoformat() }}" data-message-gap="3">
+          data-event-start="{{ start_local.isoformat() }}"
+          oninput="updateFormSummary(this)" onchange="updateFormSummary(this)">
       <input type="hidden" name="year" value="{{ year }}">
       <input type="hidden" name="month" value="{{ month }}">
-      <div class="modal-bd">
-        {% if form_error %}<div class="alert err" style="margin-bottom:14px">{{ form_error }}</div>{% endif %}
+      <div class="modal-bd" style="display:flex;flex-direction:column;gap:16px">
+        {% if form_error %}<div class="alert err">{{ form_error }}</div>{% endif %}
 
-        {% set prefill_ids = (prefill.recipient_chat_ids if prefill else []) %}
-        {% set contact_ids = (contacts | map(attribute='id') | list) if contacts else [] %}
-        {% set palette = ['', 'bg-c1', 'bg-c2', 'bg-c3', 'bg-c4'] %}
-
-        <div class="field full" style="margin-bottom:16px">
+        <div class="field full">
           <label>Destinatário(s)</label>
-          <div class="contact-picker">
-            <div class="contact-search-wrap">
-              <div class="contact-search">
-                <span class="contact-search-icon">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
-                </span>
-                <input type="text" placeholder="Pesquisar contato…" oninput="contactPickerFilter(this)" onfocus="contactPopoverOpen(this)">
-              </div>
-              <div class="contact-popover" hidden>
-                {% if contacts_error %}
-                <p class="contact-empty">Não consegui carregar seus contatos do WhatsApp ({{ contacts_error }}) — digite o número manualmente abaixo.</p>
-                {% elif contacts %}
-                  {% for contact in contacts %}
-                  <label class="contact-option" data-name="{{ contact.name }}" data-phone="{{ contact.id.split('@')[0] }}">
-                    <input type="checkbox" value="{{ contact.id }}" data-name="{{ contact.name }}"
-                           {{ 'checked' if contact.id in prefill_ids else '' }}
-                           onchange="contactPickerToggle(this)">
-                    <span class="avatar {{ palette[loop.index0 % (palette | length)] }}">{{ (contact.name or '?')[0] | upper }}{% if contact.picture %}<img src="{{ contact.picture }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}</span>
-                    <span class="contact-option-info">
-                      <span class="contact-option-name">{{ contact.name }}{% if contact.is_group %} <span class="muted">· grupo</span>{% endif %}</span>
-                      <span class="contact-option-phone">+{{ contact.id.split('@')[0] }}</span>
-                    </span>
-                  </label>
-                  {% endfor %}
-                  <p class="contact-empty" hidden>Nenhum contato encontrado.</p>
-                {% else %}
-                <p class="contact-empty">Nenhuma conversa encontrada — digite o número manualmente abaixo.</p>
-                {% endif %}
-              </div>
-            </div>
-            <input type="text" placeholder="+55 11 99999-8888 (Enter pra adicionar)" onkeydown="contactPickerAddManual(this, event)">
-            <div class="chip-list"></div>
-            <div class="recipients-hidden" hidden>
-              {% if prefill %}
-                {% for cid in prefill_ids %}
-                  {% if cid not in contact_ids %}
-                  <input type="hidden" name="recipients" value="{{ cid }}" data-label="{{ prefill.recipient_labels.get(cid, cid) }}">
-                  {% endif %}
-                {% endfor %}
-              {% endif %}
-            </div>
-          </div>
+          {{ contact_picker(prefill.recipients if prefill else [], selected_whatsapp_session_id) }}
         </div>
 
-        <div class="field full" style="margin-bottom:16px">
+        <div class="field full">
           <label>Mensagens</label>
-          <div class="message-composer">
-            <div class="message-list">
-              {% set message_texts = prefill.messages if prefill else [''] %}
-              {% for text in message_texts %}
-              <div class="message-block">
-                <div class="message-block-hd">
-                  <span class="msg-num">{{ loop.index }}</span>
-                  <span class="field-label">Mensagem</span>
-                  <button type="button" class="icon-btn sq msg-move-up" title="Mover pra cima" onclick="moveMessageBlock(this, -1)">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>
-                  </button>
-                  <button type="button" class="icon-btn sq msg-move-down" title="Mover pra baixo" onclick="moveMessageBlock(this, 1)">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg>
-                  </button>
-                  <button type="button" class="icon-btn sq cancel" title="Excluir mensagem" onclick="removeMessageBlock(this)">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M10 11v6M14 11v6"></path><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
-                  </button>
-                </div>
-                <textarea name="messages" required maxlength="4096" placeholder="Texto que será enviado…">{{ text }}</textarea>
-              </div>
-              {% endfor %}
-            </div>
-            <button type="button" class="ghost" style="margin-top:10px" onclick="addMessageBlock(this)">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><path d="M12 5v14M5 12h14"></path></svg>
-              Adicionar mensagem
-            </button>
-          </div>
+          {{ message_sequence_editor(prefill.messages if prefill else ['']) }}
         </div>
 
-        <div class="form-grid">
-          <div class="field">
-            <label for="au_dir">Quando enviar</label>
-            <select id="au_dir" name="offset_direction" onchange="toggleAutomationTimingMode(this.form); updateAutomationPreview(this.form)">
-              <option value="before" {{ 'selected' if not prefill or prefill.offset_direction == 'before' }}>Antes do evento</option>
-              <option value="at" {{ 'selected' if prefill and prefill.offset_direction == 'at' }}>No momento do evento</option>
-              <option value="after" {{ 'selected' if prefill and prefill.offset_direction == 'after' }}>Depois do evento</option>
-              <option value="custom" {{ 'selected' if prefill and prefill.offset_direction == 'custom' }}>Personalizado</option>
-            </select>
-          </div>
-          <div class="field" id="au_interval_field">
-            <label for="au_interval">Intervalo</label>
-            {% set current = (prefill.offset_amount ~ ':' ~ prefill.offset_unit) if prefill else '2:hours' %}
-            <select id="au_interval" name="offset_interval" onchange="updateAutomationPreview(this.form)">
-              {% for value, label in [
-                ('5:minutes','5 minutos'), ('10:minutes','10 minutos'), ('15:minutes','15 minutos'), ('30:minutes','30 minutos'),
-                ('1:hours','1 hora'), ('2:hours','2 horas'), ('3:hours','3 horas'), ('6:hours','6 horas'), ('12:hours','12 horas'),
-                ('1:days','1 dia'), ('2:days','2 dias'), ('3:days','3 dias'), ('1:weeks','1 semana'),
-              ] %}
-              <option value="{{ value }}" {{ 'selected' if value == current }}>{{ label }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="field" id="au_custom_time_field" hidden>
-            <label for="au_custom_time">Horário do disparo</label>
-            <input type="time" id="au_custom_time" name="custom_time"
-                   value="{{ prefill.custom_time_local if prefill and prefill.custom_time_local else '' }}"
-                   onchange="updateAutomationPreview(this.form)">
-          </div>
+        <div class="field full">
+          <label for="au_wa">Enviar através de</label>
+          {{ whatsapp_picker('au_wa', whatsapp_sessions, selected_whatsapp_session_id) }}
         </div>
 
-        <p class="hint" id="au_custom_warning" hidden style="color:var(--warn);margin-top:10px">
-          ⚠️ O horário personalizado está depois do horário do evento.
-        </p>
+        {{ time_offset_picker(rule, interval_presets, '/ui/calendario/events/' ~ event.id ~ '/automation-preview') }}
 
-        <div class="automation-preview" style="margin-top:16px">
-          <div>Disparo <span class="automation-preview-value">—</span></div>
+        {% if not is_edit %}
+        <div class="field full">
+          <label for="au_repeat">Repetir esta automação em eventos iguais?</label>
+          {# Buscar "eventos iguais" varre o calendário inteiro do usuário —
+             caro pra quem tem muita coisa marcada, e a maioria nunca usa
+             isto. Escolher "Sim" abre uma caixa (com a bolinha de
+             carregamento) e só então ela busca as datas em que o evento se
+             repete — ver ui_calendario_similar_events. #}
+          <select id="au_repeat" name="repeat_choice"
+                  hx-get="/ui/calendario/events/{{ event.id }}/similar-events"
+                  hx-trigger="change"
+                  hx-target="#similar-events-panel" hx-swap="innerHTML">
+            <option value="nao" selected>Não</option>
+            <option value="sim">Sim</option>
+          </select>
+          <div id="similar-events-panel" style="margin-top:8px"></div>
+        </div>
+        {% endif %}
+
+        <div class="automation-preview">
+          <div>Disparo
+            {# Horário calculado pelo SERVIDOR (timing.py) — o mesmo cálculo que grava o agendamento. #}
+            <span class="automation-preview-body"
+                  hx-get="/ui/calendario/events/{{ event.id }}/automation-preview" hx-trigger="load"
+                  hx-include="#au_dir,#au_interval,#au_custom_interval,#au_custom_time" hx-target="this" hx-swap="innerHTML">—</span>
+          </div>
           <div class="automation-preview-summary"></div>
         </div>
       </div>
@@ -146,31 +73,18 @@
     </form>
   </div>
 </div>
-<template id="message-block-template">
-  <div class="message-block">
-    <div class="message-block-hd">
-      <span class="msg-num">•</span>
-      <span class="field-label">Mensagem</span>
-      <button type="button" class="icon-btn sq msg-move-up" title="Mover pra cima" onclick="moveMessageBlock(this, -1)">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>
-      </button>
-      <button type="button" class="icon-btn sq msg-move-down" title="Mover pra baixo" onclick="moveMessageBlock(this, 1)">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg>
-      </button>
-      <button type="button" class="icon-btn sq cancel" title="Excluir mensagem" onclick="removeMessageBlock(this)">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M10 11v6M14 11v6"></path><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
-      </button>
-    </div>
-    <textarea name="messages" required maxlength="4096" placeholder="Texto que será enviado…"></textarea>
-  </div>
-</template>
 <script>
   (function(){
     var form = document.querySelector('.automation-form');
-    var picker = document.querySelector('.contact-picker');
-    var list = document.querySelector('.message-list');
-    if (picker) syncContactChips(picker);
+    var picker = form && form.querySelector('.contact-picker');
+    var list = form && form.querySelector('.message-list');
+    if (picker) renderChips(picker);
     if (list) renumberMessages(list);
-    if (form) { toggleAutomationTimingMode(form); updateAutomationPreview(form); }
+    if (form) {
+      var wa = form.querySelector('#au_wa');
+      if (wa) updateWhatsappHint(wa);
+      offsetPickerChanged(form);
+      updateFormSummary(form);
+    }
   })();
 </script>

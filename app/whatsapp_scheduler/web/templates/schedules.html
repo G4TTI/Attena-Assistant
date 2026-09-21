@@ -12,66 +12,14 @@
   </div>
 </div>
 
-{% if error %}<div class="alert err">{{ error }}</div>{% endif %}
-{% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
-
-<div class="card form-card">
-  <div class="card-hd">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
-    <h2>Novo agendamento</h2>
+{# Telas largas: formulário à esquerda, lista à direita (sem faixa vazia); nas menores, empilhados. #}
+<div class="sched-page">
+  <div class="sched-col-form">
+    {% include "_schedule_form.html" %}
   </div>
-  <form method="post" action="/ui/schedules">
-    <div class="card-bd form-grid">
-      <div class="field">
-        <label for="recipient">Destinatário</label>
-        <input id="recipient" name="recipient" required placeholder="+55 11 99999-8888 ou 5511...@c.us">
-      </div>
-      <div class="field">
-        <label for="send_at">Primeiro envio</label>
-        <input id="send_at" name="send_at" type="datetime-local" required>
-      </div>
-      <div class="field full">
-        <label for="text">Mensagem</label>
-        <textarea id="text" name="text" required maxlength="4096" placeholder="Texto que será enviado..."></textarea>
-      </div>
-      <div class="subgrid">
-        <div class="field">
-          <label for="timezone">Timezone</label>
-          <input id="timezone" name="timezone" list="tzlist" value="{{ default_timezone }}">
-          <datalist id="tzlist">
-            <option value="America/Sao_Paulo"><option value="America/Manaus">
-            <option value="America/Recife"><option value="America/Cuiaba">
-            <option value="UTC"><option value="Europe/Lisbon"><option value="America/New_York">
-          </datalist>
-        </div>
-        <div class="field">
-          <label for="recurrence">Recorrência <b>(vazio = uma vez)</b></label>
-          <input id="recurrence" name="recurrence" list="reclist" placeholder="ex: daily 09:00">
-          <datalist id="reclist">
-            <option value="daily 09:00"><option value="weekly mon 08:30">
-            <option value="monthly 1 12:00"><option value="hourly">
-            <option value="0 9 * * 1-5">
-          </datalist>
-        </div>
-        <div class="field">
-          <label for="max_attempts">Tentativas</label>
-          <input id="max_attempts" name="max_attempts" type="number" min="1" max="10" value="3">
-        </div>
-      </div>
-    </div>
-    <div class="card-ft">
-      <p class="hint">
-        Recorrência aceita <code>cron</code> de 5 campos ou os atalhos
-        <code>daily HH:MM</code>, <code>weekly &lt;dia&gt; HH:MM</code>,
-        <code>monthly &lt;D&gt; HH:MM</code>, <code>hourly</code>.
-      </p>
-      <button type="submit">Agendar</button>
-    </div>
-  </form>
-</div>
-
-<div hx-get="/ui/schedules" hx-trigger="every 15s" hx-target="#schedules-table" hx-swap="outerHTML">
-  {% include "_table.html" %}
+  <div class="sched-col-list" hx-get="/ui/schedules" hx-trigger="every 15s" hx-target="#schedules-table" hx-swap="outerHTML" data-pause-when-hidden>
+    {% include "_table.html" %}
+  </div>
 </div>
 
 <script>

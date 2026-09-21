@@ -1,0 +1,177 @@
+{#
+  Componentes reutilizáveis dos formulários de agendamento — a MESMA experiência
+  em Agendamentos, Conversas e Calendário (automações). Importe com:
+
+      {% from "_components.html" import contact_picker, ... %}
+
+  O comportamento (busca, chips, adicionar/mover mensagens, preview) fica em
+  base.html (seção "Componentes de agendamento"); aqui só a marcação.
+#}
+
+{# ---------------- Ícones (mesmo estilo dos demais: traço, currentColor) ---------------- #}
+{% macro icon(name, size=14) -%}
+{%- if name == 'clock' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
+{%- elif name == 'hourglass' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12M6 21h12"></path><path d="M7 3c0 5 5 6 5 9s-5 4-5 9M17 3c0 5-5 6-5 9s5 4 5 9"></path></svg>
+{%- elif name == 'check' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"></path></svg>
+{%- elif name == 'alert' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z"></path><path d="M12 10v4.5M12 17.6h.01"></path></svg>
+{%- elif name == 'circle' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle></svg>
+{%- elif name == 'plus' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+{%- elif name == 'search' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+{%- elif name == 'x' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+{%- elif name == 'up' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>
+{%- elif name == 'down' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg>
+{%- elif name == 'trash' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"></path><path d="M10 11v6M14 11v6"></path><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
+{%- elif name == 'edit' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+{%- endif -%}
+{%- endmacro %}
+
+{# Ícone de status de uma MENSAGEM: scheduled 🕐 · sending ⏳ · sent ✓ · failed/skipped ⚠ · canceled ○ #}
+{% macro status_icon(status, size=13) -%}
+{%- if status == 'scheduled' %}{{ icon('clock', size) }}
+{%- elif status == 'sending' %}{{ icon('hourglass', size) }}
+{%- elif status == 'sent' %}{{ icon('check', size) }}
+{%- elif status in ('failed', 'skipped') %}{{ icon('alert', size) }}
+{%- else %}{{ icon('circle', size) }}
+{%- endif -%}
+{%- endmacro %}
+
+{# ---------------- Seletor de contatos: busca + foto + número manual + chips ---------------- #}
+{# recipients: lista de {value, label} já selecionados (edição / formulário reexibido com erro).
+   session_id: WhatsApp cuja lista de contatos aparece (recarrega quando o seletor "Enviar através de" muda). #}
+{% macro contact_picker(recipients, session_id) %}
+<div class="contact-picker" data-contacts-url="/ui/calendario/contacts">
+  <div class="contact-search-wrap">
+    <div class="contact-search">
+      <span class="contact-search-icon">{{ icon('search', 14) }}</span>
+      <input type="text" class="contact-search-input" placeholder="Pesquisar contato ou digitar um número…"
+             autocomplete="off" inputmode="search" enterkeyhint="done" aria-label="Pesquisar contato ou digitar um número"
+             oninput="contactPickerFilter(this)" onfocus="contactPopoverOpen(this)" onclick="contactPopoverOpen(this)"
+             onkeydown="contactPickerKeydown(this, event)">
+    </div>
+    {# Os contatos vêm do WAHA (rede) — carregados à parte, depois que o resto do
+       formulário já apareceu, pra abrir a tela nunca esperar por isso. Reusa o
+       mesmo endpoint e a mesma foto (`picture`) do Calendário. #}
+    <div class="contact-popover" hidden
+         hx-get="/ui/calendario/contacts?whatsapp_session_id={{ session_id or '' }}{% for r in recipients %}&prefill_id={{ r.value | urlencode }}{% endfor %}"
+         hx-trigger="load, reload" hx-target="this" hx-swap="innerHTML">
+      <p class="contact-empty">Carregando contatos…</p>
+    </div>
+  </div>
+  <div class="chip-list"></div>
+  <div class="recipients-hidden" hidden>
+    {% for r in recipients %}
+    <span class="rc-item" data-value="{{ r.value }}" data-label="{{ r.label or r.value }}">
+      <input type="hidden" name="recipients" value="{{ r.value }}">
+      <input type="hidden" name="recipient_names" value="{{ r.label or '' }}">
+    </span>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}
+
+{# ---------------- Seletor "Enviar através de" (status ao vivo, só do usuário) ---------------- #}
+{% macro whatsapp_picker(id, sessions, selected_id) %}
+<select id="{{ id }}" name="whatsapp_session_id" required class="wa-picker"
+        onchange="whatsappPickerChanged(this)"
+        hx-get="/ui/whatsapp-picker-options?selected={{ selected_id or '' }}&control={{ id }}"
+        hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+  {% if not sessions %}
+  <option value="" disabled selected>Nenhum WhatsApp conectado</option>
+  {% endif %}
+  {% for wa in sessions %}
+  <option value="{{ wa.id }}" {{ 'selected' if wa.id == selected_id }}>{{ wa.name }}</option>
+  {% endfor %}
+</select>
+<p class="hint wa-hint" id="{{ id }}-hint" {% if sessions %}hidden{% endif %}>
+  {% if not sessions %}Nenhum WhatsApp conectado — <a href="/configuracoes?tab=conexoes">conecte um</a> antes de agendar.{% endif %}
+</p>
+{% endmacro %}
+
+{# ---------------- Lista de mensagens: adicionar / editar / excluir / ordenar ---------------- #}
+{% macro _message_block(text='', number='•') %}
+<div class="message-block">
+  <div class="message-block-hd">
+    <span class="msg-num">{{ number }}</span>
+    <span class="field-label">Mensagem</span>
+    <button type="button" class="icon-btn sq msg-move-up" title="Mover pra cima" aria-label="Mover pra cima" onclick="moveMessageBlock(this, -1)">{{ icon('up', 13) }}</button>
+    <button type="button" class="icon-btn sq msg-move-down" title="Mover pra baixo" aria-label="Mover pra baixo" onclick="moveMessageBlock(this, 1)">{{ icon('down', 13) }}</button>
+    <button type="button" class="icon-btn sq cancel" title="Excluir mensagem" aria-label="Excluir mensagem" onclick="removeMessageBlock(this)">{{ icon('trash', 13) }}</button>
+  </div>
+  <textarea name="messages" required maxlength="4096" placeholder="Texto que será enviado…">{{ text }}</textarea>
+</div>
+{% endmacro %}
+
+{% macro message_sequence_editor(messages) %}
+<div class="message-composer">
+  <div class="message-list">
+    {% for text in (messages or ['']) %}{{ _message_block(text, loop.index) }}{% endfor %}
+  </div>
+  <template class="message-block-template">{{ _message_block('', '•') }}</template>
+  <button type="button" class="ghost add-message-btn" onclick="addMessageBlock(this)">{{ icon('plus', 14) }} Adicionar mensagem</button>
+</div>
+{% endmacro %}
+
+{# ---------------- Data + horário (o INÍCIO da sequência; nunca é resetado sozinho) ---------------- #}
+{% macro schedule_datetime_picker(id, date_value, time_value, min_date='', tz_caption='') %}
+<div class="dt-picker">
+  <div class="dt-field">
+    <label for="{{ id }}_date" class="sr-only">Data do envio</label>
+    <input type="date" id="{{ id }}_date" name="send_date" value="{{ date_value }}" {% if min_date %}min="{{ min_date }}"{% endif %} required>
+  </div>
+  <div class="dt-field">
+    <label for="{{ id }}_time" class="sr-only">Horário do envio</label>
+    <input type="time" id="{{ id }}_time" name="send_time" value="{{ time_value }}" step="60" required>
+  </div>
+</div>
+{% if tz_caption %}<p class="tz-caption">Fuso horário: {{ tz_caption }}</p>{% endif %}
+{% endmacro %}
+
+{# ---------------- Regra de tempo relativa ao evento (antes/no momento/depois + intervalo) ---------------- #}
+{# rule: {direction, interval_value, custom_interval, custom_time}; o preview sai do SERVIDOR (timing.py). #}
+{% macro time_offset_picker(rule, presets, preview_url) %}
+<div class="form-grid offset-grid"
+     data-preview-url="{{ preview_url }}">
+  <div class="field">
+    <label for="au_dir">Quando enviar</label>
+    <select id="au_dir" name="offset_direction" onchange="offsetPickerChanged(this.form)">
+      <option value="before" {{ 'selected' if rule.direction == 'before' }}>Antes do evento</option>
+      <option value="at" {{ 'selected' if rule.direction == 'at' }}>No momento do evento</option>
+      <option value="after" {{ 'selected' if rule.direction == 'after' }}>Depois do evento</option>
+      <option value="custom" {{ 'selected' if rule.direction == 'custom' }}>Horário fixo no dia do evento</option>
+    </select>
+  </div>
+  <div class="field" id="au_interval_field">
+    <label for="au_interval">Intervalo</label>
+    <select id="au_interval" name="offset_interval" onchange="offsetPickerChanged(this.form)">
+      {% for value, label in presets %}
+      <option value="{{ value }}" {{ 'selected' if rule.interval_value == value }}>{{ label }}</option>
+      {% endfor %}
+      <option value="custom" {{ 'selected' if rule.interval_value == 'custom' }}>Personalizado…</option>
+    </select>
+  </div>
+  <div class="field" id="au_custom_interval_field" hidden>
+    <label for="au_custom_interval">Intervalo personalizado <b>(horas:minutos)</b></label>
+    <input type="text" id="au_custom_interval" name="custom_interval" value="{{ rule.custom_interval or '' }}"
+           placeholder="HH:MM — ex.: 1:45" inputmode="numeric" autocomplete="off" maxlength="6"
+           oninput="offsetPickerChanged(this.form, true)">
+    <p class="field-error" id="au_custom_interval_error" hidden></p>
+  </div>
+  <div class="field" id="au_custom_time_field" hidden>
+    <label for="au_custom_time">Horário do disparo</label>
+    <input type="time" id="au_custom_time" name="custom_time" value="{{ rule.custom_time or '' }}"
+           onchange="offsetPickerChanged(this.form)">
+  </div>
+</div>
+{% endmacro %}

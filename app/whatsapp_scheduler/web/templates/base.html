@@ -68,8 +68,9 @@
     /* ---------------- Rail nav ---------------- */
     .rail { width:64px; flex-shrink:0; background:var(--rail); border-right:1px solid var(--rail); display:flex; flex-direction:column; align-items:center; padding:14px 0 12px; gap:6px; position:sticky; top:0; height:100vh; overflow:hidden; transition:width 200ms ease; }
     .rail:hover, .rail:focus-within { width:232px; align-items:stretch; padding-left:11px; padding-right:11px; }
-    .rail-brand-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-shrink:0; }
-    .rail-brand { width:34px; height:34px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .rail-brand-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-shrink:0; width:42px; overflow:hidden; }
+    .rail:hover .rail-brand-row, .rail:focus-within .rail-brand-row { width:100%; }
+    .rail-brand { width:42px; height:42px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
     .rail-brand-word { display:flex; flex-direction:column; gap:1px; overflow:hidden; white-space:nowrap; opacity:0; max-width:0; transition:opacity 150ms ease, max-width 200ms ease; }
     .rail:hover .rail-brand-word, .rail:focus-within .rail-brand-word { opacity:1; max-width:160px; }
     .rail-brand-name { font-family:var(--font-display); font-size:19px; line-height:1; letter-spacing:-.01em; color:#F7F5F0; }
@@ -98,6 +99,12 @@
     .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; flex-wrap:wrap; }
     .meta-live { display:flex; align-items:center; gap:8px; color:var(--mut); font-size:13px; flex-shrink:0; }
     .meta-live svg { flex-shrink:0; }
+
+    /* ---------------- Abas ---------------- */
+    .tabbar { display:flex; gap:4px; border-bottom:1px solid var(--bd); margin-bottom:4px; }
+    .tabbar-btn { background:none; border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 4px; margin-right:20px; font-weight:600; font-size:14px; color:var(--mut); cursor:pointer; }
+    .tabbar-btn:hover { color:var(--fg); background:none; }
+    .tabbar-btn.active { color:var(--accent-d); border-bottom-color:var(--accent-d); }
 
     /* ---------------- Cards ---------------- */
     .card { background:var(--card); border:1px solid var(--bd); border-radius:14px; box-shadow:var(--sh); }
@@ -149,9 +156,13 @@
     .alert.ok { background:var(--soft); border:1px solid color-mix(in oklab, var(--accent-d) 35%, transparent); color:var(--accent-d); }
     .muted { color:var(--mut); font-size:.82rem; }
     code { font-family:var(--font-mono); background:var(--bg); border:1px solid var(--bd); padding:1px 5px; border-radius:4px; font-size:12px; }
-    .qr { width:100%; border-radius:8px; background:#fff; display:block; }
-    .htmx-request .hide-loading { display:none; }
-    .spin { display:none; } .htmx-request .spin { display:inline; }
+    .qr { width:100%; aspect-ratio:1/1; border-radius:8px; background:#fff; display:block; }
+    .qr:not([src]) { color:transparent; }
+    /* "gerando…" só durante o pedido do PRÓPRIO botão/form. Contêineres de polling (`data-poll`) também
+       ganham a classe htmx-request a cada consulta (a cada 3s) e, sem a exceção, o texto de todo botão
+       dentro deles trocava sozinho — era o botão "Gerar novo QR" piscando. */
+    .htmx-request:not([data-poll]) .hide-loading { display:none; }
+    .spin { display:none; } .htmx-request:not([data-poll]) .spin { display:inline; }
 
     /* ---------------- Sessão ---------------- */
     .status-row { display:flex; align-items:center; gap:10px; }
@@ -184,8 +195,8 @@
 
     /* ---------------- Calendário: grade mensal ---------------- */
     .cal-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .month-nav { display:flex; align-items:center; gap:6px; margin-bottom:14px; }
-    .month-nav-label { margin:0 0 0 8px; font-size:17px; font-weight:600; text-transform:capitalize; }
+    .month-nav { display:flex; align-items:center; gap:6px 10px; margin-bottom:14px; flex-wrap:wrap; }
+    .month-nav-label { margin:0 0 0 8px; font-size:17px; font-weight:600; text-transform:capitalize; white-space:nowrap; }
     .cal-filter-wrap { position:relative; }
     .cal-filter-panel { position:absolute; top:calc(100% + 6px); left:0; z-index:20; width:220px; background:var(--card); border:1px solid var(--bd); border-radius:12px; box-shadow:0 12px 34px rgba(11,20,26,.18); padding:8px 10px; }
 
@@ -212,6 +223,20 @@
       .month-day { min-height:72px; padding:4px; }
       .chip-title { display:none; }
       .month-grid-hd { font-size:9.5px; }
+    }
+
+    /* ---------------- Calendário: visão diária ---------------- */
+    .day-hours { display:flex; flex-direction:column; }
+    .day-hour-row { display:flex; align-items:center; gap:12px; height:32px; flex-shrink:0; }
+    .day-hour-label { width:48px; flex-shrink:0; font-family:var(--font-mono); font-size:11px; color:var(--mut); text-align:right; }
+    .day-hour-line { flex:1; border-top:1px solid var(--bd); }
+    .day-event-card { display:flex; align-items:center; gap:10px; width:100%; text-align:left; margin:2px 0 2px 60px; padding:8px 12px; border:1px solid var(--bd); border-left:3px solid var(--accent-d); border-radius:9px; background:var(--soft); font:inherit; cursor:pointer; max-width:calc(100% - 60px); }
+    .day-event-card:hover { filter:brightness(0.97); }
+    .day-event-card.external { border-left-color:#6f8fae; background:color-mix(in oklab, #6f8fae 14%, transparent); }
+    .day-event-title { font-weight:600; font-size:13.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    @media (max-width:720px){
+      .day-event-card { flex-wrap:wrap; margin-left:44px; max-width:calc(100% - 44px); }
+      .day-hour-label { width:36px; }
     }
 
     .badge-source { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:500; letter-spacing:.02em; color:var(--accent-d); background:var(--soft); flex-shrink:0; }
@@ -279,9 +304,17 @@
     .calendar-check-item:last-child { border-bottom:0; }
     .calendar-check-item input[type=checkbox] { width:16px; height:16px; flex-shrink:0; accent-color:var(--accent); }
     .calendar-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+    .htmx-indicator { opacity:0; }
+    .htmx-request.htmx-indicator, .htmx-request .htmx-indicator { opacity:1; }
+    .spinner-row { display:inline-flex; align-items:center; gap:8px; color:var(--mut); font-size:12.5px; margin-top:8px; }
+    .spinner-dot { width:14px; height:14px; border-radius:50%; flex-shrink:0; display:inline-block; border:2px solid currentColor; border-top-color:transparent; opacity:.85; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .repeat-box { border:1px solid var(--bd); border-radius:10px; padding:12px 14px; background:var(--soft); }
+    .repeat-box-title { margin:0 0 4px; font-size:13.5px; font-weight:600; }
 
     /* ---------------- Conversas ---------------- */
     .chatwrap { flex:1; display:flex; min-width:0; height:100vh; }
+    .icon-btn.mobile-back { display:none; }
 
     .chat-list-pane { width:340px; flex-shrink:0; border-right:1px solid var(--bd); display:flex; flex-direction:column; background:var(--card); }
     .chat-list-head { padding:16px 18px; display:flex; justify-content:space-between; align-items:center; }
@@ -401,16 +434,169 @@
 
     @media (max-width: 720px) {
       .layout { flex-direction:column; }
-      .rail { width:auto; height:auto; position:sticky; flex-direction:row; padding:8px 12px; gap:4px; }
+      .rail { --rail-item:42px; width:auto; height:56px; position:sticky; top:0; z-index:30; flex-direction:row; align-items:center; padding:8px 12px; gap:4px; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+      .rail::-webkit-scrollbar { display:none; }
       /* Sem hover em telas de toque — a rail vira uma barra horizontal fixa,
-         não expande (o mecanismo hover/:focus-within é coisa de desktop). */
+         não expande (o mecanismo hover/:focus-within é coisa de desktop). Tocar num
+         ícone dá foco à barra (:focus-within), então TUDO que o desktop expande no
+         hover/foco precisa ser neutralizado aqui: botões, rótulos e a marca (logo +
+         nome), senão o nome do app ocupa a barra toda e empurra os ícones pra fora. */
       .rail:hover, .rail:focus-within { width:auto; align-items:center; padding-left:12px; padding-right:12px; }
-      .rail:hover .rail-btn, .rail:focus-within .rail-btn { width:42px; }
+      .rail-btn, .rail-icon, .rail-brand,
+      .rail:hover .rail-btn, .rail:focus-within .rail-btn { width:var(--rail-item); height:var(--rail-item); }
+      .rail-brand-row, .rail:hover .rail-brand-row, .rail:focus-within .rail-brand-row { width:var(--rail-item); margin:0 6px 0 0; }
+      .rail:hover .rail-brand-word, .rail:focus-within .rail-brand-word { opacity:0; max-width:0; }
       .rail:hover .rail-label, .rail:focus-within .rail-label { opacity:0; max-width:0; }
-      .rail-brand { margin:0 8px 0 0; }
+      .rail-status { width:var(--rail-item); }
       .rail-spacer { display:none; }
       .content, .content.flush { height:auto; max-width:none; padding:20px 16px 48px; }
       .chat-list-pane { width:100%; }
+      .chatwrap { flex:none; min-height:0; height:calc(100vh - 56px); height:calc(100dvh - 56px); }
+      .chat-pane { display:none; height:100%; width:100%; }
+      .chatwrap.chat-open .chat-list-pane { display:none; }
+      .chatwrap.chat-open .chat-pane { display:flex; }
+      .icon-btn.mobile-back { display:flex; }
+      .chat-header { padding:9px 10px; gap:8px; }
+    }
+
+    /* ---------------- Componentes de agendamento (compartilhados) ---------------- */
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    .tz-caption { margin:6px 0 0; font-size:12px; color:var(--mut); }
+    .field-error { margin:2px 0 0; font-size:12px; color:var(--err); }
+    .dt-picker { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:10px; }
+    .dt-field { min-width:0; }
+    input[type=date], input[type=time] { min-height:42px; min-width:0; }
+    .wa-hint { margin-top:6px; }
+    .wa-hint.warn { color:var(--warn); }
+    .wa-hint.err { color:var(--err); }
+    .rc-item { display:none; }
+    .contact-manual { display:flex; align-items:center; width:100%; margin-top:6px; padding:9px 12px; border:1px dashed var(--accent); border-radius:9px; background:var(--soft); color:var(--accent-d); font-size:13px; font-weight:600; text-align:left; }
+    .contact-manual:hover { background:var(--soft); }
+    .add-message-btn { margin-top:10px; }
+    .message-block textarea { min-width:0; }
+    .recurrence-note { margin:6px 0 0; font-size:12px; color:var(--mut); }
+
+    details.advanced { border:1px solid var(--bd); border-radius:10px; padding:0 14px; background:var(--card); }
+    details.advanced > summary { cursor:pointer; padding:11px 0; font-weight:600; font-size:13px; color:var(--mut); list-style:none; display:flex; align-items:center; gap:8px; }
+    details.advanced > summary::-webkit-details-marker { display:none; }
+    details.advanced > summary::before { content:'▸'; font-size:11px; transition:transform 120ms; }
+    details.advanced[open] > summary::before { transform:rotate(90deg); }
+    details.advanced[open] > summary { color:var(--fg); }
+    details.advanced .adv-body { padding:2px 0 14px; display:flex; flex-direction:column; gap:12px; }
+
+    .schedule-summary { background:var(--soft); border-radius:10px; padding:12px 14px; }
+    .schedule-summary .section-label { margin:0 0 8px; }
+    .summary-kv { margin:0; display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 16px; font-size:13px; }
+    .summary-kv dt { color:var(--mut); margin:0; }
+    .summary-kv dd { margin:0; overflow-wrap:anywhere; font-weight:500; }
+
+    .schedule-form { display:flex; flex-direction:column; gap:18px; }
+    .schedule-form .field > label { margin:0; }
+    .form-actions { display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
+
+    .automation-preview-body { display:inline-flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; }
+    .preview-rule { color:var(--mut); font-size:12px; }
+    .preview-warn { color:var(--warn); font-size:12px; flex-basis:100%; }
+    .preview-error { color:var(--err); font-size:12.5px; }
+    #au_custom_interval_field input, #au_custom_time_field input { max-width:220px; }
+
+    /* ---------------- Agendamentos: duas colunas em telas largas ---------------- */
+    .sched-page { display:flex; flex-direction:column; gap:24px; }
+    .sched-col-form, .sched-col-list { min-width:0; }
+    @media (min-width: 1180px) {
+      .sched-page { display:grid; grid-template-columns:minmax(440px, 600px) minmax(0, 1fr); align-items:start; gap:32px; }
+      .sched-col-form .card.form-card { max-width:none; }
+      .sched-col-list { position:sticky; top:24px; }
+    }
+
+    /* ---------------- Agendamentos: lista limpa + detalhe ---------------- */
+    .sched-card.clickable { cursor:pointer; grid-template-columns:minmax(0,1fr) auto; }
+    .sched-card.clickable:hover { border-color:var(--bd2); }
+    .sched-card.clickable:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    .sc-time { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color:var(--accent-d); font-variant-numeric:tabular-nums; }
+    .sc-time svg { flex-shrink:0; }
+    .sched-card.clickable .sc-name { margin-top:6px; }
+    .sc-lines { margin-top:2px; font-size:13px; color:var(--mut); display:flex; flex-direction:column; gap:1px; }
+    .sc-side { display:flex; align-items:center; gap:10px; justify-self:end; }
+    .pill.partial { color:var(--warn); background:color-mix(in oklab, var(--warn) 14%, transparent); }
+    .pill svg { margin-right:5px; }
+    .detail-when { font-family:var(--font-display); font-size:22px; font-weight:500; margin:2px 0 0; }
+    .detail-block { margin-top:18px; }
+    .detail-block:first-of-type { margin-top:0; }
+    .msg-detail-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+    .msg-detail-list li { display:grid; grid-template-columns:auto minmax(0,1fr); gap:4px 10px; align-items:start; padding:9px 12px; background:var(--bg); border-radius:9px; font-size:13.5px; }
+    .msg-detail-list .msg-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+    .msg-detail-list .msg-meta { grid-column:2; display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; font-size:12px; color:var(--mut); }
+    .msg-detail-list .msg-meta .msg-err { color:var(--err); }
+    .st { display:inline-flex; align-items:center; gap:4px; }
+    .st.scheduled { color:var(--warn); } .st.sending { color:#0a63c9; } .st.sent { color:var(--sent); }
+    .st.failed, .st.skipped { color:var(--err); } .st.canceled { color:var(--mut); }
+
+    /* ---------------- Conversas: mensagens agendadas dentro da conversa ---------------- */
+    #chat-history, #chat-scheduled { display:flex; flex-direction:column; gap:4px; }
+    #chat-history:empty, #chat-scheduled:empty { display:none; }
+    .sched-divider { align-self:center; margin:10px 0 4px; padding:2px 12px; border-radius:999px; background:color-mix(in oklab, var(--warn) 14%, transparent); color:var(--warn); font-size:11.5px; font-weight:600; }
+    .bubble.scheduled { border:1px dashed color-mix(in oklab, var(--warn) 55%, transparent); background:var(--bub-me); }
+    .bubble.scheduled.canceled { opacity:.65; }
+    .bubble.scheduled.canceled .text { text-decoration:line-through; }
+    .bubble.scheduled.failed, .bubble.scheduled.skipped { border-color:color-mix(in oklab, var(--err) 55%, transparent); }
+    .bubble .sched-meta { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:2px 8px; margin-top:4px; font-size:11px; color:var(--mut); }
+    .bubble .sched-meta .st { font-weight:600; }
+    .bubble .sched-meta .when { font-variant-numeric:tabular-nums; }
+    .bubble .sched-cancel { padding:0 4px; border:0; background:none; color:var(--mut); font-size:11px; font-weight:600; text-decoration:underline; cursor:pointer; }
+    .bubble .sched-cancel:hover { color:var(--err); background:none; }
+    .bubble .sched-err { flex-basis:100%; text-align:right; color:var(--err); font-size:11px; }
+    .bubble .from-schedule { display:inline-flex; align-items:center; gap:3px; margin-right:6px; color:var(--sent); }
+    .schedule-pop { max-height:calc(100vh - 150px); overflow-y:auto; overscroll-behavior:contain; }
+    .schedule-pop .message-list { max-height:34vh; overflow-y:auto; }
+    .schedule-pop .schedule-summary { margin-top:12px; padding:9px 12px; }
+    .schedule-pop .schedule-form { gap:12px; }
+
+    /* Toque: alvos maiores nos seletores */
+    @media (pointer:coarse) {
+      .contact-option { min-height:52px; padding:10px 12px; }
+      .contact-option input[type=checkbox] { width:20px; height:20px; }
+      .icon-btn.sq { width:40px; height:40px; min-width:40px; }
+      .contact-chip button { font-size:20px; padding:0 6px; }
+    }
+
+    /* ---------------- Responsivo dos formulários/modais ---------------- */
+    @media (max-width: 720px) {
+      .form-grid { grid-template-columns:minmax(0,1fr); }
+      .form-grid .subgrid { grid-template-columns:minmax(0,1fr); }
+      .card.form-card { max-width:none; }
+      .modal-backdrop { padding:0; align-items:flex-end; }
+      .modal, .modal.modal-lg { max-width:none; max-height:94vh; border-radius:16px 16px 0 0; margin:0; }
+      .modal-hd { padding:16px 16px; }
+      .modal-bd { padding:16px; }
+      .modal-ft { padding:12px 16px; }
+      .modal-ft button { flex:1 1 auto; }
+      .dt-picker { grid-template-columns:minmax(0,1fr); }
+      .contact-popover { max-height:46vh; }
+      #au_custom_interval_field input, #au_custom_time_field input { max-width:none; }
+      .page-head { align-items:flex-start; gap:10px; }
+      .sched-card.clickable { grid-template-columns:minmax(0,1fr); }
+      .sc-side { justify-self:start; }
+      .month-nav-label { white-space:normal; }
+      .cal-toolbar > * { flex:0 1 auto; }
+      .schedule-pop { position:fixed; left:0; right:0; bottom:0; width:auto; max-width:none; margin:0; border-radius:16px 16px 0 0; max-height:88vh; overflow-y:auto; z-index:60; padding:16px; }
+      .schedule-pop-ft { flex-wrap:wrap; }
+      .schedule-pop-ft button { flex:1 1 auto; }
+      .bubble { max-width:86%; }
+      .chat-scroll { padding:14px 12px; }
+    }
+    @media (max-width: 480px) {
+      /* 9 itens de 42px + espaços passam de ~434px: abaixo de 480px a barra usa ícones de 38px e cabe inteira. */
+      .rail { --rail-item:38px; padding:8px 8px; gap:2px; }
+      .rail:hover, .rail:focus-within { padding-left:8px; padding-right:8px; }
+      .rail-brand-row, .rail:hover .rail-brand-row, .rail:focus-within .rail-brand-row { margin-right:2px; }
+      .rail-status { width:30px; }
+    }
+    @media (max-width: 420px) {
+      .content, .content.flush { padding-left:14px; padding-right:14px; }
+      h1 { font-size:23px; }
+      .summary-kv { grid-template-columns:minmax(0,1fr); gap:1px; }
+      .summary-kv dd { margin-bottom:6px; }
     }
   </style>
 </head>
@@ -485,8 +671,10 @@
       var dark = effectiveTheme() === 'dark';
       var iconDark = document.getElementById('theme-icon-dark');   // lua: mostrado quando o modo escuro está ativo
       var iconLight = document.getElementById('theme-icon-light'); // sol: mostrado quando o modo claro está ativo
-      if(iconDark) iconDark.hidden = !dark;
-      if(iconLight) iconLight.hidden = dark;
+      /* toggleAttribute, não `.hidden = ...`: elementos SVG NÃO têm a propriedade `hidden` (só os HTML), então
+         atribuí-la não escondia nada e a lua ficava para sempre — o sol nunca aparecia no tema claro. */
+      if(iconDark) iconDark.toggleAttribute('hidden', !dark);
+      if(iconLight) iconLight.toggleAttribute('hidden', dark);
     }
     function toggleTheme(){
       var next = effectiveTheme() === 'dark' ? 'light' : 'dark';
@@ -495,6 +683,12 @@
       updateThemeIcon();
     }
     updateThemeIcon();
+    /* Sem tema escolhido à mão, o ícone acompanha o tema do sistema quando ele muda. */
+    if(window.matchMedia){
+      var themeMq = window.matchMedia('(prefers-color-scheme: dark)');
+      var themeMqChanged = function(){ updateThemeIcon(); };
+      if(themeMq.addEventListener) themeMq.addEventListener('change', themeMqChanged);
+    }
 
     /* ---------------- Modal genérico ---------------- */
     function closeModal(){
@@ -550,7 +744,150 @@
       if(e.target && e.target.id === 'calendar-grid') applyCalendarFilter();
     });
 
-    /* ---------------- Automação: seletor de contatos (popover + busca + chips) ---------------- */
+    /* Polling que não atropela quem está digitando. O filtro nativo do htmx
+       ("every 3s [expressão]") avalia a expressão com eval, que a CSP bloqueia:
+       o filtro era ignorado em silêncio e o poll nunca pausava (apagava o campo
+       que a pessoa estava preenchendo). Por isso o cancelamento é feito aqui,
+       por evento, sem eval. Marque o elemento que faz o polling com
+       data-pause-on-input: ele pula o ciclo se há um campo de texto focado
+       dentro dele ou se ele está escondido (ex.: outra aba de Configurações). */
+    document.body.addEventListener('htmx:beforeRequest', function(e){
+      var el = e.detail && e.detail.elt;
+      if(!el || !el.hasAttribute || !el.hasAttribute('data-pause-on-input')) return;
+      var a = document.activeElement;
+      var typing = a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+      var hiddenTab = el.hasAttribute('data-pause-when-hidden') && document.hidden;
+      if(typing || hiddenTab || el.offsetParent === null) e.preventDefault();
+    });
+
+    /* QR do WhatsApp sem piscar. O passo do onboarding e a lista de conexões se
+       atualizam a cada 3s e antes recriavam o <img> com um ?ts= novo: o navegador
+       jogava a imagem fora e baixava outra, então o QR sumia e reaparecia o tempo
+       todo (e não dava pra escanear). Agora o <img> é preservado entre as
+       atualizações (hx-preserve) e este timer troca a imagem só depois que a nova
+       já chegou, mantendo a antiga se o download falhar. O WhatsApp gira o QR a
+       cada ~20s; renovar a cada 10s mantém o da tela sempre válido. Usa data: URL
+       (a CSP permite img-src data:, mas não blob:). */
+    function loadQr(img){
+      if(img.dataset.qrLoading) return;
+      img.dataset.qrLoading = '1';
+      var url = img.getAttribute('data-qr-src') + '?ts=' + Date.now();
+      fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+        .then(function(r){ if(!r.ok) throw new Error('qr ' + r.status); return r.blob(); })
+        .then(function(b){
+          var fr = new FileReader();
+          var done = function(){ delete img.dataset.qrLoading; };
+          fr.onload = function(){
+            var data = fr.result;
+            if(data === img.getAttribute('src')) return done(); /* mesmo QR: não mexe na imagem */
+            /* Só troca depois de decodificar a nova: sem isso o navegador podia mostrar um
+               quadro em branco entre uma imagem e a outra. */
+            var pre = new Image();
+            pre.onload = function(){
+              var swap = function(){ img.src = data; done(); };
+              if(pre.decode) pre.decode().then(swap, swap); else swap();
+            };
+            pre.onerror = done;
+            pre.src = data;
+          };
+          fr.onerror = done;
+          fr.readAsDataURL(b);
+        })
+        .catch(function(){ delete img.dataset.qrLoading; /* mantém o QR que já está na tela */ });
+    }
+    function refreshQrImages(){
+      if(document.hidden) return;
+      document.querySelectorAll('img[data-qr-src]').forEach(loadQr);
+    }
+    /* O <img> vem SEM src no HTML de propósito: o htmx baixa qualquer <img> da
+       resposta antes de descartá-lo em favor do preservado, e isso era um download
+       do QR (uma chamada ao WAHA) a cada 3s por pessoa na tela. Só um elemento
+       realmente novo, sem src, é carregado aqui, assim que aparece. */
+    function loadNewQrImages(){
+      document.querySelectorAll('img[data-qr-src]:not([src])').forEach(loadQr);
+    }
+    document.body.addEventListener('htmx:load', loadNewQrImages);
+    document.addEventListener('DOMContentLoaded', loadNewQrImages);
+    setInterval(refreshQrImages, 10000);
+    document.addEventListener('visibilitychange', function(){ if(!document.hidden) refreshQrImages(); });
+
+    /* ---------------- Componentes de agendamento (Agendamentos · Conversas · Calendário) ----------------
+       As mesmas funções servem aos três: ContactPicker, WhatsAppSessionPicker, MessageSequenceEditor,
+       ScheduleDatetimePicker e TimeOffsetPicker (marcação em _components.html). Nenhuma delas calcula
+       horário: o cálculo é do servidor (timing.py). */
+    function refreshForm(el){
+      var form = el && el.closest ? el.closest('form') : null;
+      if(form) updateFormSummary(form);
+    }
+
+    /* ---- ContactPicker: busca (nome/sobrenome/número), foto, número manual, chips, sem duplicar ---- */
+    function rcKey(value){
+      var v = String(value || '').trim();
+      var head = v.indexOf('@') !== -1 ? v.split('@')[0] : v;
+      var digits = head.replace(/\D/g, '');
+      return digits || v.toLowerCase();
+    }
+    function rcItems(picker){ return picker.querySelectorAll('.recipients-hidden .rc-item'); }
+    function rcFind(picker, value){
+      var key = rcKey(value), found = null;
+      rcItems(picker).forEach(function(it){ if(!found && rcKey(it.getAttribute('data-value')) === key) found = it; });
+      return found;
+    }
+    function addRecipient(picker, value, label){
+      value = String(value || '').trim();
+      if(!value || rcFind(picker, value)) return false;
+      var item = document.createElement('span');
+      item.className = 'rc-item';
+      item.setAttribute('data-value', value);
+      item.setAttribute('data-label', label || value);
+      [['recipients', value], ['recipient_names', label || '']].forEach(function(pair){
+        var input = document.createElement('input');
+        input.type = 'hidden'; input.name = pair[0]; input.value = pair[1];
+        item.appendChild(input);
+      });
+      picker.querySelector('.recipients-hidden').appendChild(item);
+      renderChips(picker);
+      return true;
+    }
+    function removeRecipient(picker, item){
+      var value = item.getAttribute('data-value');
+      picker.querySelectorAll('.contact-option input[type=checkbox]').forEach(function(cb){
+        if(rcKey(cb.value) === rcKey(value)) cb.checked = false;
+      });
+      item.remove();
+      renderChips(picker);
+    }
+    function renderChips(picker){
+      var wrap = picker.querySelector('.chip-list');
+      wrap.innerHTML = '';
+      rcItems(picker).forEach(function(item){
+        var chip = document.createElement('span');
+        chip.className = 'contact-chip';
+        var name = document.createElement('span');
+        name.textContent = item.getAttribute('data-label') || item.getAttribute('data-value');
+        chip.appendChild(name);
+        var x = document.createElement('button');
+        x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Remover destinatário');
+        x.onclick = function(){ removeRecipient(picker, item); };
+        chip.appendChild(x);
+        wrap.appendChild(chip);
+      });
+      refreshForm(picker);
+    }
+    function contactPickerToggle(checkbox){
+      var picker = checkbox.closest('.contact-picker');
+      if(checkbox.checked){
+        addRecipient(picker, checkbox.value, checkbox.getAttribute('data-name'));
+      } else {
+        var item = rcFind(picker, checkbox.value);
+        if(item) removeRecipient(picker, item);
+      }
+    }
+    function syncContactChips(picker){ renderChips(picker); }
+    function looksLikePhone(q){
+      var digits = q.replace(/\D/g, '');
+      return /^[+\d\s().-]+$/.test(q) && digits.length >= 8 && digits.length <= 15;
+    }
     function contactPopoverOpen(input){
       var wrap = input.closest('.contact-search-wrap');
       var pop = wrap && wrap.querySelector('.contact-popover');
@@ -563,6 +900,17 @@
         if(pop) pop.hidden = true;
       });
     });
+    function contactManualRow(picker){
+      var wrap = picker.querySelector('.contact-search-wrap');
+      var row = wrap.querySelector('.contact-manual');
+      if(!row){
+        row = document.createElement('button');
+        row.type = 'button'; row.className = 'contact-manual'; row.hidden = true;
+        row.onclick = function(){ contactPickerCommitManual(picker); };
+        wrap.insertBefore(row, wrap.querySelector('.contact-popover'));
+      }
+      return row;
+    }
     function contactPickerFilter(input){
       var q = input.value.trim().toLowerCase();
       var picker = input.closest('.contact-picker');
@@ -571,85 +919,107 @@
       rows.forEach(function(row){
         var name = (row.getAttribute('data-name') || '').toLowerCase();
         var phone = (row.getAttribute('data-phone') || '').toLowerCase();
-        var match = !q || name.indexOf(q) !== -1 || phone.indexOf(q) !== -1;
+        var qDigits = q.replace(/\D/g, '');
+        var match = !q || name.indexOf(q) !== -1 || phone.indexOf(q) !== -1 || (qDigits && phone.indexOf(qDigits) !== -1);
         row.hidden = !match;
         if(match) anyVisible = true;
       });
       var empty = picker.querySelector('.contact-empty');
       if(empty) empty.hidden = anyVisible || rows.length === 0;
+      var manual = contactManualRow(picker);
+      if(looksLikePhone(input.value.trim())){
+        manual.hidden = false;
+        manual.textContent = '+ Adicionar ' + input.value.trim() + ' (Enter)';
+      } else {
+        manual.hidden = true;
+      }
     }
-    function contactPickerToggle(checkbox){
-      syncContactChips(checkbox.closest('.contact-picker'));
-    }
-    function contactPickerAddManual(input, evt){
-      if(evt.key !== 'Enter') return;
-      evt.preventDefault();
+    function contactPickerCommitManual(picker){
+      var input = picker.querySelector('.contact-search-input');
       var value = input.value.trim();
       if(!value) return;
-      addManualChip(input.closest('.contact-picker'), value);
+      addRecipient(picker, value, value);
       input.value = '';
+      contactPickerFilter(input);
     }
-    function addManualChip(picker, value, label){
-      var existing = picker.querySelectorAll('.recipients-hidden input[name="recipients"]');
-      for(var i = 0; i < existing.length; i++){ if(existing[i].value === value) return; }
-      var el = document.createElement('input');
-      el.type = 'hidden'; el.name = 'recipients'; el.value = value;
-      if(label) el.setAttribute('data-label', label);
-      picker.querySelector('.recipients-hidden').appendChild(el);
-      renderChips(picker);
-    }
-    function syncContactChips(picker){
-      picker.querySelectorAll('.recipients-hidden input[data-from-contact]').forEach(function(el){ el.remove(); });
-      picker.querySelectorAll('.contact-option input[type=checkbox]:checked').forEach(function(cb){
-        var el = document.createElement('input');
-        el.type = 'hidden'; el.name = 'recipients'; el.value = cb.value;
-        el.setAttribute('data-from-contact', '1');
-        el.setAttribute('data-label', cb.getAttribute('data-name'));
-        picker.querySelector('.recipients-hidden').appendChild(el);
-      });
-      renderChips(picker);
-    }
-    function renderChips(picker){
-      var wrap = picker.querySelector('.chip-list');
-      wrap.innerHTML = '';
-      picker.querySelectorAll('.recipients-hidden input[name="recipients"]').forEach(function(el){
-        var label = el.getAttribute('data-label') || el.value;
-        var chip = document.createElement('span');
-        chip.className = 'contact-chip';
-        chip.textContent = label + ' ';
-        var x = document.createElement('button');
-        x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'remover');
-        x.onclick = function(){ removeChip(picker, el); };
-        chip.appendChild(x);
-        wrap.appendChild(chip);
-      });
-      refreshAutomationPreview(picker);
-    }
-    function removeChip(picker, hiddenInput){
-      if(hiddenInput.hasAttribute('data-from-contact')){
-        var cb = picker.querySelector('.contact-option input[value="' + CSS.escape(hiddenInput.value) + '"]');
-        if(cb) cb.checked = false;
+    function contactPickerKeydown(input, evt){
+      if(evt.key !== 'Enter') return;
+      evt.preventDefault();
+      var picker = input.closest('.contact-picker');
+      var value = input.value.trim();
+      if(!value) return;
+      if(looksLikePhone(value)){ contactPickerCommitManual(picker); return; }
+      var visible = Array.prototype.filter.call(picker.querySelectorAll('.contact-option'), function(r){ return !r.hidden; });
+      if(visible.length === 1){
+        var cb = visible[0].querySelector('input[type=checkbox]');
+        if(cb && !cb.checked){ cb.checked = true; contactPickerToggle(cb); }
+        input.value = ''; contactPickerFilter(input);
       }
-      hiddenInput.remove();
-      renderChips(picker);
     }
+    /* A lista de contatos chega por htmx (depois do formulário): reaplica o texto já digitado na busca. */
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      var t = e.target;
+      if(!t || !t.classList || !t.classList.contains('contact-popover')) return;
+      var picker = t.closest('.contact-picker');
+      var input = picker && picker.querySelector('.contact-search-input');
+      if(input && input.value) contactPickerFilter(input);
+    });
 
-    /* ---------------- Automação: lista de mensagens (adicionar/remover/reordenar) ---------------- */
+    /* ---- WhatsAppSessionPicker: trocar o WhatsApp recarrega os contatos daquele WhatsApp ---- */
+    function whatsappPickerChanged(select){
+      var form = select.form;
+      var picker = form && form.querySelector('.contact-picker');
+      if(picker){
+        var pop = picker.querySelector('.contact-popover');
+        var url = (picker.getAttribute('data-contacts-url') || '/ui/calendario/contacts') +
+          '?whatsapp_session_id=' + encodeURIComponent(select.value);
+        rcItems(picker).forEach(function(it){ url += '&prefill_id=' + encodeURIComponent(it.getAttribute('data-value')); });
+        pop.setAttribute('hx-get', url);
+        htmx.trigger(pop, 'reload');
+      }
+      updateWhatsappHint(select);
+      if(form) updateFormSummary(form);
+    }
+    function updateWhatsappHint(select){
+      var hint = document.getElementById(select.id + '-hint');
+      if(!hint) return;
+      var opt = select.options[select.selectedIndex];
+      var level = opt ? opt.getAttribute('data-level') : null;
+      /* Desconectado: não deixa salvar (o servidor também recusa) — o erro aparece agora, não no envio. */
+      var submit = select.form && select.form.querySelector('button[type=submit]');
+      if(submit) submit.disabled = (level === 'err');
+      if(level === 'err'){
+        hint.hidden = false; hint.className = 'hint wa-hint err';
+        hint.textContent = 'Este WhatsApp está desconectado. Reconecte-o em Configurações → Conexões ou escolha outro.';
+      } else if(level === 'warn'){
+        hint.hidden = false; hint.className = 'hint wa-hint warn';
+        hint.textContent = 'Este WhatsApp está conectando. O envio espera ele ficar pronto.';
+      } else if(hint.getAttribute('data-static') !== '1'){
+        hint.hidden = true;
+      }
+    }
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      var t = e.target;
+      if(t && t.classList && t.classList.contains('wa-picker')){ updateWhatsappHint(t); refreshForm(t); }
+    });
+
+    /* ---- MessageSequenceEditor: adicionar / editar / excluir / ordenar ---- */
     function addMessageBlock(btn){
-      var list = btn.closest('.message-composer').querySelector('.message-list');
-      var tpl = document.getElementById('message-block-template');
+      var comp = btn.closest('.message-composer');
+      var list = comp.querySelector('.message-list');
+      var tpl = comp.querySelector('template.message-block-template');
       list.appendChild(tpl.content.cloneNode(true));
       renumberMessages(list);
       var last = list.querySelector('.message-block:last-child textarea');
       if(last) last.focus();
-      refreshAutomationPreview(list);
+      refreshForm(list);
     }
     function removeMessageBlock(btn){
       var list = btn.closest('.message-list');
       if(list.querySelectorAll('.message-block').length <= 1) return; // sempre ao menos 1 mensagem
       btn.closest('.message-block').remove();
       renumberMessages(list);
-      refreshAutomationPreview(list);
+      refreshForm(list);
     }
     function moveMessageBlock(btn, dir){
       var block = btn.closest('.message-block');
@@ -669,73 +1039,134 @@
         if(up) up.disabled = (i === 0);
         if(down) down.disabled = (i === blocks.length - 1);
       });
+      /* Com mais de uma mensagem a recorrência não se aplica (a sequência sai uma vez só). */
+      var form = list.closest('form');
+      var rec = form && form.querySelector('[name=recurrence]');
+      if(rec){
+        var multi = blocks.length > 1;
+        rec.disabled = multi;
+        if(multi) rec.value = '';
+        var note = form.querySelector('.recurrence-note');
+        if(note) note.hidden = !multi;
+      }
     }
 
-    /* ---------------- Automação: prévia do horário calculado ---------------- */
-    function refreshAutomationPreview(el){
-      var form = el.closest ? el.closest('form.automation-form') : null;
-      if(form) updateAutomationPreview(form);
+    /* Estado inicial de qualquer formulário de agendamento (chamado pelo próprio parcial). */
+    function initScheduleForm(form){
+      if(!form) return;
+      var picker = form.querySelector('.contact-picker');
+      if(picker) renderChips(picker);
+      var list = form.querySelector('.message-list');
+      if(list) renumberMessages(list);
+      form.querySelectorAll('select.wa-picker').forEach(updateWhatsappHint);
+      if(form.querySelector('.offset-grid')) offsetPickerChanged(form);
+      updateFormSummary(form);
     }
-    function toggleAutomationTimingMode(form){
-      var isCustom = form.querySelector('[name=offset_direction]').value === 'custom';
-      var intervalField = form.querySelector('#au_interval_field');
-      var customField = form.querySelector('#au_custom_time_field');
-      if(intervalField) intervalField.hidden = isCustom;
-      if(customField) customField.hidden = !isCustom;
+
+    /* ---- Resumo antes de salvar (só exibe o que está nos campos — não calcula horário) ---- */
+    function fmtDateBR(iso){
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+      return m ? (m[3] + '/' + m[2] + '/' + m[1]) : '';
     }
-    function updateAutomationPreview(form){
-      var startIso = form.getAttribute('data-event-start');
-      var out = form.querySelector('.automation-preview-value');
-      var warning = form.querySelector('#au_custom_warning');
-      if(startIso && out){
-        var base = new Date(startIso);
-        var direction = form.querySelector('[name=offset_direction]').value;
-        var target = null;
-        if(direction === 'custom'){
-          var timeVal = form.querySelector('[name=custom_time]').value; // "HH:MM"
-          if(timeVal){
-            var t = timeVal.split(':');
-            target = new Date(base.getFullYear(), base.getMonth(), base.getDate(), parseInt(t[0], 10), parseInt(t[1], 10), 0, 0);
-          }
-          if(warning){
-            var eventMinutes = base.getHours() * 60 + base.getMinutes();
-            var customMinutes = timeVal ? (parseInt(timeVal.split(':')[0], 10) * 60 + parseInt(timeVal.split(':')[1], 10)) : null;
-            warning.hidden = customMinutes === null || customMinutes <= eventMinutes;
-          }
-        } else {
-          if(warning) warning.hidden = true;
-          var interval = form.querySelector('[name=offset_interval]').value.split(':');
-          var amount = parseInt(interval[0], 10);
-          var unitMs = {minutes: 60000, hours: 3600000, days: 86400000, weeks: 604800000}[interval[1]] || 0;
-          var deltaMs = amount * unitMs;
-          target = new Date(base.getTime() + (direction === 'before' ? -deltaMs : direction === 'after' ? deltaMs : 0));
-        }
-        out.textContent = target
-          ? (target.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}) + ' — ' + target.toLocaleDateString('pt-BR'))
-          : '—';
+    function updateFormSummary(form){
+      var box = form.querySelector('.schedule-summary');
+      if(box){
+        var picker = form.querySelector('.contact-picker');
+        var labels = [];
+        if(picker) rcItems(picker).forEach(function(it){ labels.push(it.getAttribute('data-label') || it.getAttribute('data-value')); });
+        var fixed = form.getAttribute('data-recipient-label');
+        var wa = form.querySelector('[name=whatsapp_session_id]');
+        var waOpt = wa && wa.options[wa.selectedIndex];
+        var msgs = form.querySelectorAll('.message-block textarea').length;
+        var d = form.querySelector('[name=send_date]'), t = form.querySelector('[name=send_time]');
+        var when = (d && d.value && t && t.value) ? (fmtDateBR(d.value) + ' às ' + t.value) : '—';
+        var set = function(key, text){ var el = box.querySelector('[data-f=' + key + ']'); if(el) el.textContent = text; };
+        set('recipient', fixed || (labels.length ? labels.join(', ') : '—'));
+        set('whatsapp', form.getAttribute('data-wa-name') || (waOpt && waOpt.value ? (waOpt.getAttribute('data-name') || waOpt.textContent.trim()) : '—'));
+        set('messages', msgs + (msgs === 1 ? ' mensagem' : ' mensagens'));
+        set('when', when);
       }
       var summary = form.querySelector('.automation-preview-summary');
       if(summary){
-        var recipCount = form.querySelectorAll('.recipients-hidden input[name="recipients"]').length;
+        var pk = form.querySelector('.contact-picker');
+        var recipCount = pk ? rcItems(pk).length : 0;
         var msgCount = form.querySelectorAll('.message-block textarea').length;
-        summary.textContent = 'WhatsApp · ' + recipCount + ' destinatário' + (recipCount === 1 ? '' : 's') + ' · ' +
+        var waSel = form.querySelector('[name=whatsapp_session_id]');
+        var waName = waSel && waSel.options[waSel.selectedIndex] && waSel.value ? (waSel.options[waSel.selectedIndex].getAttribute('data-name') || waSel.options[waSel.selectedIndex].textContent.trim()) : 'WhatsApp';
+        summary.textContent = waName + ' · ' + recipCount + ' destinatário' + (recipCount === 1 ? '' : 's') + ' · ' +
           msgCount + ' mensage' + (msgCount === 1 ? 'm' : 'ns');
       }
     }
-    function toggleSchedule(){
+
+    /* ---- TimeOffsetPicker: só alterna os campos; o horário calculado vem do servidor ---- */
+    function offsetPickerChanged(form, typing){
+      var dir = form.querySelector('[name=offset_direction]').value;
+      var interval = form.querySelector('[name=offset_interval]').value;
+      var show = function(id, on){ var el = form.querySelector('#' + id); if(el) el.hidden = !on; };
+      show('au_interval_field', dir === 'before' || dir === 'after');
+      show('au_custom_interval_field', (dir === 'before' || dir === 'after') && interval === 'custom');
+      show('au_custom_time_field', dir === 'custom');
+      var grid = form.querySelector('.offset-grid');
+      var target = form.querySelector('.automation-preview-body');
+      if(!grid || !target) return;
+      clearTimeout(form._offsetTimer);
+      form._offsetTimer = setTimeout(function(){
+        var val = function(n){ var el = form.querySelector('[name=' + n + ']'); return el ? el.value : ''; };
+        htmx.ajax('GET', grid.getAttribute('data-preview-url'), {
+          target: target, swap: 'innerHTML',
+          values: {offset_direction: dir, offset_interval: interval, custom_interval: val('custom_interval'), custom_time: val('custom_time')}
+        });
+      }, typing ? 300 : 0);
+    }
+    /* Mantida por compatibilidade com os nomes antigos (modal de automação). */
+    function toggleAutomationTimingMode(form){ offsetPickerChanged(form); }
+    function updateAutomationPreview(form){ updateFormSummary(form); }
+    function refreshAutomationPreview(el){ refreshForm(el); }
+
+    /* ---------------- Automação: repetir em eventos iguais ---------------- */
+    function toggleAllSimilarEvents(selectAllCheckbox){
+      var field = selectAllCheckbox.closest('.field');
+      field.querySelectorAll('.similar-event-checkbox').forEach(function(cb){
+        cb.checked = selectAllCheckbox.checked;
+      });
+    }
+    function syncSelectAllSimilarEvents(checkbox){
+      var field = checkbox.closest('.field');
+      var all = field.querySelectorAll('.similar-event-checkbox');
+      var checked = field.querySelectorAll('.similar-event-checkbox:checked');
+      var selectAll = field.querySelector('.select-all-similar-events');
+      if(selectAll) selectAll.checked = all.length === checked.length;
+    }
+
+    /* ---------------- Conversas: popover "Agendar mensagens" ---------------- */
+    function toggleSchedule(force){
       var p = document.getElementById('schedule-pop');
       if(!p) return;
-      p.hidden = !p.hidden;
-      if(!p.hidden){
-        var dt = document.getElementById('cv_send_at');
-        if(dt && !dt.value){
-          var d = new Date(Date.now()+5*60000);
-          d.setSeconds(0,0);
-          var tzoff = d.getTimezoneOffset()*60000;
-          dt.value = new Date(d - tzoff).toISOString().slice(0,16);
-        }
-      }
+      p.hidden = (typeof force === 'boolean') ? !force : !p.hidden;
+      if(p.hidden) return;
+      /* A 1ª mensagem do agendamento é o que já estava no campo de mensagem. Data e horário
+         NUNCA são trocados aqui: quem os define é o servidor (o último usado, ou uma sugestão). */
+      var composer = document.getElementById('composer-text');
+      var first = p.querySelector('.message-block textarea');
+      if(composer && first && !first.value.trim() && composer.value.trim()) first.value = composer.value;
+      var form = p.querySelector('form');
+      if(form) updateFormSummary(form);
+      if(first && !first.value.trim()) first.focus();
     }
+    /* Estado do painel de Conversas: se algum agendamento saiu (deixou de estar "agendado"), busca o
+       histórico local de novo pra a bolha real aparecer sem precisar recarregar a conversa. */
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      var t = e.target;
+      if(!t || t.id !== 'chat-scheduled') return;
+      var counter = t.querySelector('#chat-open-count');
+      var now = counter ? parseInt(counter.getAttribute('data-open') || '0', 10) : 0;
+      var prev = window.__chatOpenCount;
+      window.__chatOpenCount = now;
+      if(typeof prev === 'number' && now < prev){
+        var hist = document.getElementById('chat-history');
+        if(hist && hist.getAttribute('data-reload-url')) htmx.ajax('GET', hist.getAttribute('data-reload-url'), {target: hist, swap: 'innerHTML'});
+      }
+    });
     function composerKeydown(e){
       if(e.key === 'Enter' && !e.shiftKey){
         e.preventDefault();
@@ -758,10 +1189,17 @@
       if(!it) return;
       document.querySelectorAll('.chat-item.sel').forEach(function(x){x.classList.remove('sel');});
       it.classList.add('sel');
+      var wrap = document.querySelector('.chatwrap');
+      if(wrap) wrap.classList.add('chat-open'); /* no celular a conversa abre por cima da lista */
     });
-    document.body.addEventListener('htmx:afterSwap', function(){
+    function chatBack(){
+      var wrap = document.querySelector('.chatwrap');
+      if(wrap) wrap.classList.remove('chat-open');
+    }
+    document.body.addEventListener('htmx:afterSwap', function(e){
       var cm = document.getElementById('chat-scroll');
-      if(cm) cm.scrollTop = cm.scrollHeight;
+      /* A atualização periódica das mensagens agendadas não deve puxar quem está lendo o histórico pro fim. */
+      if(cm && !(e && e.target && e.target.id === 'chat-scheduled')) cm.scrollTop = cm.scrollHeight;
       var si = document.getElementById('chat-search-input');
       if(si && si.value) filterChats(si.value);
     });

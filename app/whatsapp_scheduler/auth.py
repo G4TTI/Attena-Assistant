@@ -67,6 +67,12 @@ def hash_token(raw_token: str) -> str:
 
 
 def client_ip(request: Request) -> str | None:
+    if settings.client_ip_header:
+        forwarded = request.headers.get(settings.client_ip_header, "")
+        # X-Forwarded-For pode trazer "cliente, proxy1, proxy2": o primeiro é o visitante.
+        first = forwarded.split(",")[0].strip()[:64]
+        if first:
+            return first
     return request.client.host if request.client else None
 
 

@@ -1,10 +1,15 @@
 services:
   waha:
-    image: devlikeapro/waha:latest
+    # Fixe a versão em produção (ex.: WAHA_IMAGE=devlikeapro/waha:latest-2026.8.2):
+    # antes da 2026.6.1 o WAHA só aceitava a sessão "default" e nenhum usuário
+    # novo (session_name u_<hex>) conseguia conectar.
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
     container_name: waha-scheduler
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      # Só localhost: o app fala com o WAHA pela rede interna do Docker
+      # (http://waha:3000). Publicar isto na rede expõe a API/dashboard do WAHA.
+      - "127.0.0.1:3001:3000"
     environment:
       WAHA_API_KEY: ${WAHA_API_KEY}
       WHATSAPP_DEFAULT_ENGINE: ${WHATSAPP_DEFAULT_ENGINE:-WEBJS}
@@ -25,6 +30,10 @@ services:
       WAHA_BASE_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY}
       WAHA_SESSION: ${WAHA_SESSION:-default}
+      APP_ENV: ${APP_ENV:-development}
+      CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-}
+      RATE_LIMIT_MAX_ATTEMPTS: ${RATE_LIMIT_MAX_ATTEMPTS:-5}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-300}
       TICK_SECONDS: ${TICK_SECONDS:-30}
       MAX_OVERDUE_MINUTES: ${MAX_OVERDUE_MINUTES:-120}
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-America/Sao_Paulo}

@@ -1,0 +1,64 @@
+{# Campos do formulário de agendamento — usados pelo card "Novo agendamento" e pelo modal de edição.
+   Contexto: `form` (ver web/routes._schedule_form_ctx). Só o essencial fica à vista; o resto vai
+   em "Opções avançadas". O fuso NÃO é campo: vale sempre o da conta (só aparece como legenda). #}
+{% from "_components.html" import contact_picker, whatsapp_picker, message_sequence_editor, schedule_datetime_picker %}
+{% set p = form.mode %}
+{% if form.error %}<div class="alert err">{{ form.error }}</div>{% endif %}
+{% if form.ok %}<div class="alert ok">{{ form.ok }}</div>{% endif %}
+
+<div class="field">
+  <label>Destinatário{{ '(s)' if p == 'create' }}</label>
+  {% if p == 'edit' %}
+  <div class="readonly-value">{{ form.recipient_label }}</div>
+  {% else %}
+  {{ contact_picker(form.recipients, form.whatsapp_session_id) }}
+  {% endif %}
+</div>
+
+<div class="field">
+  <label for="sf-{{ p }}_date">Primeiro envio</label>
+  {{ schedule_datetime_picker('sf-' ~ p, form.send_date, form.send_time, form.min_date, form.tz_label) }}
+</div>
+
+<div class="field">
+  <label for="sf-{{ p }}-wa">Enviar através de</label>
+  {{ whatsapp_picker('sf-' ~ p ~ '-wa', form.whatsapp_sessions, form.whatsapp_session_id) }}
+</div>
+
+<div class="field">
+  <label>Mensagens</label>
+  {{ message_sequence_editor(form.messages) }}
+</div>
+
+<details class="advanced" {{ 'open' if form.advanced_open }}>
+  <summary>Opções avançadas</summary>
+  <div class="adv-body">
+    <div class="field">
+      <label for="sf-{{ p }}-rec">Recorrência <b>(vazio = uma vez)</b></label>
+      <input id="sf-{{ p }}-rec" name="recurrence" list="reclist-{{ p }}" value="{{ form.recurrence }}" placeholder="ex: daily 09:00"
+             {{ 'disabled' if form.messages | length > 1 }}>
+      <datalist id="reclist-{{ p }}">
+        <option value="daily 09:00"><option value="weekly mon 08:30">
+        <option value="monthly 1 12:00"><option value="hourly">
+        <option value="0 9 * * 1-5">
+      </datalist>
+      <p class="recurrence-note" {{ 'hidden' if form.messages | length <= 1 }}>A recorrência só está disponível para agendamentos com uma única mensagem.</p>
+      <p class="hint">
+        Aceita <code>cron</code> de 5 campos ou os atalhos <code>daily HH:MM</code>,
+        <code>weekly &lt;dia&gt; HH:MM</code>, <code>monthly &lt;D&gt; HH:MM</code>, <code>hourly</code>.
+      </p>
+    </div>
+  </div>
+</details>
+
+{# Resumo antes de salvar — só exibe o que está nos campos (atualizado por updateFormSummary). #}
+<div class="schedule-summary">
+  <h3 class="section-label">Resumo</h3>
+  <dl class="summary-kv">
+    <dt>Destinatário</dt><dd data-f="recipient">—</dd>
+    <dt>WhatsApp</dt><dd data-f="whatsapp">—</dd>
+    <dt>Mensagens</dt><dd data-f="messages">—</dd>
+    <dt>Primeiro envio</dt><dd data-f="when">—</dd>
+    <dt>Fuso</dt><dd data-f="tz">{{ form.tz_label }}</dd>
+  </dl>
+</div>

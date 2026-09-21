@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from sqlmodel import Session
 
-from . import app_settings, calendar_service
+from . import app_settings, auth, calendar_service, onboarding_service, service, whatsapp_service
 from .api import calendar as calendar_api
 from .api import chats as chats_api
 from .api import schedules as schedules_api
@@ -22,7 +23,7 @@ from .scheduler import SchedulerService
 from .time_sync import ClockSyncService
 from .waha import WahaClient
 from .web import routes as web_routes
-from .web import auth_routes, calendar_routes, dashboard_routes, settings_routes
+from .web import auth_routes, calendar_routes, dashboard_routes, onboarding_routes, settings_routes, whatsapp_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,9 @@ async def lifespan(app: FastAPI):
     # pela metade (ex.: automações antigas ainda não convertidas).
     with Session(get_engine()) as db:
         calendar_service.migrate_legacy_automations(db)
+        whatsapp_service.migrate_legacy_sessions(db)
+        service.backfill_groups(db)
+        onboarding_service.migrate_legacy_users(db)
         app_settings.load_from_db(db)
     waha = WahaClient(settings.waha_base_url, settings.waha_api_key, settings.request_timeout)
     scheduler = SchedulerService(waha)
@@ -65,7 +69,7 @@ async def lifespan(app: FastAPI):
         await waha.aclose()
 
 
-app = FastAPI(title="Attena Assistant", version="1.2.0-alpha", lifespan=lifespan)
+app = FastAPI(title="Attena Assistant", version="1.3.3", lifespan=lifespan)
 app.include_router(auth_routes.router)
 app.include_router(schedules_api.router)
 app.include_router(session_api.router)
@@ -75,6 +79,8 @@ app.include_router(web_routes.router)
 app.include_router(calendar_routes.router)
 app.include_router(settings_routes.router)
 app.include_router(dashboard_routes.router)
+app.include_router(whatsapp_routes.router)
+app.include_router(onboarding_routes.router)
 
 
 @app.exception_handler(NotAuthenticated)
@@ -122,3 +128,31 @@ async def _security_headers(request: Request, call_next):
 @app.get("/healthz", tags=["ops"])
 def healthz() -> dict:
     return {"status": "ok"}
+
+
+# Rotas que continuam acessíveis mesmo com onboarding pendente: páginas
+# públicas de autenticação, o próprio onboarding, saúde do processo, e toda
+# rota "de máquina" (API REST + parciais htmx) — essas nunca devem devolver
+# um redirect HTML no lugar da resposta que o cliente espera (Parte 25: o
+# onboarding orienta, nunca bloqueia o uso do app).
+_ONBOARDING_EXEMPT_PREFIXES = (
+    "/login", "/cadastro", "/esqueci-senha", "/redefinir-senha", "/verificar-email",
+    "/logout", "/onboarding", "/healthz", "/api/", "/ui/",
+)
+
+
+def _needs_onboarding(request: Request) -> bool:
+    with Session(get_engine()) as db:
+        user = auth.get_current_user_optional(request, db)
+        return user is not None and user.onboarding_completed_at is None
+
+
+@app.middleware("http")
+async def _onboarding_gate(request: Request, call_next):
+    path = request.url.path
+    if request.method == "GET" and not path.startswith(_ONBOARDING_EXEMPT_PREFIXES):
+        # Consulta de banco síncrona: numa thread, pra não parar o event loop
+        # a cada navegação de página.
+        if await asyncio.to_thread(_needs_onboarding, request):
+            return RedirectResponse(url="/onboarding", status_code=303)
+    return await call_next(request)
