@@ -71,13 +71,18 @@ async def ui_onboarding_whatsapp_start(
         db.add(current_user)
         db.commit()
 
+    start_error = None
     primary = whatsapp_service.primary_session(db, current_user.id)
     if primary is not None:
         try:
             await _waha(request).restart_session(primary.session_name)
-        except WahaError:
-            pass
-    return templates.TemplateResponse("_onboarding_whatsapp_step.html", await _ctx(request, db, current_user, 1))
+        except WahaError as exc:
+            # Antes isto era engolido em silêncio e o usuário ficava olhando
+            # a mesma tela sem saber por que o QR não aparecia.
+            start_error = str(exc)
+    ctx = await _ctx(request, db, current_user, 1)
+    ctx["start_error"] = start_error
+    return templates.TemplateResponse("_onboarding_whatsapp_step.html", ctx)
 
 
 @router.post("/onboarding/timezone", response_class=HTMLResponse)

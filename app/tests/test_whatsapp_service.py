@@ -76,3 +76,23 @@ def test_ownership_is_enforced_across_users(db, test_user):
     assert whatsapp_service.rename_session(db, session.id, other.id, "Hackeado") is None
     assert whatsapp_service.disconnect_session(db, session.id, other.id) is False
     assert whatsapp_service.session_by_name(db, other.id, session.session_name) is None
+
+
+async def test_status_rows_shows_a_friendly_message_for_a_session_not_created_yet(db):
+    from tests.conftest import FakeWaha
+
+    from whatsapp_scheduler import whatsapp_service
+    from whatsapp_scheduler.models import WhatsAppSession
+
+    waha = FakeWaha()
+    waha.session_exists = False
+    rows = await whatsapp_service.status_rows(waha, [WhatsAppSession(user_id="u", name="x", session_name="u_abc")])
+    assert rows[0]["status"] is None
+    assert rows[0]["status_error"] == whatsapp_service.NOT_STARTED_MESSAGE
+    assert waha.created == []  # passivo por padrão
+
+    rows = await whatsapp_service.status_rows(
+        waha, [WhatsAppSession(user_id="u", name="x", session_name="u_abc")], ensure=True
+    )
+    assert rows[0]["status"]["status"] == "STARTING"
+    assert waha.created == ["u_abc"]

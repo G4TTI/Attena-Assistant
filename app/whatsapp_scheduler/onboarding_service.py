@@ -45,7 +45,9 @@ async def progress(db: Session, waha: WahaClient, user: User) -> dict:
     """Estado ao vivo das 3 etapas — sempre recalculado, nunca cacheado
     (mesma escolha de `whatsapp_service.status_rows`)."""
     sessions = whatsapp_service.list_sessions(db, user.id)
-    rows = await whatsapp_service.status_rows(waha, sessions)
+    # ensure=True: o usuário novo ainda não tem sessão no WAHA — ela nasce
+    # aqui, na primeira vez que a etapa do WhatsApp é aberta.
+    rows = await whatsapp_service.status_rows(waha, sessions, ensure=True)
     whatsapp_connected = any(str((row["status"] or {}).get("status") or "").upper() == "WORKING" for row in rows)
     return {
         "whatsapp_connected": whatsapp_connected,

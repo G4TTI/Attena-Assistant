@@ -141,19 +141,32 @@ def disconnect_session(db: Session, session_id: str, user_id: str) -> bool:
     return True
 
 
-async def status_rows(waha: WahaClient, sessions: list[WhatsAppSession]) -> list[dict]:
+NOT_STARTED_MESSAGE = "Esta conexão ainda não foi iniciada. Clique em “Iniciar / reconectar” pra gerar o QR."
+
+
+async def status_rows(
+    waha: WahaClient, sessions: list[WhatsAppSession], *, ensure: bool = False
+) -> list[dict]:
     """Status ao vivo (nunca cacheado — mesma escolha da sessão única antes)
     de cada conexão, uma chamada ao WAHA por sessão. Usado pela página
-    `/whatsapps`, pelo card do Dashboard e pela sidebar."""
+    `/whatsapps`, pelo card do Dashboard e pela sidebar.
+
+    `ensure=True` cria no WAHA a sessão que ainda não existir (onboarding e
+    aba Conexões, onde o usuário está ali pra conectar). Fica desligado nos
+    consumidores passivos (sidebar/dashboard, que pesquisam a cada poucos
+    segundos): eles nunca devem sair criando Chromium por conta própria."""
     # Em paralelo: a sidebar consulta isto a cada poucos segundos, e com N
     # WhatsApps a versão sequencial somava a latência de todos (ou o timeout
     # inteiro de cada um que estivesse fora do ar).
+    fetch = waha.ensure_session if ensure else waha.get_session_status
+
     async def _one(session: WhatsAppSession) -> dict:
         try:
-            info = await waha.get_session_status(session.session_name)
+            info = await fetch(session.session_name)
             return {"session": session, "status": info, "status_error": None}
         except WahaError as exc:
-            return {"session": session, "status": None, "status_error": str(exc)}
+            message = NOT_STARTED_MESSAGE if exc.status_code == 404 else str(exc)
+            return {"session": session, "status": None, "status_error": message}
 
     return list(await asyncio.gather(*(_one(s) for s in sessions)))
 

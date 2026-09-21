@@ -50,7 +50,7 @@ def _ctx(request: Request, current_user: User, **extra: object) -> dict:
 
 async def _whatsapp_ctx(request: Request, db: Session, user_id: str) -> dict:
     sessions = whatsapp_service.list_sessions(db, user_id)
-    return {"rows": await whatsapp_service.status_rows(request.app.state.waha, sessions)}
+    return {"rows": await whatsapp_service.status_rows(request.app.state.waha, sessions, ensure=True)}
 
 
 def _connections_ctx(db: Session, user_id: str, tz_name: str) -> dict:

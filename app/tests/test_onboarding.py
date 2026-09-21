@@ -139,3 +139,63 @@ def test_api_and_htmx_partials_are_never_redirected_while_onboarding_pending(cli
     orienta, nunca bloqueia)."""
     assert client.get("/api/schedules").status_code == 200
     assert client.get("/ui/dashboard/summary").status_code == 200
+
+
+# --- usuário novo: a sessão só existe no banco do app, não no WAHA ---------- #
+def test_opening_onboarding_creates_the_missing_waha_session(client):
+    """Regressão do "WAHA respondeu 404 ... Session not found" que usuários
+    novos viam: a sessão `u_<hex>` nascia só no banco e o WAHA só a criava se a
+    pessoa clicasse em "Iniciar pareamento"."""
+    client.waha.session_exists = False
+    resp = client.get("/onboarding")
+    assert resp.status_code == 200
+    assert len(client.waha.created) == 1
+    assert "Session not found" not in resp.text
+    assert "WAHA respondeu 404" not in resp.text
+
+
+def test_polling_the_whatsapp_step_does_not_create_the_session_twice(client):
+    client.waha.session_exists = False
+    client.get("/onboarding")
+    client.get("/ui/onboarding/whatsapp")
+    client.get("/ui/onboarding/whatsapp")
+    assert len(client.waha.created) == 1
+
+
+def test_qr_image_only_appears_once_waha_has_a_qr(client):
+    client.waha.status = "STARTING"
+    starting = client.get("/ui/onboarding/whatsapp").text
+    assert 'alt="QR code"' not in starting
+    assert "Preparando o QR" in starting
+
+    client.waha.status = "SCAN_QR_CODE"
+    ready = client.get("/ui/onboarding/whatsapp").text
+    assert 'alt="QR code"' in ready
+
+
+def test_start_pairing_works_without_a_phone_number(client):
+    client.waha.status = "SCAN_QR_CODE"
+    assert 'name="phone"' in client.get("/ui/onboarding/whatsapp").text
+    assert "required" not in client.get("/ui/onboarding/whatsapp").text.split('name="phone"')[1].split(">")[0]
+    resp = client.post("/onboarding/whatsapp/start", data={"phone": ""})
+    assert resp.status_code == 200
+    assert client.waha.restart_calls == 1
+
+
+def test_start_pairing_shows_the_waha_error_instead_of_swallowing_it(client):
+    from whatsapp_scheduler.waha import WahaError
+
+    client.waha.status = "SCAN_QR_CODE"
+    client.waha.restart_error = WahaError("WAHA respondeu 422 em POST /api/sessions: OnlyDefaultSessionIsAllowed", status_code=422)
+    resp = client.post("/onboarding/whatsapp/start", data={"phone": "+55 11 99999-8888"})
+    assert resp.status_code == 200
+    assert "OnlyDefaultSessionIsAllowed" in resp.text
+
+
+def test_passive_status_polling_never_creates_sessions(client):
+    """Sidebar/dashboard consultam a cada poucos segundos: não podem sair
+    criando Chromium para quem nem está conectando."""
+    client.waha.session_exists = False
+    client.get("/ui/sidebar-status")
+    client.get("/ui/dashboard/summary")
+    assert client.waha.created == []

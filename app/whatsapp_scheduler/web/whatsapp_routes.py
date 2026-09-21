@@ -24,7 +24,7 @@ def _waha(request: Request) -> WahaClient:
 
 async def _list_ctx(request: Request, db: Session, current_user: User) -> dict:
     sessions = whatsapp_service.list_sessions(db, current_user.id)
-    return {"request": request, "rows": await whatsapp_service.status_rows(_waha(request), sessions)}
+    return {"request": request, "rows": await whatsapp_service.status_rows(_waha(request), sessions, ensure=True)}
 
 
 @router.get("/whatsapps")

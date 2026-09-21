@@ -24,14 +24,16 @@
           <li>Escaneie o QR code ao lado.</li>
           <li>Assim que conectar, esta página avança sozinha.</li>
         </ol>
-        {% if whatsapp_row and whatsapp_row.status_error %}
-        <p class="muted" style="color:var(--err);margin-top:10px">{{ whatsapp_row.status_error }}</p>
+        {% if start_error or (whatsapp_row and whatsapp_row.status_error) %}
+        <p class="muted" style="color:var(--err);margin-top:10px">{{ start_error or whatsapp_row.status_error }}</p>
         {% endif %}
         <form hx-post="/onboarding/whatsapp/start" hx-target="#onboarding-whatsapp-step" hx-swap="outerHTML" style="margin-top:16px;max-width:280px">
+          {# O número é só um dado de contato: o WAHA não precisa dele pra gerar o
+             QR (o pareamento é pelo celular). Não pode bloquear o botão. #}
           <div class="field" style="margin:0">
-            <label for="onb_wa_phone">Seu número de WhatsApp</label>
+            <label for="onb_wa_phone">Seu número de WhatsApp <span class="muted">(opcional)</span></label>
             <input id="onb_wa_phone" name="phone" type="text" placeholder="+55 11 99999-8888"
-                   value="{{ current_user.phone or '' }}" required>
+                   value="{{ current_user.phone or '' }}">
           </div>
           <button class="ghost" type="submit" style="margin-top:10px">
             <span class="hide-loading">{{ 'Gerar novo QR' if status else 'Iniciar pareamento' }}</span><span class="spin">gerando…</span>
@@ -40,8 +42,16 @@
       </div>
       {% if whatsapp_session %}
       <div class="qr-box">
-        <img class="qr" alt="QR code" src="/ui/whatsapps/{{ whatsapp_session.id }}/qr?ts={{ range(100000)|random }}">
-        <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
+        {# Só pede a imagem quando o WAHA já tem QR: antes disso o endpoint
+           devolve erro e o usuário via um quadrado vazio. #}
+        {% if status == "SCAN_QR_CODE" %}
+          <img class="qr" alt="QR code" src="/ui/whatsapps/{{ whatsapp_session.id }}/qr?ts={{ range(100000)|random }}">
+          <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
+        {% elif status in ("FAILED", "STOPPED") or not status %}
+          <p>Não foi possível gerar o QR agora. Clique em <b>{{ 'Gerar novo QR' if status else 'Iniciar pareamento' }}</b>.</p>
+        {% else %}
+          <p>Preparando o QR code… leva alguns segundos.</p>
+        {% endif %}
       </div>
       {% endif %}
     </div>

@@ -177,11 +177,34 @@ class FakeWaha:
         self.messages_error: Exception | None = None
         self.restart_error: Exception | None = None
         self.restart_calls = 0
+        # False = comportamento de usuário novo: a sessão só existe no banco do app.
+        self.session_exists = True
+        self.created: list[str] = []
 
     async def get_session_status(self, session: str) -> dict:
         if self.status_error:
             raise self.status_error
+        if not self.session_exists:
+            from whatsapp_scheduler.waha import WahaError
+
+            raise WahaError(
+                'WAHA respondeu 404 em GET /api/sessions/x: {"message":"Session not found"}', status_code=404
+            )
         return {"name": session, "status": self.status}
+
+    async def create_session(self, session: str) -> dict:
+        self.session_exists = True
+        self.created.append(session)
+        self.status = "STARTING"
+        return {"name": session, "status": "STARTING"}
+
+    async def ensure_session(self, session: str) -> dict:
+        try:
+            return await self.get_session_status(session)
+        except Exception as exc:  # noqa: BLE001 - só o 404 vira criação, como no cliente real
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            return await self.create_session(session)
 
     async def send_text(self, session: str, chat_id: str, text: str) -> dict:
         if self.send_error:
