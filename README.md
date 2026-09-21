@@ -61,7 +61,7 @@ A interface tem uma barra lateral com cinco telas:
 
 | Tela | O que faz |
 |---|---|
-| **📅 Agendamentos** | Cria e lista os agendamentos. Botão ▶ dispara na hora (teste); ✕ cancela. |
+| **📅 Agendamentos** | Cria (destinatários pela lista de contatos, WhatsApp, data/hora, várias mensagens), lista e abre o detalhe de cada agendamento; no detalhe: **Editar**, **Cancelar** e **Enviar agora**. |
 | **💬 Conversas** | Lista as conversas do WhatsApp; abre o histórico de cada uma e permite **enviar agora** ou **agendar** uma mensagem para aquele contato/grupo sem sair da tela. |
 | **🔌 Sessão** | Status da conexão + QR de pareamento. |
 | **🗓️ Calendário** | Agenda de eventos internos e sincronizados do Google Agenda; permite associar uma automação de WhatsApp a qualquer evento. |
@@ -79,15 +79,26 @@ WAHA retorna uma) e o histórico + composer à direita.
   a primeira abertura pode levar **até ~1 min** no engine `WEBJS`; as seguintes
   são instantâneas. O botão **↻** no cabeçalho força nova busca.
 - **Composer:** caixa de texto + botão verde de enviar (envia na hora, `POST
-  /api/sendText`) + ícone **🕐** que abre um popover para escolher data/hora e
-  recorrência — agenda a mesma mensagem em vez de enviá-la agora.
+  /api/sendText`) + ícone **🕐** que abre o painel **Agendar mensagens**: uma
+  data/hora de início e uma **sequência** de mensagens (adicionar/mover/excluir).
+  O horário digitado vale para o agendamento inteiro e nunca é reiniciado ao
+  adicionar mensagens.
+- **Mensagens agendadas dentro da conversa:** cada uma aparece como uma bolha
+  própria com o status (🕐 agendada · ⏳ enviando · ✓ enviada · ⚠ falhou · ○
+  cancelada) e o horário real do disparo, no seu fuso. Dá para cancelar uma
+  por uma. As já enviadas viram bolhas normais do histórico, marcadas "agendada".
 - Para histórico bem mais rápido, troque o engine para `NOWEB` no `.env`
   (`WHATSAPP_DEFAULT_ENGINE=NOWEB`) — exige parear de novo.
 
 ### Pela interface
 
-Preencha destinatário, mensagem, data/hora do primeiro envio e (opcional) a
-recorrência. O botão ▶ dispara na hora (teste); o ✕ cancela.
+Escolha o(s) destinatário(s) na lista de contatos (com foto; também aceita um
+número digitado + Enter), o WhatsApp de envio (só os seus, com status ao vivo —
+um WhatsApp desconectado não deixa agendar), data/hora do primeiro envio e as
+mensagens. **Opções avançadas** guarda a recorrência (só para agendamentos de
+**uma** mensagem). O fuso é o da sua conta (Configurações → Preferências) — não
+é um campo do formulário. Um agendamento por destinatário; cada um é uma
+sequência de mensagens enviadas na ordem (intervalo de 3 s entre elas).
 
 ### Pela API
 
@@ -118,9 +129,42 @@ curl http://localhost:8000/api/session                    # status da sessão WA
 `5511999998888`) ou um `chatId` do WhatsApp já pronto (`5511999998888@c.us`,
 `...@g.us` para grupo). Números sem DDI são interpretados como **Brasil**.
 
+**Uma mensagem = um agendamento de uma mensagem.** A API continua agendando uma
+mensagem por chamada (`POST /api/schedules`); cada uma vira um agendamento
+(`ScheduleGroup`) de uma mensagem, exatamente como o que a interface cria.
+
 **Recorrência:** expressão `cron` de 5 campos **ou** um atalho:
 `daily HH:MM` · `weekly <dia> HH:MM` · `monthly <D> HH:MM` · `hourly`.
 (`<dia>`: `mon`/`seg`/`segunda`…)
+
+## Modelo de agendamento (v1.3.3)
+
+Conversas, Agendamentos e as automações do Calendário usam **o mesmo modelo e o
+mesmo código**:
+
+- **`ScheduleGroup`** = um agendamento: usuário, destinatário, WhatsApp
+  (`session`), horário de início (`start_local` + `timezone`), origem
+  (`manual` · `conversation` · `calendar`) e a sequência de mensagens
+  (`Schedule` com `group_id` + `position`). O status do agendamento não é
+  guardado — é derivado dos `Dispatch`es (`schedule_views.py`).
+- **`timing.py`** é a única fonte de cálculo de horário: horário digitado →
+  UTC (via `ZoneInfo`, nunca "+3h" na mão), intervalo antes/depois do evento,
+  intervalo personalizado `HH:MM`, horário de cada mensagem da sequência.
+- **`service.py`** é a única porta de escrita: `create_sequence`,
+  `update_sequence`, `reschedule_group`, `cancel_schedule(s)`/`cancel_group`,
+  `run_group_now`. O motor (`scheduler.py`) só enxerga `Schedule`/`Dispatch`.
+- **Ordem da sequência:** a mensagem *N+1* só é liberada depois que a *N* é
+  confirmada como enviada (`ScheduleDependency`). Cancelar uma do meio religa as
+  seguintes; falha definitiva aborta as seguintes (nunca saem fora de ordem).
+- **Fuso:** o horário é sempre digitado e exibido no fuso do usuário; no banco
+  fica `first_run_local` + `timezone` (agendamentos) e UTC (dispatches).
+- Migração automática no boot (`service.backfill_groups`): agendamentos criados
+  antes da v1.3.3 ganham um grupo, sem apagar nada.
+
+**Intervalo personalizado (Calendário):** em *Quando enviar* → Antes/Depois do
+evento, *Intervalo* → **Personalizado…** aceita `HH:MM` (`1:45` = 1 h 45 min
+antes/depois do evento — é uma distância do evento, não um horário do relógio).
+"Horário fixo no dia do evento" continua existindo para um horário absoluto.
 
 ## Como o disparo funciona
 
@@ -244,12 +288,14 @@ whatsapp-scheduler/
         ├── main.py             # FastAPI + lifespan (sobe o poller)
         ├── config.py           # env vars
         ├── db.py               # engine SQLite (WAL)
-        ├── models.py           # Schedule, Dispatch, CachedMessage
+        ├── models.py           # ScheduleGroup, Schedule, Dispatch, CachedMessage, ...
+        ├── timing.py           # regras de TEMPO (única fonte de cálculo de horário)
         ├── recurrence.py       # presets/cron + fuso
         ├── recipients.py       # telefone -> chatId
         ├── waha.py             # cliente HTTP do WAHA (sessão, envio, chats)
         ├── scheduler.py        # materialize_due / dispatch_due / loop
-        ├── service.py          # regras de agendamento (API + UI)
+        ├── service.py          # regras de agendamento (criar/editar/cancelar/remarcar) — API + UI + Calendário
+        ├── schedule_views.py   # leitura: status e horário real de cada mensagem/agendamento
         ├── chatsvc.py          # conversas: lista + histórico com cache
         ├── crypto.py           # cifra (Fernet) dos tokens OAuth salvos
         ├── calendar_providers/ # abstração de provedor de calendário (base.py + google.py)

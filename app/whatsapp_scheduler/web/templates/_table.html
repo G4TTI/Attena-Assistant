@@ -1,63 +1,32 @@
-<div id="schedules-table" style="display:flex;flex-direction:column;gap:10px">
+{% from "_components.html" import icon, status_icon %}
+<div id="schedules-table" {% if oob %}hx-swap-oob="true"{% endif %} style="display:flex;flex-direction:column;gap:10px">
   <div class="list-head">
-    <h2 class="section-label" style="margin:0">Lista{% if rows %} · {{ rows | selectattr('s.enabled') | list | length }} ativos{% endif %}</h2>
+    <h2 class="section-label" style="margin:0">Agendamentos{% if groups %} · {{ groups | selectattr('is_open') | list | length }} ativos{% endif %}</h2>
     <button class="ghost" hx-get="/ui/schedules" hx-target="#schedules-table" hx-swap="outerHTML">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg>
+      {{ icon('clock', 14) }}
       Atualizar
     </button>
   </div>
 
-  {% if not rows %}
+  {% if not groups %}
     <p class="muted">Nenhum agendamento ainda.</p>
   {% else %}
     <div class="sched-list">
-      {% for r in rows %}
-      {% set s = r.s %}
-      <article class="sched-card">
+      {% for g in groups %}
+      {# Cartão limpo: quando · quem · por qual WhatsApp · quantas mensagens · status. Detalhes ao abrir. #}
+      <article class="sched-card clickable" role="button" tabindex="0"
+               hx-get="/ui/schedules/{{ g.id }}" hx-target="#modal-root" hx-swap="innerHTML"
+               onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
         <div class="sc-main">
-          <div class="sc-name">
-            {{ s.recipient_input }}{% if s.chat_id.endswith('@g.us') %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}
+          <div class="sc-time">{{ icon('clock', 15) }} {{ g.when_local.strftime('%d/%m/%Y') }} · {{ g.when_local.strftime('%H:%M') }}</div>
+          <div class="sc-name">{{ g.recipient }}{% if g.group.chat_id.endswith('@g.us') %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}</div>
+          <div class="sc-lines">
+            <span>{{ g.whatsapp_label }}</span>
+            <span>{{ g.message_count }} mensage{{ 'm' if g.message_count == 1 else 'ns' }}{% if g.is_recurring %} · repete <code>{{ g.recurrence }}</code>{% endif %}</span>
           </div>
-          <div class="sc-id">{{ s.chat_id }} · WhatsApp: {{ r.whatsapp_label }}</div>
-          <div class="sc-text">{{ s.text[:80] }}{% if s.text|length > 80 %}…{% endif %}</div>
-          {% if r.last_dispatch and r.last_dispatch.status == "failed" and r.last_dispatch.last_error %}
-          <div class="sc-error">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4.5M12 16h.01"></path></svg>
-            <span>{{ r.last_dispatch.attempts }} tentativa{{ 's' if r.last_dispatch.attempts != 1 }} · {{ r.last_dispatch.last_error }}</span>
-          </div>
-          {% endif %}
         </div>
-        <div class="sc-when">
-          <div class="row2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
-            {% if r.next_dispatch %}
-              {{ r.next_dispatch.scheduled_at_utc | localtime(s.timezone) }}
-            {% elif not s.enabled %}
-              <span class="muted">—</span>
-            {% else %}
-              <span class="muted">calculando…</span>
-            {% endif %}
-          </div>
-          <div class="tz">{{ s.timezone }}</div>
-          <div class="rec">{% if s.recurrence %}<code>{{ s.recurrence }}</code>{% else %}<span class="muted">uma vez</span>{% endif %}</div>
-        </div>
-        <div class="sc-actions">
-          {% if r.last_dispatch %}
-            <span class="pill {{ r.last_dispatch.status }}">{{ r.last_dispatch.status | status_label }}</span>
-          {% endif %}
-          {% if s.enabled %}
-          <button class="icon-btn sq" title="Enviar agora (teste)"
-                  hx-post="/ui/schedules/{{ s.id }}/run-now" hx-target="#schedules-table" hx-swap="outerHTML">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l12 7.5-12 7.5z"></path></svg>
-          </button>
-          <button class="icon-btn sq cancel" title="Cancelar"
-                  hx-post="/ui/schedules/{{ s.id }}/cancel" hx-target="#schedules-table" hx-swap="outerHTML"
-                  hx-confirm="Cancelar este agendamento?">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-          </button>
-          {% else %}
-          <span class="muted">cancelado</span>
-          {% endif %}
+        <div class="sc-side">
+          <span class="pill {{ g.pill }}">{{ g.label }}</span>
         </div>
       </article>
       {% endfor %}

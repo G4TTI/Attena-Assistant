@@ -7,12 +7,13 @@ mesmo padrão que `web/routes.py` já usa hoje para a sessão única.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 from sqlmodel import Session, col, select
 
 from .clock import utcnow
 from .models import Schedule, User, WhatsAppSession
-from .service import ValidationError, cancel_schedule
+from .service import ValidationError, cancel_schedules
 from .waha import WahaClient, WahaError
 
 
@@ -131,14 +132,43 @@ def disconnect_session(db: Session, session_id: str, user_id: str) -> bool:
         .where(col(Schedule.session) == session.session_name)
         .where(col(Schedule.enabled).is_(True))
     ).all()
-    for schedule in open_schedules:
-        cancel_schedule(db, schedule.id, user_id=user_id)
+    cancel_schedules(db, [schedule.id for schedule in open_schedules], user_id=user_id)
 
     session.disconnected_at = utcnow()
     session.updated_at = utcnow()
     db.add(session)
     db.commit()
     return True
+
+
+def status_signature(rows: list[dict] | dict | None) -> str:
+    """Impressão digital curta do que a tela de conexão (onboarding / Configurações →
+    Conexões) MOSTRA: cada WhatsApp, o nome, o status, o número e o erro. A tela consulta
+    o servidor a cada poucos segundos mandando esta assinatura; se nada mudou o servidor
+    responde 204 e o navegador não mexe em nada — antes o passo inteiro era recriado a cada
+    consulta, e era isso que fazia botão e QR piscarem."""
+    if rows is None:
+        rows = []
+    elif isinstance(rows, dict):
+        rows = [rows]
+    parts: list[str] = []
+    for row in rows:
+        session = row.get("session")
+        info = row.get("status") or {}
+        me = info.get("me") if isinstance(info.get("me"), dict) else {}
+        parts.append(
+            "|".join(
+                str(x)
+                for x in (
+                    getattr(session, "id", ""),
+                    getattr(session, "name", ""),
+                    info.get("status", ""),
+                    me.get("id", ""),
+                    row.get("status_error") or "",
+                )
+            )
+        )
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
 NOT_STARTED_MESSAGE = "Esta conexão ainda não foi iniciada. Clique em “Iniciar / reconectar” pra gerar o QR."
@@ -191,3 +221,82 @@ def labels_by_session_name(db: Session, user_id: str) -> dict[str, str]:
     usado — Parte 17)."""
     rows = db.exec(select(WhatsAppSession).where(col(WhatsAppSession.user_id) == user_id)).all()
     return {row.session_name: row.name for row in rows}
+
+
+# --------------------------------------------------------------------------- #
+# Seletor "Enviar através de" (WhatsAppSessionPicker) e checagem antes de agendar
+# --------------------------------------------------------------------------- #
+# WORKING = pronto. STARTING é transitório (o scheduler adia o envio até ficar
+# pronto), então ainda dá pra agendar. O resto (QR pendente, parada, falha) é
+# "desconectado": não dá pra agendar por ali.
+_READY_STATUSES = ("WORKING", "STARTING")
+_STATUS_TEXT = {
+    "WORKING": "conectado",
+    "STARTING": "conectando",
+    "SCAN_QR_CODE": "desconectado — escaneie o QR",
+    "STOPPED": "desconectado",
+    "FAILED": "desconectado (falha)",
+}
+
+
+def _phone_of(info: dict | None) -> str:
+    me = (info or {}).get("me") or {}
+    ident = me.get("id") if isinstance(me, dict) else None
+    return "+" + str(ident).split("@")[0] if ident else ""
+
+
+async def picker_options(waha: WahaClient, sessions: list[WhatsAppSession], *, timeout: float = 4.0) -> list[dict]:
+    """Uma entrada por WhatsApp do usuário, com status pra o seletor. Nunca
+    demora mais que `timeout`: se o WAHA não respondeu, o status fica
+    "unknown" (selecionável — a checagem definitiva é `require_session_ready`
+    na hora de salvar)."""
+    try:
+        rows = await asyncio.wait_for(status_rows(waha, sessions), timeout=timeout)
+    except asyncio.TimeoutError:
+        rows = [{"session": s, "status": None, "status_error": "sem resposta"} for s in sessions]
+    out: list[dict] = []
+    for row in rows:
+        session, info = row["session"], row["status"]
+        status = str((info or {}).get("status") or "").upper()
+        if info is None:
+            level, text = "unknown", "status indisponível"
+        elif status == "WORKING":
+            level, text = "ok", _STATUS_TEXT["WORKING"]
+        elif status == "STARTING":
+            level, text = "warn", _STATUS_TEXT["STARTING"]
+        else:
+            level, text = "err", _STATUS_TEXT.get(status, "desconectado")
+        out.append(
+            {
+                "id": session.id,
+                "name": session.name,
+                "session_name": session.session_name,
+                "phone": _phone_of(info),
+                "level": level,
+                "status_text": text,
+                "selectable": level != "err",
+            }
+        )
+    return out
+
+
+async def require_session_ready(waha: WahaClient, session: WhatsAppSession) -> None:
+    """Impede agendar por um WhatsApp desconectado — o erro aparece AGORA, no
+    formulário, e não só quando o envio falhar horas depois."""
+    if session.disconnected_at is not None:
+        # Um formulário aberto antes de a conexão ser removida ainda pode mandar o id dela.
+        raise ValidationError(
+            f"O WhatsApp “{session.name}” foi desconectado. Escolha outro ou conecte-o de novo em Configurações → Conexões."
+        )
+    try:
+        info = await waha.get_session_status(session.session_name)
+    except WahaError as exc:
+        raise ValidationError(
+            f"Não consegui verificar o WhatsApp “{session.name}” agora ({exc}). Tente novamente em instantes."
+        ) from exc
+    status = str(info.get("status") or "").upper()
+    if status not in _READY_STATUSES:
+        raise ValidationError(
+            f"O WhatsApp “{session.name}” está {_STATUS_TEXT.get(status, 'desconectado')}. "
+            "Reconecte-o em Configurações → Conexões antes de agendar."
+        )

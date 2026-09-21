@@ -14,18 +14,21 @@ import asyncio
 import logging
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, col, select
 
 from . import clock
 from .config import settings
 from .db import get_engine
-from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule, ScheduleDependency
+from .models import OPEN_STATUSES, CachedMessage, Dispatch, DispatchStatus, Schedule, ScheduleDependency
 from .recurrence import local_to_utc, next_run_utc, normalize_recurrence
 from .waha import WahaClient, WahaError, extract_message_id
 
 logger = logging.getLogger("whatsapp_scheduler.scheduler")
+
+# Teto de passadas por tick (uma sequência tem no máximo 20 mensagens).
+_MAX_CHAIN_PASSES = 25
 
 
 # --------------------------------------------------------------------------- #
@@ -147,6 +150,21 @@ def _recover_stuck(db: Session, now: datetime) -> None:
         logger.warning("recuperadas %d dispatches presas em processing", len(stuck))
 
 
+def _waiting_on_open_chain(
+    schedule_id: str, deps: dict[str, str], open_ids: set[str], enabled_ids: set[str], *, _depth: int = 0
+) -> bool:
+    """True se a cadeia desta mensagem está travada numa antecessora ATIVA que ainda tem
+    dispatch aberta (direta ou mais atrás na sequência) — nesse caso `_dependency_gate`
+    responderia "wait", então nem precisa consultar o banco. Com N mensagens agendadas
+    esperando, isso troca ~3 consultas por mensagem, a cada tick, por zero."""
+    predecessor = deps.get(schedule_id)
+    if predecessor is None or predecessor not in enabled_ids or _depth > 50:
+        return False
+    if predecessor in open_ids:
+        return True
+    return _waiting_on_open_chain(predecessor, deps, open_ids, enabled_ids, _depth=_depth + 1)
+
+
 def materialize_due() -> None:
     """Sync — roda em thread separada a partir do loop."""
     now = clock.utcnow()
@@ -156,7 +174,18 @@ def materialize_due() -> None:
         open_ids = set(
             db.exec(select(Dispatch.schedule_id).where(col(Dispatch.status).in_(list(OPEN_STATUSES)))).all()
         )
+        enabled_ids = {s.id for s in schedules}
+        deps = {
+            row.schedule_id: row.depends_on_schedule_id
+            for row in db.exec(
+                select(ScheduleDependency)
+                .join(Schedule, col(Schedule.id) == col(ScheduleDependency.schedule_id))
+                .where(col(Schedule.enabled).is_(True))
+            ).all()
+        }
         for sch in schedules:
+            if _waiting_on_open_chain(sch.id, deps, open_ids, enabled_ids):
+                continue  # a mensagem anterior ainda não saiu: o gate responderia "wait" — sem gastar consultas
             try:
                 _materialize_schedule(db, sch, now, known_open=open_ids)
             except Exception:  # não deixa uma regra ruim travar as outras
@@ -236,6 +265,7 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         chat_id = sch.chat_id
         text = sch.text
         max_attempts = sch.max_attempts
+        owner_id = sch.user_id
         attempts = d.attempts
 
     # 2. a sessão do WhatsApp está pronta?
@@ -275,12 +305,19 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         if d is None:
             return ok
         now = clock.utcnow()
+        # O usuário pode ter cancelado enquanto o envio estava em andamento.
+        # Se o envio deu certo a mensagem já saiu, então o registro fiel é
+        # "sent"; se falhou, o cancelamento vale — não ressuscita com retry.
+        canceled_meanwhile = d.status != DispatchStatus.processing
         if ok:
             d.status = DispatchStatus.sent
             d.sent_at_utc = now
             d.waha_message_id = message_id
             d.last_error = None
             logger.info("dispatch %s enviada para %s", dispatch_id, chat_id)
+            _remember_sent_message(db, owner_id, chat_id, text, message_id, now)
+        elif canceled_meanwhile:
+            logger.info("dispatch %s cancelada durante o envio; falha não gera retry", dispatch_id)
         else:
             d.attempts = attempts + 1
             d.last_error = (err or "erro desconhecido")[:1000]
@@ -302,6 +339,27 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         db.add(d)
         db.commit()
     return ok
+
+
+def _remember_sent_message(
+    db: Session, user_id: str | None, chat_id: str, text: str, message_id: str | None, now: datetime
+) -> None:
+    """Grava a mensagem agendada que acabou de sair no cache da conversa (mesma
+    coisa que `chatsvc.send_now` faz no envio imediato) — assim ela já aparece
+    no histórico da conversa sem esperar a próxima busca no WAHA."""
+    if not message_id or not user_id or db.get(CachedMessage, message_id) is not None:
+        return
+    db.add(
+        CachedMessage(
+            message_id=message_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            ts=int(now.replace(tzinfo=timezone.utc).timestamp()),
+            from_me=True,
+            body=text,
+            msg_type="chat",
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -329,8 +387,22 @@ class SchedulerService:
             self._task = None
 
     async def run_once(self) -> int:
-        await asyncio.to_thread(materialize_due)
-        return await dispatch_due(self.waha)
+        """Um tick. Repete enquanto algo foi enviado: a mensagem N+1 de uma
+        sequência só materializa depois que a N é confirmada como enviada
+        (`_dependency_gate`), então sem repetir cada mensagem esperaria um
+        tick inteiro (30 s) pela anterior. O espaçamento entre elas é o mesmo
+        jitter usado entre envios de um lote."""
+        total = 0
+        for _ in range(_MAX_CHAIN_PASSES):
+            await asyncio.to_thread(materialize_due)
+            sent = await dispatch_due(self.waha)
+            total += sent
+            if not sent:
+                break
+            base = max(settings.send_jitter_seconds, 0.0)
+            if base:
+                await asyncio.sleep(base + random.uniform(0, base))
+        return total
 
     async def _run(self) -> None:
         logger.info("scheduler iniciado (tick=%ss)", settings.tick_seconds)

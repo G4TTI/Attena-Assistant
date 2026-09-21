@@ -14,14 +14,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from . import calendar_service, whatsapp_service
 from .clock import utcnow
 from .models import (
     Automation,
-    AutomationMessage,
-    AutomationSchedule,
     CalendarConnection,
     Dispatch,
     DispatchStatus,
@@ -30,6 +29,7 @@ from .models import (
     EventStatus,
     OPEN_STATUSES,
     Schedule,
+    ScheduleGroup,
 )
 from .recurrence import local_to_utc, utc_to_local
 
@@ -124,30 +124,35 @@ def failed_count_on(db: Session, user_id: str, day: date, tz_name: str) -> int:
     )
 
 
-def _message_count_for_schedule(db: Session, schedule_id: str) -> int:
-    """Quantas mensagens tem a automação dona desse Schedule — 1 se o
-    agendamento não vier de uma automação (avulso)."""
-    link = db.exec(select(AutomationSchedule).where(col(AutomationSchedule.schedule_id) == schedule_id)).first()
-    if link is None:
-        return 1
-    return len(
-        db.exec(select(AutomationMessage).where(col(AutomationMessage.automation_id) == link.automation_id)).all()
-    )
+def _group_info(db: Session, schedule: Schedule) -> tuple[int, str]:
+    """(quantas mensagens tem o agendamento a que este `Schedule` pertence,
+    nome do destinatário) — 1 mensagem e o próprio `recipient_input` se o
+    schedule ainda não tem grupo."""
+    if schedule.group_id is None:
+        return 1, schedule.recipient_input
+    group = db.get(ScheduleGroup, schedule.group_id)
+    count = db.exec(select(func.count()).select_from(Schedule).where(col(Schedule.group_id) == schedule.group_id)).one()
+    name = (group.recipient_name if group and group.recipient_name else schedule.recipient_input)
+    return int(count or 1), name
 
 
-def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5) -> list[dict]:
+def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5, tz_name: str | None = None) -> list[dict]:
+    """`tz_name`: fuso do USUÁRIO — o horário mostrado é sempre nele (o mesmo
+    das outras telas), não no fuso guardado em cada schedule."""
     wa_labels = whatsapp_service.labels_by_session_name(db, user_id)
     rows: list[dict] = []
     for dispatch in scheduled_dispatches(db, user_id)[:limit]:
         schedule = db.get(Schedule, dispatch.schedule_id)
         if schedule is None:
             continue
+        message_count, recipient = _group_info(db, schedule)
         rows.append(
             {
                 "dispatch": dispatch,
                 "schedule": schedule,
-                "send_local": utc_to_local(dispatch.scheduled_at_utc, schedule.timezone),
-                "message_count": _message_count_for_schedule(db, schedule.id),
+                "recipient": recipient,
+                "send_local": utc_to_local(dispatch.scheduled_at_utc, tz_name or schedule.timezone),
+                "message_count": message_count,
                 "whatsapp_label": wa_labels.get(schedule.session, schedule.session),
             }
         )

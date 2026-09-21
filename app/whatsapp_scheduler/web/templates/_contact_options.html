@@ -1,5 +1,5 @@
 {% if contacts_error %}
-<p class="contact-empty">Não consegui carregar seus contatos do WhatsApp ({{ contacts_error }}) — digite o número manualmente abaixo.</p>
+<p class="contact-empty">Não consegui carregar seus contatos do WhatsApp ({{ contacts_error }}) — digite o número na busca acima.</p>
 {% elif contacts %}
   {% set palette = ['', 'bg-c1', 'bg-c2', 'bg-c3', 'bg-c4'] %}
   {% for contact in contacts %}
@@ -16,5 +16,5 @@
   {% endfor %}
   <p class="contact-empty" hidden>Nenhum contato encontrado.</p>
 {% else %}
-<p class="contact-empty">Nenhuma conversa encontrada — digite o número manualmente abaixo.</p>
+<p class="contact-empty">Nenhuma conversa encontrada — digite o número na busca acima.</p>
 {% endif %}

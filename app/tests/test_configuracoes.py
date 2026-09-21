@@ -51,7 +51,7 @@ def test_connections_list_polls_fast_until_the_whatsapp_is_connected(client):
     sempre, porque a lista (aba Conexões) não tinha nenhuma atualização."""
     client.waha.status = "SCAN_QR_CODE"
     html = client.get("/ui/whatsapps").text
-    assert 'hx-get="/ui/whatsapps"' in html
+    assert 'hx-get="/ui/whatsapps?sig=' in html
     assert "every 3s" in html
 
     client.waha.status = "WORKING"
@@ -100,3 +100,17 @@ def test_connections_list_qr_image_has_no_src_in_the_html(client):
     client.waha.status = "SCAN_QR_CODE"
     img = re.search(r"<img[^>]*alt=\"QR code\"[^>]*>", client.get("/ui/whatsapps").text).group(0)
     assert " src=" not in img
+
+
+def test_connections_list_poll_returns_204_when_nothing_changed(client):
+    """Mesma regressão do onboarding: a lista não pode ser recriada (e o botão/QR piscar) a cada 3s."""
+    import re
+
+    client.waha.status = "SCAN_QR_CODE"
+    html = client.get("/ui/whatsapps").text
+    assert "data-poll" in html
+    sig = re.search(r'hx-get="/ui/whatsapps\?sig=([0-9a-f]+)"', html).group(1)
+    assert client.get("/ui/whatsapps", params={"sig": sig}).status_code == 204
+    client.waha.status = "WORKING"
+    changed = client.get("/ui/whatsapps", params={"sig": sig})
+    assert changed.status_code == 200 and "conectado" in changed.text

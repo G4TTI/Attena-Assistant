@@ -1,0 +1,10 @@
+{# Resposta de /ui/calendario/events/{id}/automation-preview — horário calculado por timing.py. #}
+{% if error %}
+<span class="preview-error">{{ error }}</span>
+{% else %}
+<span class="automation-preview-value">{{ target_local.strftime('%H:%M') }} — {{ target_local.strftime('%d/%m/%Y') }}</span>
+<span class="preview-rule">{{ rule_line }}{% if tz_note %} · {{ tz_note }}{% endif %}</span>
+{% if warning %}<span class="preview-warn">⚠️ {{ warning }}</span>{% endif %}
+{% endif %}
+{# Erro do campo "Intervalo personalizado", trocado no lugar (hx-swap-oob) — vazio/oculto quando está tudo certo. #}
+<p id="au_custom_interval_error" class="field-error" hx-swap-oob="true" {% if not field_error %}hidden{% endif %}>{{ field_error or '' }}</p>

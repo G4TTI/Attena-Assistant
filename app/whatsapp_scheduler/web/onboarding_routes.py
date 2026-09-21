@@ -8,7 +8,7 @@ from __future__ import annotations
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlmodel import Session
 
 from .. import auth, calendar_service, onboarding_service, whatsapp_service
@@ -52,9 +52,18 @@ async def page_onboarding(
 
 @router.get("/ui/onboarding/whatsapp", response_class=HTMLResponse)
 async def ui_onboarding_whatsapp(
-    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
-) -> HTMLResponse:
-    return templates.TemplateResponse("_onboarding_whatsapp_step.html", await _ctx(request, db, current_user, 1))
+    request: Request,
+    sig: str = Query(""),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> Response:
+    """Atualização periódica do passo. `sig` é a assinatura do que a tela já mostra: se
+    nada mudou, 204 (o htmx não troca nada) — sem isso o botão e o QR eram recriados a
+    cada 3s e piscavam."""
+    ctx = await _ctx(request, db, current_user, 1)
+    if sig and sig == whatsapp_service.status_signature(ctx.get("whatsapp_row")):
+        return Response(status_code=204)
+    return templates.TemplateResponse("_onboarding_whatsapp_step.html", ctx)
 
 
 @router.post("/onboarding/whatsapp/start", response_class=HTMLResponse)

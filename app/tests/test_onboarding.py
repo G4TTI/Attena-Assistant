@@ -242,3 +242,56 @@ def test_qr_image_has_no_src_in_the_html_so_polls_do_not_redownload_it(client):
     client.waha.status = "SCAN_QR_CODE"
     img = _qr_img_tag(client.get("/ui/onboarding/whatsapp").text)
     assert " src=" not in img
+
+
+# --- botão e QR piscando na tela de primeiros passos -------------------------- #
+def _step_sig(html: str) -> str:
+    import re
+
+    match = re.search(r'hx-get="/ui/onboarding/whatsapp\?sig=([0-9a-f]+)"', html)
+    assert match, "assinatura (sig) não encontrada no contêiner do passo"
+    return match.group(1)
+
+
+def test_periodic_poll_returns_204_when_nothing_changed(client):
+    """Regressão: o passo era recriado a cada 3s (botão e QR piscavam). Com a assinatura do que a
+    tela já mostra, o servidor responde 204 e o htmx não troca nada."""
+    client.waha.status = "SCAN_QR_CODE"
+    sig = _step_sig(client.get("/ui/onboarding/whatsapp").text)
+    assert client.get("/ui/onboarding/whatsapp", params={"sig": sig}).status_code == 204
+    assert client.get("/ui/onboarding/whatsapp", params={"sig": sig}).status_code == 204  # de novo: continua igual
+
+
+def test_poll_renders_again_as_soon_as_the_state_changes(client):
+    client.waha.status = "SCAN_QR_CODE"
+    sig = _step_sig(client.get("/ui/onboarding/whatsapp").text)
+    client.waha.status = "WORKING"
+    changed = client.get("/ui/onboarding/whatsapp", params={"sig": sig})
+    assert changed.status_code == 200 and "WhatsApp conectado" in changed.text
+    assert _step_sig(changed.text) != sig                                   # a nova assinatura acompanha o novo estado
+    assert client.get("/ui/onboarding/whatsapp", params={"sig": "obsoleto"}).status_code == 200
+    assert client.get("/ui/onboarding/whatsapp").status_code == 200         # sem sig (primeira carga) sempre renderiza
+
+
+def test_polling_container_is_marked_so_it_does_not_flip_the_buttons_label(client):
+    """O contêiner de polling ganha `htmx-request` a cada consulta; o CSS do "gerando…" tem que ignorá-lo."""
+    from pathlib import Path
+
+    client.waha.status = "SCAN_QR_CODE"
+    import re
+
+    html = client.get("/ui/onboarding/whatsapp").text
+    wrapper = re.search(r'<div id="onboarding-whatsapp-step"[^>]*>', html).group(0)
+    assert "data-poll" in wrapper and 'hx-swap="outerHTML"' in wrapper
+    base = (Path(__file__).parent.parent / "whatsapp_scheduler/web/templates/base.html").read_text(encoding="utf-8")
+    assert ".htmx-request:not([data-poll]) .hide-loading" in base
+    assert ".htmx-request:not([data-poll]) .spin" in base
+    assert ".htmx-request .hide-loading" not in base.replace(".htmx-request:not([data-poll]) .hide-loading", "")
+
+
+def test_new_qr_is_decoded_before_it_replaces_the_old_one_and_identical_qr_is_skipped(client):
+    from pathlib import Path
+
+    base = (Path(__file__).parent.parent / "whatsapp_scheduler/web/templates/base.html").read_text(encoding="utf-8")
+    load_qr = base.split("function loadQr(img)")[1].split("function refreshQrImages")[0]
+    assert "pre.decode" in load_qr and "img.getAttribute('src')" in load_qr

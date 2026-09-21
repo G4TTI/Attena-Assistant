@@ -9,8 +9,10 @@
    o filtro `[expr]` do htmx usa eval e a CSP o bloqueia. #}
 {% set ns = namespace(pending=false) %}
 {% for row in rows %}{% if not row.status or row.status.status != 'WORKING' %}{% set ns.pending = true %}{% endif %}{% endfor %}
-<div hx-get="/ui/whatsapps" hx-target="#whatsapp-list" hx-swap="innerHTML"
-     hx-trigger="every {{ '3s' if ns.pending else '15s' }}" data-pause-on-input>
+{# `sig` + `data-poll`: mesmo mecanismo do passo do onboarding — 204 quando nada mudou e nenhum
+   "conectando…" falso nos botões durante a consulta periódica. #}
+<div hx-get="/ui/whatsapps?sig={{ rows | wa_sig }}" hx-target="#whatsapp-list" hx-swap="innerHTML"
+     hx-trigger="every {{ '3s' if ns.pending else '15s' }}" data-pause-on-input data-poll>
 <form hx-post="/whatsapps" hx-target="#whatsapp-list" hx-swap="innerHTML" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
   <div class="field" style="flex:1 1 220px;margin:0">
     <label for="wa_new_name">Nome da conexão</label>

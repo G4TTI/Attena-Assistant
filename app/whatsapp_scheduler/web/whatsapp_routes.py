@@ -5,7 +5,7 @@ vez por conexão em vez de uma vez só."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlmodel import Session
 
@@ -37,9 +37,40 @@ def page_whatsapps(current_user: User = Depends(auth.require_user_web)) -> Redir
 
 @router.get("/ui/whatsapps", response_class=HTMLResponse)
 async def ui_whatsapps(
-    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+    request: Request,
+    sig: str = Query(""),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> Response:
+    """Atualização periódica da lista de conexões: 204 quando nada mudou desde a última
+    renderização (`sig`), pra a lista, os botões e o QR não serem recriados à toa."""
+    ctx = await _list_ctx(request, db, current_user)
+    if sig and sig == whatsapp_service.status_signature(ctx["rows"]):
+        return Response(status_code=204)
+    return templates.TemplateResponse("_whatsapp_list.html", ctx)
+
+
+@router.get("/ui/whatsapp-picker-options", response_class=HTMLResponse)
+async def ui_whatsapp_picker_options(
+    request: Request,
+    selected: str = Query(""),
+    control: str = Query(""),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    return templates.TemplateResponse("_whatsapp_list.html", await _list_ctx(request, db, current_user))
+    """`<option>`s do seletor "Enviar através de" com o status ao vivo — só os
+    WhatsApps do usuário autenticado. Carregado à parte (o status é uma chamada
+    de rede ao WAHA), então o formulário nunca espera por isso pra aparecer."""
+    sessions = whatsapp_service.list_sessions(db, current_user.id)
+    options = await whatsapp_service.picker_options(_waha(request), sessions)
+    ready = [o for o in options if o["selectable"]]
+    chosen = selected if any(o["id"] == selected for o in options) else (ready[0]["id"] if ready else "")
+    # `control` vira parte de um id no HTML — só aceita o que o próprio app gera.
+    control = control if control.replace("-", "").replace("_", "").isalnum() else "wa"
+    return templates.TemplateResponse(
+        "_whatsapp_picker_options.html",
+        {"request": request, "options": options, "chosen": chosen, "control": control, "any_ready": bool(ready)},
+    )
 
 
 @router.post("/whatsapps", response_class=HTMLResponse)

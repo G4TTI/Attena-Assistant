@@ -1,13 +1,18 @@
+{% from "_components.html" import icon, message_sequence_editor, schedule_datetime_picker %}
 {% set is_err = ok and ok.startswith('erro:') %}
+{% set sf = schedule_form %}
 <div class="chat-header">
+  <button type="button" class="icon-btn ghost mobile-back" aria-label="Voltar para as conversas" onclick="chatBack()">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg>
+  </button>
   <span class="avatar avatar-md">{{ (chat.name or '?')[0] | upper }}{% if chat.picture %}<img src="{{ chat.picture }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}</span>
   <div style="min-width:0;flex:1">
     <strong>{{ chat.name }}</strong>
     <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78rem">{{ chat_id }}</div>
   </div>
-  <button class="icon-btn ghost" title="Atualizar histórico"
+  <button class="icon-btn ghost" title="Atualizar histórico" aria-label="Atualizar histórico"
           hx-get="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}&refresh=1"
-          hx-target="#chat-scroll" hx-swap="innerHTML">
+          hx-target="#chat-history" hx-swap="innerHTML">
     <span class="hide-loading"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"></path><path d="M20 3.5v4h-4"></path></svg></span>
     <span class="spin">…</span>
   </button>
@@ -16,53 +21,85 @@
 {% if is_err %}<div class="alert err" style="margin:10px 16px 0">{{ ok[5:] }}</div>
 {% elif ok %}<div class="alert ok" style="margin:10px 16px 0">{{ ok }}</div>{% endif %}
 
-<div id="chat-scroll" class="chat-scroll"
-     hx-get="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}" hx-trigger="load">
-  <p class="muted center-note">Buscando o histórico no WhatsApp… a primeira vez pode levar até 1 minuto.</p>
+<div id="chat-scroll" class="chat-scroll">
+  {# Histórico (WhatsApp, pode demorar) e mensagens agendadas (banco, instantâneas) são
+     independentes: o agendamento nunca fica esperando o histórico carregar. #}
+  <div id="chat-history"
+       hx-get="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}" hx-trigger="load"
+       data-reload-url="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}">
+    <p class="muted center-note">Buscando o histórico no WhatsApp… a primeira vez pode levar até 1 minuto.</p>
+  </div>
+  <div id="chat-scheduled"
+       hx-get="/ui/chats/{{ session_id }}/scheduled?chat={{ chat_id | urlencode }}" hx-trigger="every 15s"
+       hx-swap="innerHTML" data-pause-when-hidden>
+    {% include "_chat_scheduled.html" %}
+  </div>
 </div>
 
 <div class="composer">
   <form id="form-now" class="composer-row" hx-post="/ui/chats/{{ session_id }}/send" hx-target="#chat-view" hx-swap="innerHTML">
     <input type="hidden" name="chat" id="composer-chat" value="{{ chat_id }}">
-    <button type="button" class="icon-btn round" title="Agendar esta mensagem" onclick="toggleSchedule()">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
+    <button type="button" class="icon-btn round" title="Agendar mensagens" aria-label="Agendar mensagens" onclick="toggleSchedule()">
+      {{ icon('clock', 18) }}
     </button>
     <textarea id="composer-text" name="text" rows="1" placeholder="Mensagem" required
               onkeydown="composerKeydown(event)" oninput="autoGrow(this)"></textarea>
-    <button type="submit" class="icon-btn round send" title="Enviar">
+    <button type="submit" class="icon-btn round send" title="Enviar" aria-label="Enviar">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.6l17.6-8.6L3.4 3.4l-.1 6.7 12.6 1.9-12.6 1.9z"></path></svg>
     </button>
   </form>
 
-  <div id="schedule-pop" class="schedule-pop" hidden>
+  <div id="schedule-pop" class="schedule-pop" {% if not sf.open %}hidden{% endif %}>
     <div class="schedule-pop-head">
-      <strong>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.4 2"></path></svg>
-        Agendar esta mensagem
-      </strong>
-      <button type="button" class="icon-btn ghost sm" onclick="toggleSchedule()">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
-      </button>
+      <strong>{{ icon('clock', 15) }} Agendar mensagens</strong>
+      <button type="button" class="icon-btn ghost sm" aria-label="Fechar" onclick="toggleSchedule(false)">{{ icon('x', 13) }}</button>
     </div>
-    <form hx-post="/ui/chats/{{ session_id }}/schedule" hx-target="#chat-view" hx-swap="innerHTML"
-          hx-include="#composer-text,#composer-chat">
-      <div class="row">
-        <div>
-          <label for="cv_send_at">Quando</label>
-          <input id="cv_send_at" type="datetime-local" name="send_at" required>
+    {# Uma sequência: a data e o horário valem para o agendamento INTEIRO (são o horário em que a
+       1ª mensagem sai) e não são reiniciados ao adicionar mensagens. #}
+    <form class="schedule-form" hx-post="/ui/chats/{{ session_id }}/schedule" hx-target="#chat-view" hx-swap="innerHTML"
+          data-recipient-label="{{ chat.name }}" data-wa-name="{{ wa_name }}"
+          oninput="updateFormSummary(this)" onchange="updateFormSummary(this)">
+      <input type="hidden" name="chat" value="{{ chat_id }}">
+      <div class="field">
+        <label for="cv_send_date">Data e horário do envio</label>
+        {{ schedule_datetime_picker('cv_send', sf.send_date, sf.send_time, sf.min_date, tz_label) }}
+      </div>
+      <div class="field">
+        <label>Mensagens</label>
+        {{ message_sequence_editor(sf.messages) }}
+      </div>
+      <details class="advanced" {{ 'open' if sf.advanced_open }}>
+        <summary>Opções avançadas</summary>
+        <div class="adv-body">
+          <div class="field">
+            <label for="cv_rec">Recorrência <b>(vazio = uma vez)</b></label>
+            <input id="cv_rec" name="recurrence" list="reclist" value="{{ sf.recurrence }}" placeholder="ex: daily 09:00"
+                   {{ 'disabled' if sf.messages | length > 1 }}>
+            <datalist id="reclist">
+              <option value="daily 09:00"><option value="weekly mon 08:30"><option value="hourly">
+            </datalist>
+            <p class="recurrence-note" {{ 'hidden' if sf.messages | length <= 1 }}>A recorrência só está disponível para agendamentos com uma única mensagem.</p>
+          </div>
         </div>
-        <div>
-          <label for="cv_rec">Recorrência</label>
-          <input id="cv_rec" name="recurrence" list="reclist" placeholder="vazio = uma vez">
-          <datalist id="reclist">
-            <option value="daily 09:00"><option value="weekly mon 08:30"><option value="hourly">
-          </datalist>
-        </div>
+      </details>
+      <div class="schedule-summary">
+        <dl class="summary-kv">
+          <dt>Destinatário</dt><dd data-f="recipient">—</dd>
+          <dt>WhatsApp</dt><dd data-f="whatsapp">—</dd>
+          <dt>Mensagens</dt><dd data-f="messages">—</dd>
+          <dt>Primeiro envio</dt><dd data-f="when">—</dd>
+        </dl>
       </div>
       <div class="schedule-pop-ft">
-        <button type="submit">Confirmar agendamento</button>
-        <span class="muted">fuso {{ default_timezone }}</span>
+        <button type="submit" hx-disabled-elt="this">Confirmar agendamento</button>
       </div>
     </form>
   </div>
 </div>
+<script>
+  (function(){
+    window.__chatOpenCount = {{ open_count }};
+    var form = document.querySelector('#schedule-pop form');
+    if (form) initScheduleForm(form);
+  })();
+</script>

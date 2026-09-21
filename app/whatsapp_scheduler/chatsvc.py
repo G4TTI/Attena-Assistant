@@ -44,6 +44,17 @@ def _cache_for(session: str) -> dict:
     return _chat_cache.setdefault(session, {"at": 0.0, "data": []})
 
 
+def cached_chat_name(session: str, chat_id: str) -> str | None:
+    """Nome do contato na lista de conversas JÁ em cache (nunca vai à rede) —
+    usado pra dar um nome legível ao agendamento feito de dentro da conversa.
+    A lista costuma estar quente: a tela de Conversas acabou de carregá-la."""
+    for chat in _cache_for(session)["data"]:
+        if chat["id"] == chat_id:
+            name = (chat.get("name") or "").strip()
+            return name if name and name != chat_id.split("@")[0] else None
+    return None
+
+
 def _fmt_ts(ts: int, tz_name: str) -> str:
     if not ts:
         return ""

@@ -5,8 +5,13 @@
    base.html (`data-pause-on-input`): a versão anterior usava o filtro
    `every 3s [expr]` do htmx, que avalia a expressão com eval — a CSP o bloqueia,
    o filtro era ignorado em silêncio e o poll nunca pausava. #}
-<div id="onboarding-whatsapp-step" hx-get="/ui/onboarding/whatsapp"
-     hx-trigger="every 3s" data-pause-on-input hx-swap="innerHTML">
+{# `sig`: assinatura do que esta tela mostra. Se nada mudou, o servidor responde 204 e o htmx
+   não troca nada (o botão e o QR nunca são recriados à toa). Quando muda, o passo inteiro
+   (inclusive este contêiner, com a assinatura nova) é substituído — por isso outerHTML.
+   `data-poll` diz ao CSS que este contêiner é só o timer: o "gerando…" dos botões é do
+   pedido DELES, não da consulta periódica. #}
+<div id="onboarding-whatsapp-step" hx-get="/ui/onboarding/whatsapp?sig={{ whatsapp_row | wa_sig }}"
+     hx-trigger="every 3s" data-pause-on-input data-poll hx-swap="outerHTML">
   {% if status == "WORKING" %}
     <div class="notice" style="border-color:var(--accent-d)">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-d)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9"></path></svg>

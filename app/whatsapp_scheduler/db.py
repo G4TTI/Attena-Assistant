@@ -37,6 +37,12 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     # migrate_legacy_users` marca retroativamente quem já existia como
     # concluído, então só conta nova de verdade fica pendente.
     ("users", "onboarding_completed_at", "ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT"),
+    # Agendamento único (v1.3.3): cada mensagem pertence a um `ScheduleGroup` e
+    # tem uma posição na sequência. `service.backfill_groups` preenche as
+    # linhas antigas no boot.
+    ("schedules", "group_id", "ALTER TABLE schedules ADD COLUMN group_id TEXT"),
+    ("schedules", "position", "ALTER TABLE schedules ADD COLUMN position INTEGER NOT NULL DEFAULT 0"),
+    ("automations", "custom_interval", "ALTER TABLE automations ADD COLUMN custom_interval TEXT"),
 ]
 
 
@@ -85,6 +91,10 @@ _INDEX_MIGRATIONS: list[str] = [
     "CREATE INDEX IF NOT EXISTS ix_events_user_start ON events (user_id, start_utc)",
     "CREATE INDEX IF NOT EXISTS ix_dispatches_status_scheduled ON dispatches (status, scheduled_at_utc)",
     "CREATE INDEX IF NOT EXISTS ix_dispatches_schedule_status ON dispatches (schedule_id, status)",
+    # Mesmo nome que o SQLAlchemy dá ao índice de `Schedule.group_id` (index=True):
+    # banco novo já o cria; banco migrado (tabela pré-existente) só ganha aqui.
+    "CREATE INDEX IF NOT EXISTS ix_schedules_group_id ON schedules (group_id)",
+    "CREATE INDEX IF NOT EXISTS ix_schedules_user_chat ON schedules (user_id, session, chat_id)",
 ]
 
 

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from sqlmodel import Session
 
-from . import app_settings, auth, calendar_service, onboarding_service, whatsapp_service
+from . import app_settings, auth, calendar_service, onboarding_service, service, whatsapp_service
 from .api import calendar as calendar_api
 from .api import chats as chats_api
 from .api import schedules as schedules_api
@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
     with Session(get_engine()) as db:
         calendar_service.migrate_legacy_automations(db)
         whatsapp_service.migrate_legacy_sessions(db)
+        service.backfill_groups(db)
         onboarding_service.migrate_legacy_users(db)
         app_settings.load_from_db(db)
     waha = WahaClient(settings.waha_base_url, settings.waha_api_key, settings.request_timeout)
@@ -68,7 +69,7 @@ async def lifespan(app: FastAPI):
         await waha.aclose()
 
 
-app = FastAPI(title="Attena Assistant", version="1.3.2", lifespan=lifespan)
+app = FastAPI(title="Attena Assistant", version="1.3.3", lifespan=lifespan)
 app.include_router(auth_routes.router)
 app.include_router(schedules_api.router)
 app.include_router(session_api.router)

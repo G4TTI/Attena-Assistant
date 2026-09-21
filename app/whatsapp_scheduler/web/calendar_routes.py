@@ -22,13 +22,23 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, col, select
 
-from .. import app_settings, auth, calendar_service, whatsapp_service
+from .. import app_settings, auth, calendar_service, timing, whatsapp_service
 from ..db import get_session
-from ..models import Automation, AutomationMessage, AutomationSchedule, Calendar, Event, EventSyncStatus, Schedule, User
+from ..models import (
+    Automation,
+    AutomationMessage,
+    AutomationSchedule,
+    Calendar,
+    Event,
+    EventSyncStatus,
+    Schedule,
+    ScheduleGroup,
+    User,
+)
 from ..recurrence import utc_to_local
 from ..service import ValidationError
 from ..waha import WahaClient, WahaError
-from .routes import templates
+from .routes import pair_recipients, templates
 
 router = APIRouter(tags=["ui-calendario"])
 
@@ -222,16 +232,6 @@ def _parse_local_dt(date_str: str, time_str: str) -> datetime:
         raise ValidationError(f"Data/hora inválida: {date_str} {time_str}") from exc
 
 
-def _parse_interval(offset_interval: str) -> tuple[int, str]:
-    """"2 horas" chega do form como um valor só, tipo '2:hours' — o serviço
-    (create_event_automation) continua recebendo amount/unit separados."""
-    try:
-        amount_str, unit = offset_interval.split(":", 1)
-        return int(amount_str), unit
-    except (ValueError, AttributeError) as exc:
-        raise ValidationError(f"Intervalo inválido: {offset_interval!r}") from exc
-
-
 async def _contacts_ctx(request: Request, waha_session: str) -> dict:
     try:
         contacts = await calendar_service.list_contacts(_waha(request), waha_session)
@@ -240,60 +240,109 @@ async def _contacts_ctx(request: Request, waha_session: str) -> dict:
         return {"contacts": [], "contacts_error": str(exc)}
 
 
+def _prefill_from_automation(db: Session, automation: Automation) -> tuple[dict, str | None]:
+    """Valores do formulário de EDIÇÃO a partir do que está gravado (+ o id do
+    WhatsApp usado, pra pré-selecionar). Nada é reinterpretado: "Personalizado ·
+    1:45" volta exatamente assim."""
+    links = db.exec(select(AutomationSchedule).where(col(AutomationSchedule.automation_id) == automation.id)).all()
+    schedule_ids = [link.schedule_id for link in links]
+    schedules = {
+        s.id: s
+        for s in (db.exec(select(Schedule).where(col(Schedule.id).in_(schedule_ids))).all() if schedule_ids else [])
+    }
+    group_ids = {s.group_id for s in schedules.values() if s.group_id}
+    groups = (
+        {g.id: g for g in db.exec(select(ScheduleGroup).where(col(ScheduleGroup.id).in_(group_ids))).all()}
+        if group_ids
+        else {}
+    )
+    recipients: dict[str, dict] = {}
+    for link in links:
+        sch = schedules.get(link.schedule_id)
+        if sch is not None and link.recipient_chat_id not in recipients:
+            group = groups.get(sch.group_id or "")
+            label = (group.recipient_name if group and group.recipient_name else "") or ""
+            recipients[link.recipient_chat_id] = {"value": link.recipient_chat_id, "label": label}
+    messages = db.exec(
+        select(AutomationMessage)
+        .where(col(AutomationMessage.automation_id) == automation.id)
+        .order_by(col(AutomationMessage.position))
+    ).all()
+    interval_value, custom_interval = timing.interval_form_values(
+        automation.offset_amount, str(automation.offset_unit), automation.custom_interval
+    )
+    prefill = {
+        "recipients": list(recipients.values()),
+        "messages": [m.text for m in messages],
+        "rule": {
+            "direction": str(automation.offset_direction),
+            "interval_value": interval_value,
+            "custom_interval": custom_interval,
+            "custom_time": automation.custom_time_local or "",
+        },
+    }
+    # Todas as mensagens/destinatários de uma automação sempre usam o mesmo
+    # WhatsApp (ver create_event_automation) — basta olhar 1 schedule.
+    any_schedule = next(iter(schedules.values()), None)
+    return prefill, (any_schedule.session if any_schedule else None)
+
+
 def _automation_modal_ctx(
-    db: Session, event: Event, *, user_id: str, year: int, month: int, automation_id: str | None = None
+    db: Session,
+    event: Event,
+    *,
+    user_id: str,
+    year: int,
+    month: int,
+    automation_id: str | None = None,
+    form_values: dict | None = None,
 ) -> dict:
+    """`form_values`: o que o usuário tinha digitado quando a validação falhou —
+    o modal volta com tudo preenchido em vez de zerar o formulário."""
     tz = event.timezone
     prefill = None
     selected_whatsapp_session_id = None
-    if automation_id:
+    if form_values is not None:
+        prefill = form_values["prefill"]
+        selected_whatsapp_session_id = form_values.get("whatsapp_session_id") or None
+    elif automation_id:
         automation = db.get(Automation, automation_id)
         if automation is None:
             raise HTTPException(status_code=404, detail="Automação não encontrada.")
-        links = db.exec(
-            select(AutomationSchedule).where(col(AutomationSchedule.automation_id) == automation_id)
-        ).all()
-        schedule_ids = [link.schedule_id for link in links]
-        schedules = {
-            s.id: s
-            for s in (
-                db.exec(select(Schedule).where(col(Schedule.id).in_(schedule_ids))).all() if schedule_ids else []
-            )
-        }
-        recipients_seen: dict[str, str] = {}
-        for link in links:
-            sch = schedules.get(link.schedule_id)
-            if sch is not None:
-                recipients_seen.setdefault(link.recipient_chat_id, sch.recipient_input)
-        messages = db.exec(
-            select(AutomationMessage)
-            .where(col(AutomationMessage.automation_id) == automation_id)
-            .order_by(col(AutomationMessage.position))
-        ).all()
-        prefill = {
-            "automation_id": automation.id,
-            "recipient_chat_ids": list(recipients_seen.keys()),
-            "recipient_labels": recipients_seen,
-            "messages": [m.text for m in messages],
-            "offset_amount": automation.offset_amount,
-            "offset_unit": str(automation.offset_unit),
-            "offset_direction": str(automation.offset_direction),
-            "custom_time_local": automation.custom_time_local,
-        }
-        # Todas as mensagens/destinatários de uma automação sempre usam o
-        # mesmo WhatsApp (ver create_event_automation) — basta olhar 1 schedule.
-        any_schedule = next(iter(schedules.values()), None)
-        if any_schedule is not None:
-            existing = whatsapp_service.session_by_name(db, user_id, any_schedule.session)
+        prefill, session_name = _prefill_from_automation(db, automation)
+        if session_name:
+            existing = whatsapp_service.session_by_name(db, user_id, session_name)
             selected_whatsapp_session_id = existing.id if existing else None
     return {
         "event": event,
         "start_local": utc_to_local(event.start_utc, tz),
         "year": year,
         "month": month,
+        "automation_id": automation_id,
         "prefill": prefill,
         "whatsapp_sessions": whatsapp_service.list_sessions(db, user_id),
         "selected_whatsapp_session_id": selected_whatsapp_session_id,
+        "interval_presets": timing.INTERVAL_PRESETS,
+        "default_interval_value": timing.DEFAULT_INTERVAL_VALUE,
+    }
+
+
+def _submitted_form_values(
+    recipients: list[str], recipient_names: list[str], messages: list[str], whatsapp_session_id: str,
+    offset_direction: str, offset_interval: str, custom_interval: str, custom_time: str,
+) -> dict:
+    return {
+        "whatsapp_session_id": whatsapp_session_id,
+        "prefill": {
+            "recipients": pair_recipients(recipients, recipient_names),
+            "messages": messages or [""],
+            "rule": {
+                "direction": offset_direction if offset_direction in timing.VALID_DIRECTIONS else "before",
+                "interval_value": offset_interval or timing.DEFAULT_INTERVAL_VALUE,
+                "custom_interval": custom_interval,
+                "custom_time": custom_time,
+            },
+        },
     }
 
 
@@ -690,14 +739,66 @@ def ui_automation_edit(
     )
 
 
+@router.get("/ui/calendario/events/{event_id}/automation-preview", response_class=HTMLResponse)
+def ui_automation_preview(
+    request: Request,
+    event_id: str,
+    offset_direction: str = Query("before"),
+    offset_interval: str = Query(""),
+    custom_interval: str = Query(""),
+    custom_time: str = Query(""),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Horário calculado do disparo — pelo MESMO cálculo (`timing.py`) que grava o
+    agendamento, então o que aparece aqui é exatamente o que vai ser salvo."""
+    event = _load_event(db, event_id, current_user.id)
+    user_tz = app_settings.user_timezone(current_user)
+    ctx: dict = {"request": request, "error": None, "field_error": None}
+    try:
+        rule = timing.build_offset_rule(offset_direction, offset_interval, custom_interval, custom_time)
+    except ValidationError as exc:
+        in_custom_interval = offset_direction in ("before", "after") and offset_interval == timing.CUSTOM_INTERVAL_VALUE
+        if in_custom_interval:
+            # O erro aparece embaixo do campo (só depois que a pessoa começou a digitar);
+            # o preview só avisa que falta o intervalo.
+            ctx.update(error="informe o intervalo", field_error=str(exc) if custom_interval.strip() else None)
+        else:
+            ctx.update(error=str(exc))
+        return templates.TemplateResponse("_calendar_automation_preview.html", ctx)
+    event_tz = event.timezone or user_tz
+    target_utc = timing.target_utc_for_rule(event.start_utc, rule, event_timezone=event_tz)
+    target_local = utc_to_local(target_utc, event_tz)
+    if rule.direction == "at":
+        rule_line = f"{timing.DIRECTION_LABELS['at']} · {target_local.strftime('%H:%M')}"
+    elif rule.direction == "custom":
+        rule_line = f"Horário fixo · {timing.describe_rule(rule)}"
+    else:
+        rule_line = f"{timing.DIRECTION_LABELS[rule.direction]} · {timing.describe_rule(rule)} · {target_local.strftime('%H:%M')}"
+    warning = None
+    if rule.direction == "custom" and target_utc > event.start_utc:
+        warning = "O horário personalizado está depois do horário do evento."
+    elif target_utc < calendar_service.utcnow():
+        warning = "Esse horário já passou."
+    ctx.update(
+        target_local=target_local,
+        rule_line=rule_line,
+        warning=warning,
+        tz_note=f"fuso do evento: {timing.tz_label(event_tz)}" if event_tz != user_tz else None,
+    )
+    return templates.TemplateResponse("_calendar_automation_preview.html", ctx)
+
+
 @router.post("/ui/calendario/events/{event_id}/automation", response_class=HTMLResponse)
 async def ui_automation_create(
     request: Request,
     event_id: str,
     recipients: list[str] = Form([]),
+    recipient_names: list[str] = Form([]),
     messages: list[str] = Form([]),
-    offset_interval: str = Form(...),
+    offset_interval: str = Form(""),
     offset_direction: str = Form(...),
+    custom_interval: str = Form(""),
     custom_time: str = Form(""),
     whatsapp_session_id: str = Form(""),
     apply_to_event_ids: list[str] = Form([]),
@@ -708,10 +809,13 @@ async def ui_automation_create(
 ) -> HTMLResponse:
     event = _load_event(db, event_id, current_user.id)
     wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
+    user_tz = app_settings.user_timezone(current_user)
+    picked = pair_recipients(recipients, recipient_names)
     try:
         if wa_session is None:
             raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
-        offset_amount, offset_unit = _parse_interval(offset_interval)
+        await whatsapp_service.require_session_ready(_waha(request), wa_session)
+        rule = timing.build_offset_rule(offset_direction, offset_interval, custom_interval, custom_time)
         # Recalcula quem é "igual" a este evento no servidor — nunca confia
         # nos ids que o formulário mandou (poderiam ter sido adulterados pra
         # apontar pro evento de outro usuário).
@@ -739,30 +843,40 @@ async def ui_automation_create(
             for target in target_events:
                 calendar_service.create_event_automation(
                     db, event_id=target.id, user_id=current_user.id, waha_session=wa_session.session_name,
-                    recipients=recipients, messages=messages, offset_amount=offset_amount,
-                    offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
+                    recipients=[p["value"] for p in picked], recipient_names=[p["label"] for p in picked],
+                    messages=messages, offset_amount=rule.amount, offset_unit=rule.unit,
+                    offset_direction=rule.direction, custom_time_local=rule.custom_time_local,
+                    custom_interval=rule.custom_interval, timezone_name=user_tz,
                 )
 
         await asyncio.to_thread(_create_for_all_targets)
     except ValidationError as exc:
-        ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month)
+        form_values = _submitted_form_values(
+            recipients, recipient_names, messages, whatsapp_session_id,
+            offset_direction, offset_interval, custom_interval, custom_time,
+        )
+        ctx = _automation_modal_ctx(
+            db, event, user_id=current_user.id, year=year, month=month, form_values=form_values
+        )
         return templates.TemplateResponse(
             "_calendar_automation_modal.html", {"request": request, "form_error": str(exc), **ctx}
         )
     return templates.TemplateResponse(
         "_calendar_month_grid.html",
-        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, user_tz, oob=True)},
     )
 
 
 @router.post("/ui/calendario/automations/{automation_id}", response_class=HTMLResponse)
-def ui_automation_update(
+async def ui_automation_update(
     request: Request,
     automation_id: str,
     recipients: list[str] = Form([]),
+    recipient_names: list[str] = Form([]),
     messages: list[str] = Form([]),
-    offset_interval: str = Form(...),
+    offset_interval: str = Form(""),
     offset_direction: str = Form(...),
+    custom_interval: str = Form(""),
     custom_time: str = Form(""),
     whatsapp_session_id: str = Form(""),
     year: int = Form(...),
@@ -775,23 +889,36 @@ def ui_automation_update(
         raise HTTPException(status_code=404, detail="Automação não encontrada.")
     event = _load_event(db, automation.event_id, current_user.id)
     wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
+    user_tz = app_settings.user_timezone(current_user)
+    picked = pair_recipients(recipients, recipient_names)
     try:
         if wa_session is None:
             raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
-        offset_amount, offset_unit = _parse_interval(offset_interval)
-        calendar_service.update_event_automation(
+        await whatsapp_service.require_session_ready(_waha(request), wa_session)
+        rule = timing.build_offset_rule(offset_direction, offset_interval, custom_interval, custom_time)
+        await asyncio.to_thread(
+            calendar_service.update_event_automation,
             db, automation_id, user_id=current_user.id, waha_session=wa_session.session_name,
-            recipients=recipients, messages=messages, offset_amount=offset_amount,
-            offset_unit=offset_unit, offset_direction=offset_direction, custom_time_local=custom_time or None,
+            recipients=[p["value"] for p in picked], recipient_names=[p["label"] for p in picked],
+            messages=messages, offset_amount=rule.amount, offset_unit=rule.unit,
+            offset_direction=rule.direction, custom_time_local=rule.custom_time_local,
+            custom_interval=rule.custom_interval, timezone_name=user_tz,
         )
     except ValidationError as exc:
-        ctx = _automation_modal_ctx(db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id)
+        form_values = _submitted_form_values(
+            recipients, recipient_names, messages, whatsapp_session_id,
+            offset_direction, offset_interval, custom_interval, custom_time,
+        )
+        ctx = _automation_modal_ctx(
+            db, event, user_id=current_user.id, year=year, month=month, automation_id=automation_id,
+            form_values=form_values,
+        )
         return templates.TemplateResponse(
             "_calendar_automation_modal.html", {"request": request, "form_error": str(exc), **ctx}
         )
     return templates.TemplateResponse(
         "_calendar_month_grid.html",
-        {"request": request, **_grid_ctx(db, current_user.id, year, month, app_settings.user_timezone(current_user), oob=True)},
+        {"request": request, **_grid_ctx(db, current_user.id, year, month, user_tz, oob=True)},
     )
 
 

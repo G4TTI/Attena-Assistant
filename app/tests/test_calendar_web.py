@@ -314,7 +314,8 @@ def test_automation_modal_popover_points_to_the_lazy_contacts_endpoint(client):
     # Ao criar (sem edição prévia), nenhum WhatsApp está "selecionado" ainda
     # — o parâmetro vai vazio e o endpoint preguiçoso cai pro primary_session.
     assert 'hx-get="/ui/calendario/contacts?whatsapp_session_id="' in resp.text
-    assert 'hx-trigger="load"' in resp.text
+    # carrega quando o modal abre e de novo quando o usuário troca o WhatsApp ("reload", ver whatsappPickerChanged)
+    assert 'hx-trigger="load, reload"' in resp.text
 
 
 def test_lazy_contacts_endpoint_returns_contacts_for_the_given_whatsapp(client):

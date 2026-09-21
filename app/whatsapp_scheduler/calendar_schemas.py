@@ -59,6 +59,7 @@ class AutomationRead(BaseModel):
     offset_amount: int
     offset_unit: str
     offset_direction: str
+    custom_interval: str | None = None
     recipients: list[str]
     messages: list[str]
 
@@ -74,6 +75,7 @@ class AutomationRead(BaseModel):
             offset_amount=automation.offset_amount,
             offset_unit=str(automation.offset_unit),
             offset_direction=str(automation.offset_direction),
+            custom_interval=automation.custom_interval,
             recipients=item["recipients"],
             messages=[row["message"].text for row in item["messages"]],
         )

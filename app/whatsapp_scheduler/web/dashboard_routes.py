@@ -85,7 +85,7 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
         "sent_change_pct": sent_change_pct,
         "failed_today_count": failed_today,
         "upcoming_events": [_event_row(e) for e in dashboard_service.upcoming_events(db, user_id, limit=5)],
-        "upcoming_dispatches": dashboard_service.upcoming_dispatch_rows(db, user_id, limit=5),
+        "upcoming_dispatches": dashboard_service.upcoming_dispatch_rows(db, user_id, limit=5, tz_name=tz_name),
         "recent_activity": dashboard_service.recent_activity(db, user_id, limit=6),
         "today_date": today.isoformat(),
         "cal_year": today.year,

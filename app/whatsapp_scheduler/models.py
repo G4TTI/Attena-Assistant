@@ -37,6 +37,51 @@ TERMINAL_STATUSES = {
 OPEN_STATUSES = {DispatchStatus.pending, DispatchStatus.processing}
 
 
+class ScheduleSource(str, enum.Enum):
+    """De onde veio um agendamento (`ScheduleGroup.source`)."""
+
+    manual = "manual"              # tela Agendamentos
+    conversation = "conversation"  # tela Conversas
+    calendar = "calendar"          # automação de um evento do Calendário
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class ScheduleGroup(SQLModel, table=True):
+    """UM agendamento, do ponto de vista do usuário: um destinatário, um
+    WhatsApp, um horário de início e uma SEQUÊNCIA de mensagens (`Schedule`s
+    com o mesmo `group_id`, ordenados por `Schedule.position`).
+
+    É o modelo único usado por Conversas, Agendamentos e Calendário — só
+    `source` muda. O motor de envio (`scheduler.py`) continua trabalhando por
+    `Schedule`/`Dispatch` e não sabe o que é um grupo; o status do grupo não é
+    guardado, é derivado dos dispatches (`schedule_views.group_status`), então
+    nunca fica dessincronizado do que realmente foi enviado.
+
+    `start_local` + `timezone` é o horário que o USUÁRIO digitou (parede, no
+    fuso dele) e nunca é alterado por adicionar mensagens; o horário de cada
+    mensagem é `start + position * message_gap_seconds`."""
+
+    __tablename__ = "schedule_groups"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    source: ScheduleSource = Field(default=ScheduleSource.manual, index=True)
+    # Nome interno da sessão WAHA (`WhatsAppSession.session_name`) — igual ao `Schedule.session` de cada mensagem.
+    session: str
+    recipient_input: str
+    # Nome do contato como o usuário o viu ao escolher (só exibição); vazio =
+    # número digitado à mão ou agendamento antigo — aí vale `recipient_input`.
+    recipient_name: str | None = None
+    chat_id: str = Field(index=True)
+    timezone: str
+    start_local: datetime
+    message_gap_seconds: int = 3
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class Schedule(SQLModel, table=True):
     __tablename__ = "schedules"
 
@@ -44,6 +89,11 @@ class Schedule(SQLModel, table=True):
     # Nullable: linhas criadas antes da autenticação existir ficam sem dono
     # até `db.claim_orphan_data` associá-las ao primeiro usuário cadastrado.
     user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
+    # Agendamento (`ScheduleGroup`) a que esta mensagem pertence e a posição
+    # dela na sequência (0 = primeira). Nullable só por causa de linhas antigas
+    # — `service.backfill_groups` agrupa tudo no boot.
+    group_id: str | None = Field(default=None, foreign_key="schedule_groups.id", index=True)
+    position: int = 0
     session: str = "default"
     recipient_input: str
     chat_id: str = Field(index=True)
@@ -265,6 +315,12 @@ class Automation(SQLModel, table=True):
     # adicionada via ALTER TABLE em db.py (tabela pré-existente, sem
     # Alembic) — por isso precisa ser nullable.
     custom_time_local: str | None = Field(default=None)
+    # "1:45" quando o usuário escolheu Intervalo = "Personalizado" (antes/depois).
+    # `offset_amount`/`offset_unit` guardam o mesmo valor normalizado (105
+    # minutes) e são o que o cálculo usa; este texto só existe pra o formulário
+    # de edição voltar mostrando exatamente "Personalizado · 1:45". Coluna
+    # adicionada via ALTER TABLE em db.py.
+    custom_interval: str | None = Field(default=None)
     # Intervalo padrão entre o envio de uma mensagem e a próxima da mesma
     # automação/destinatário — arquitetura pronta para virar configurável
     # por mensagem no futuro, sem precisar mudar o schema de novo.
