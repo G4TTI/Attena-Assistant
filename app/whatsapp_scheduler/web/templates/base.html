@@ -156,7 +156,8 @@
     .alert.ok { background:var(--soft); border:1px solid color-mix(in oklab, var(--accent-d) 35%, transparent); color:var(--accent-d); }
     .muted { color:var(--mut); font-size:.82rem; }
     code { font-family:var(--font-mono); background:var(--bg); border:1px solid var(--bd); padding:1px 5px; border-radius:4px; font-size:12px; }
-    .qr { width:100%; border-radius:8px; background:#fff; display:block; }
+    .qr { width:100%; aspect-ratio:1/1; border-radius:8px; background:#fff; display:block; }
+    .qr:not([src]) { color:transparent; }
     .htmx-request .hide-loading { display:none; }
     .spin { display:none; } .htmx-request .spin { display:inline; }
 
@@ -592,6 +593,44 @@
       var typing = a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
       if(typing || el.offsetParent === null) e.preventDefault();
     });
+
+    /* QR do WhatsApp sem piscar. O passo do onboarding e a lista de conexões se
+       atualizam a cada 3s e antes recriavam o <img> com um ?ts= novo: o navegador
+       jogava a imagem fora e baixava outra, então o QR sumia e reaparecia o tempo
+       todo (e não dava pra escanear). Agora o <img> é preservado entre as
+       atualizações (hx-preserve) e este timer troca a imagem só depois que a nova
+       já chegou, mantendo a antiga se o download falhar. O WhatsApp gira o QR a
+       cada ~20s; renovar a cada 10s mantém o da tela sempre válido. Usa data: URL
+       (a CSP permite img-src data:, mas não blob:). */
+    function loadQr(img){
+      if(img.dataset.qrLoading) return;
+      img.dataset.qrLoading = '1';
+      var url = img.getAttribute('data-qr-src') + '?ts=' + Date.now();
+      fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+        .then(function(r){ if(!r.ok) throw new Error('qr ' + r.status); return r.blob(); })
+        .then(function(b){
+          var fr = new FileReader();
+          fr.onload = function(){ img.src = fr.result; delete img.dataset.qrLoading; };
+          fr.onerror = function(){ delete img.dataset.qrLoading; };
+          fr.readAsDataURL(b);
+        })
+        .catch(function(){ delete img.dataset.qrLoading; /* mantém o QR que já está na tela */ });
+    }
+    function refreshQrImages(){
+      if(document.hidden) return;
+      document.querySelectorAll('img[data-qr-src]').forEach(loadQr);
+    }
+    /* O <img> vem SEM src no HTML de propósito: o htmx baixa qualquer <img> da
+       resposta antes de descartá-lo em favor do preservado, e isso era um download
+       do QR (uma chamada ao WAHA) a cada 3s por pessoa na tela. Só um elemento
+       realmente novo, sem src, é carregado aqui, assim que aparece. */
+    function loadNewQrImages(){
+      document.querySelectorAll('img[data-qr-src]:not([src])').forEach(loadQr);
+    }
+    document.body.addEventListener('htmx:load', loadNewQrImages);
+    document.addEventListener('DOMContentLoaded', loadNewQrImages);
+    setInterval(refreshQrImages, 10000);
+    document.addEventListener('visibilitychange', function(){ if(!document.hidden) refreshQrImages(); });
 
     /* ---------------- Automação: seletor de contatos (popover + busca + chips) ---------------- */
     function contactPopoverOpen(input){

@@ -47,7 +47,11 @@
         {# Só pede a imagem quando o WAHA já tem QR: antes disso o endpoint
            devolve erro e o usuário via um quadrado vazio. #}
         {% if status == "SCAN_QR_CODE" %}
-          <img class="qr" alt="QR code" src="/ui/whatsapps/{{ whatsapp_session.id }}/qr?ts={{ range(100000)|random }}">
+          {# hx-preserve: o passo inteiro é re-renderizado a cada 3s; sem isto o <img>
+             era recriado (com ?ts= novo) e o QR piscava/sumia. Quem renova a imagem
+             de tempos em tempos, sem piscar, é refreshQrImages() em base.html. #}
+          <img id="onb-qr" class="qr" alt="QR code" hx-preserve="true"
+               data-qr-src="/ui/whatsapps/{{ whatsapp_session.id }}/qr">
           <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
         {% elif status in ("FAILED", "STOPPED") or not status %}
           <p>Não foi possível gerar o QR agora. Clique em <b>{{ 'Gerar novo QR' if status else 'Iniciar pareamento' }}</b>.</p>

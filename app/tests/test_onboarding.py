@@ -213,3 +213,32 @@ def test_failed_session_offers_a_way_to_generate_a_new_qr(client):
     resp = client.post("/onboarding/whatsapp/start", data={"phone": ""})
     assert resp.status_code == 200
     assert client.waha.restart_calls == 1
+
+
+def _qr_img_tag(html: str) -> str:
+    import re
+
+    match = re.search(r"<img[^>]*alt=\"QR code\"[^>]*>", html)
+    assert match, "QR <img> não encontrado"
+    return match.group(0)
+
+
+def test_qr_image_is_preserved_across_the_periodic_refresh(client):
+    """Regressão: o passo se re-renderiza a cada 3s e recriava o <img> com um
+    ?ts= novo, então o QR sumia e reaparecia o tempo todo. Precisa de id +
+    hx-preserve (o htmx mantém o elemento) e de data-qr-src (o timer de
+    base.html renova a imagem sem recriar o elemento)."""
+    client.waha.status = "SCAN_QR_CODE"
+    img = _qr_img_tag(client.get("/ui/onboarding/whatsapp").text)
+    assert 'id="onb-qr"' in img
+    assert 'hx-preserve="true"' in img
+    assert 'data-qr-src="/ui/whatsapps/' in img
+
+
+def test_qr_image_has_no_src_in_the_html_so_polls_do_not_redownload_it(client):
+    """O htmx baixa qualquer <img> com src da resposta antes de descartá-lo em
+    favor do preservado: com src, cada poll (3s, por pessoa) custava uma
+    chamada ao WAHA. O carregamento é feito por loadNewQrImages() em base.html."""
+    client.waha.status = "SCAN_QR_CODE"
+    img = _qr_img_tag(client.get("/ui/onboarding/whatsapp").text)
+    assert " src=" not in img

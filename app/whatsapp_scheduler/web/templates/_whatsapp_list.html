@@ -66,7 +66,10 @@
 
     {% if status == "SCAN_QR_CODE" %}
     <div class="qr-box" style="align-self:flex-start">
-      <img class="qr" alt="QR code" src="/ui/whatsapps/{{ session.id }}/qr?ts={{ range(100000)|random }}">
+      {# hx-preserve: a lista é re-renderizada a cada 3s; sem isto o <img> era
+         recriado e o QR piscava. Renovação: refreshQrImages() em base.html. #}
+      <img id="qr-{{ session.id }}" class="qr" alt="QR code" hx-preserve="true"
+           data-qr-src="/ui/whatsapps/{{ session.id }}/qr">
       <p>Escaneie no WhatsApp &rarr; Aparelhos conectados.</p>
     </div>
     {% endif %}

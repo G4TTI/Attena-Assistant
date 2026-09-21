@@ -27,3 +27,16 @@ def test_pollers_that_contain_inputs_opt_into_pause_on_input():
         assert "data-pause-on-input" in text, name
     base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
     assert "htmx:beforeRequest" in base and "data-pause-on-input" in base
+
+
+def test_base_refreshes_preserved_qr_images_without_recreating_them():
+    base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+    assert "refreshQrImages" in base and "img[data-qr-src]" in base
+    # blob: não é permitido pela CSP (img-src 'self' data: https:) — tem de ser data: URL.
+    assert "readAsDataURL" in base and "createObjectURL" not in base
+
+
+def test_base_loads_new_qr_images_when_htmx_adds_them():
+    base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+    assert "loadNewQrImages" in base and "htmx:load" in base
+    assert "img[data-qr-src]:not([src])" in base

@@ -81,3 +81,22 @@ def test_connections_list_keeps_polling_after_a_waha_error(client):
     client.waha.status_error = WahaError("Falha de conexão com o WAHA")
     html = client.get("/ui/whatsapps").text
     assert "every 3s" in html
+
+
+def test_connections_list_preserves_the_qr_image_across_polls(client):
+    import re
+
+    client.waha.status = "SCAN_QR_CODE"
+    html = client.get("/ui/whatsapps").text
+    img = re.search(r"<img[^>]*alt=\"QR code\"[^>]*>", html).group(0)
+    assert re.search(r'id="qr-[0-9a-f-]+"', img)
+    assert 'hx-preserve="true"' in img
+    assert 'data-qr-src="/ui/whatsapps/' in img
+
+
+def test_connections_list_qr_image_has_no_src_in_the_html(client):
+    import re
+
+    client.waha.status = "SCAN_QR_CODE"
+    img = re.search(r"<img[^>]*alt=\"QR code\"[^>]*>", client.get("/ui/whatsapps").text).group(0)
+    assert " src=" not in img
