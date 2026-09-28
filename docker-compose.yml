@@ -4,12 +4,12 @@ services:
     # antes da 2026.6.1 o WAHA só aceitava a sessão "default" e nenhum usuário
     # novo (session_name u_<hex>) conseguia conectar.
     image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
-    container_name: waha-scheduler
+    container_name: ${WAHA_CONTAINER_NAME:-waha-scheduler}
     restart: unless-stopped
     ports:
       # Só localhost: o app fala com o WAHA pela rede interna do Docker
       # (http://waha:3000). Publicar isto na rede expõe a API/dashboard do WAHA.
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:${WAHA_HOST_PORT:-3001}:3000"
     environment:
       WAHA_API_KEY: ${WAHA_API_KEY}
       WHATSAPP_DEFAULT_ENGINE: ${WHATSAPP_DEFAULT_ENGINE:-WEBJS}
@@ -22,10 +22,10 @@ services:
 
   app:
     build: ./app
-    container_name: whatsapp-scheduler
+    container_name: ${APP_CONTAINER_NAME:-whatsapp-scheduler}
     restart: unless-stopped
     ports:
-      - "8090:8000"
+      - "${APP_HOST_PORT:-8090}:8000"
     environment:
       WAHA_BASE_URL: http://waha:3000
       WAHA_API_KEY: ${WAHA_API_KEY}
