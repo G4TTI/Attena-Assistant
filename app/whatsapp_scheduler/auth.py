@@ -188,7 +188,9 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_sessio
 def require_user_web(request: Request, db: Session = Depends(get_session)) -> User:
     user = get_current_user_optional(request, db)
     if user is None:
-        raise NotAuthenticated(next_path=request.url.path)
+        # Mantém a query string: o callback OAuth depende de ?code=&state= depois do login.
+        next_path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        raise NotAuthenticated(next_path=next_path)
     return user
 
 

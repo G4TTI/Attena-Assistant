@@ -14,6 +14,7 @@ from sqlmodel import Session
 from .. import app_settings, auth, auth_service, calendar_service, time_sync, whatsapp_service
 from ..calendar_providers.base import CalendarProviderError
 from ..clock import utcnow
+from ..config import settings
 from ..db import get_session
 from ..models import User
 from ..recurrence import utc_to_local
@@ -22,7 +23,9 @@ from .routes import templates
 
 router = APIRouter(tags=["ui-configuracoes"])
 
-_STATE_COOKIE = "google_oauth_state"
+# Derivado do cookie de sessão: cookies não separam por porta, então duas
+# instâncias no mesmo host (oficial e teste) precisam de nomes distintos.
+_STATE_COOKIE = f"{settings.session_cookie_name}_google_oauth_state"
 
 # Fusos comuns pro seletor de Preferências — qualquer outro pode ser digitado
 # no campo de texto livre ao lado (validado contra ZoneInfo no servidor).
