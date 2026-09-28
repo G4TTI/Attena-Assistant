@@ -10,6 +10,10 @@
     <strong>{{ chat.name }}</strong>
     <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.78rem">{{ chat_id }}</div>
   </div>
+  <button type="button" class="icon-btn ghost" title="Mensagens programadas" aria-label="Mensagens programadas" aria-haspopup="dialog"
+          hx-get="/ui/chats/{{ session_id }}/scheduled/panel?chat={{ chat_id | urlencode }}" hx-target="#modal-root" hx-swap="innerHTML">
+    {{ icon('list', 17) }}
+  </button>
   <button class="icon-btn ghost" title="Atualizar histórico" aria-label="Atualizar histórico"
           hx-get="/ui/chats/{{ session_id }}/messages?chat={{ chat_id | urlencode }}&refresh=1"
           hx-target="#chat-history" hx-swap="innerHTML">
@@ -98,7 +102,7 @@
 </div>
 <script>
   (function(){
-    window.__chatOpenCount = {{ open_count }};
+    window.__chatLastSent = {{ conv.last_sent_ts }};
     var form = document.querySelector('#schedule-pop form');
     if (form) initScheduleForm(form);
   })();

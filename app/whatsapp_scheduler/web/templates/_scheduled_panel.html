@@ -1,0 +1,40 @@
+{# ScheduledMessagesPanel — painel "Mensagens programadas" de UMA conversa (modal em #modal-root).
+   É o único lugar que lista programadas/canceladas de uma conversa; qualquer tela que precise
+   disso abre este painel (GET /ui/chats/{session_id}/scheduled/panel?chat=...).
+
+   Filtros (Programadas / Canceladas) e contadores vêm do banco (`schedule_views.scheduled_panel`);
+   a lista (_scheduled_panel_list.html) se atualiza sozinha e é trocada inteira a cada filtro,
+   "carregar mais" ou cancelamento. As ações usam o mesmo backend de sempre (cancel_schedule /
+   cancel_group). #}
+{% from "_components.html" import icon, status_icon %}
+<div class="modal-backdrop">
+  <div class="modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="smp-title">
+    <div class="modal-hd">
+      <div style="min-width:0">
+        <h2 id="smp-title">Mensagens programadas</h2>
+        <p class="sub smp-contact">{{ chat_name }}</p>
+      </div>
+      <button type="button" class="icon-btn ghost sm" aria-label="Fechar" onclick="closeModal()">{{ icon('x', 13) }}</button>
+    </div>
+    <form id="smp-filters" class="smp-filters" aria-label="Filtrar mensagens"
+          hx-get="/ui/chats/{{ session_id }}/scheduled/panel/list" hx-trigger="change"
+          hx-target="#smp-list" hx-swap="outerHTML">
+      <input type="hidden" name="chat" value="{{ chat_id }}">
+      <label class="smp-filter">
+        <input type="checkbox" name="scheduled" value="1" {{ 'checked' if panel.show_scheduled }}>
+        <span class="st scheduled">{{ status_icon('scheduled', 13) }}</span>
+        <span>Programadas</span>
+        <span class="smp-n">(<span id="smp-n-scheduled">{{ panel.scheduled_count }}</span>)</span>
+      </label>
+      <label class="smp-filter">
+        <input type="checkbox" name="canceled" value="1" {{ 'checked' if panel.show_canceled }}>
+        <span class="st canceled">{{ status_icon('canceled', 13) }}</span>
+        <span>Canceladas</span>
+        <span class="smp-n">(<span id="smp-n-canceled">{{ panel.canceled_count }}</span>)</span>
+      </label>
+    </form>
+    <div class="smp-body">
+      {% include "_scheduled_panel_list.html" %}
+    </div>
+  </div>
+</div>

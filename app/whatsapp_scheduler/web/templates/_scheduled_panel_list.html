@@ -1,0 +1,79 @@
+{# Lista do painel "Mensagens programadas" (ver _scheduled_panel.html). Uma seção por agendamento,
+   com as mensagens na ordem da sequência. Leva na própria URL de atualização o estado do painel
+   (filtros + quanto já carregou): cada troca (filtro, "carregar mais", cancelamento, polling)
+   substitui a lista inteira por outra já com o estado novo. O scroll fica em .smp-body (o pai),
+   então a atualização periódica não tira o usuário do lugar. #}
+{% from "_components.html" import status_icon %}
+{% set state = panel.params() %}
+<div id="smp-list" class="smp-list"
+     hx-get="/ui/chats/{{ session_id }}/scheduled/panel/list?{{ state | urlencode }}"
+     hx-trigger="every 15s" hx-swap="outerHTML" data-pause-on-input data-pause-when-hidden>
+  {% if panel.no_filter %}
+  <p class="smp-empty">Selecione pelo menos um filtro para visualizar as mensagens.</p>
+  {% elif not panel.groups %}
+  <p class="smp-empty">
+    {%- if panel.show_scheduled and panel.show_canceled %}Nenhuma mensagem programada ou cancelada nesta conversa.
+    {%- elif panel.show_scheduled %}Nenhuma mensagem programada nesta conversa.
+    {%- else %}Nenhuma mensagem cancelada nesta conversa.{% endif -%}
+  </p>
+  {% else %}
+  {% for g in panel.groups %}
+  <section class="smp-group" aria-label="Agendamento{% if g.start_local %} de {{ g.start_local.strftime('%d/%m/%Y %H:%M') }}{% endif %}">
+    <div class="smp-group-hd">
+      <div class="smp-group-info">
+        <div class="smp-group-title">Agendamento{% if g.start_local %} · {{ g.start_local.strftime('%d/%m/%Y · %H:%M') }}{% endif %}</div>
+        <div class="smp-group-sub">
+          {%- if g.source_label %}{{ g.source_label }}{% if g.event_title %} · {{ g.event_title }}{% endif %} · {% endif -%}
+          {{ g.total_messages }} mensage{{ 'm' if g.total_messages == 1 else 'ns' }}
+        </div>
+      </div>
+      {% if g.can_cancel_all %}
+      <button type="button" class="danger smp-cancel-all" onclick="smpConfirm(this, true)">Cancelar todas</button>
+      {% endif %}
+    </div>
+    {% if g.can_cancel_all %}
+    <div class="smp-confirm" role="alertdialog" aria-label="Confirmar cancelamento" data-hold-poll hidden>
+      <p>Deseja cancelar todas as mensagens programadas desta sequência?</p>
+      <div class="smp-confirm-actions">
+        <button type="button" class="ghost" onclick="smpConfirm(this, false)">Cancelar</button>
+        <button type="button" class="danger" data-confirm-default
+                hx-post="/ui/chats/{{ session_id }}/scheduled/panel/groups/{{ g.id }}/cancel"
+                hx-vals='{{ state | tojson }}' hx-target="#smp-list" hx-swap="outerHTML"
+                hx-disabled-elt="this">Confirmar cancelamento</button>
+      </div>
+    </div>
+    {% endif %}
+    <ol class="msg-detail-list smp-msgs">
+      {% for m in g.messages %}
+      <li class="smp-msg {{ m.status }}" data-status="{{ m.status }}">
+        <span class="msg-num" aria-label="Mensagem {{ m.position + 1 }}">{{ m.position + 1 }}</span>
+        <span class="msg-text">{{ m.text }}</span>
+        <div class="msg-meta">
+          <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
+          <span class="when" title="{{ m.when_local.strftime('%d/%m/%Y %H:%M:%S') }}">{{ m.when_local.strftime('%d/%m/%Y · ' ~ g.time_format) }}</span>
+          {% if m.can_cancel %}
+          <button type="button" class="sched-cancel"
+                  hx-post="/ui/chats/{{ session_id }}/scheduled/panel/messages/{{ m.schedule.id }}/cancel"
+                  hx-vals='{{ state | tojson }}' hx-target="#smp-list" hx-swap="outerHTML"
+                  hx-confirm="Cancelar esta mensagem agendada? Ela não será enviada.">Cancelar</button>
+          {% endif %}
+          {% if m.error and m.status == 'scheduled' %}<span class="msg-err">{{ m.error }}</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endfor %}
+  {% if panel.can_load_more %}
+  <button type="button" class="ghost smp-more"
+          hx-get="/ui/chats/{{ session_id }}/scheduled/panel/list?{{ panel.params(limit=panel.next_limit) | urlencode }}"
+          hx-target="#smp-list" hx-swap="outerHTML" hx-disabled-elt="this">Carregar mais</button>
+  {% endif %}
+  {% endif %}
+</div>
+{% if list_only %}
+{# Respostas só da lista: os contadores dos filtros e (depois de cancelar) a conversa atrás do painel. #}
+<span id="smp-n-scheduled" hx-swap-oob="true">{{ panel.scheduled_count }}</span>
+<span id="smp-n-canceled" hx-swap-oob="true">{{ panel.canceled_count }}</span>
+{% if conv %}<div id="chat-scheduled" hx-swap-oob="innerHTML">{% include "_chat_scheduled.html" %}</div>{% endif %}
+{% endif %}

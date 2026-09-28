@@ -20,17 +20,22 @@ nunca guardado — por isso nunca discorda do que de fato foi enviado.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import and_, exists, func, or_
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from . import timing, whatsapp_service
 from .clock import utcnow
 from .models import (
     OPEN_STATUSES,
+    Automation,
+    AutomationSchedule,
     CachedMessage,
     Dispatch,
     DispatchStatus,
+    Event,
     Schedule,
     ScheduleGroup,
     ScheduleSource,
@@ -58,9 +63,24 @@ MESSAGE_LABELS = {
 # Ícone (texto) de cada estado de MENSAGEM — o template troca por SVG do projeto.
 STATUS_ICONS = {"scheduled": "🕐", "sending": "⏳", "sent": "✓", "failed": "⚠️", "skipped": "⚠️", "canceled": "○"}
 
+SOURCE_LABELS = {
+    ScheduleSource.manual: "Agendamentos",
+    ScheduleSource.conversation: "Conversa",
+    ScheduleSource.calendar: "Calendário",
+}
+# Estados de uma mensagem que ainda vai sair ("programada").
+OPEN_MESSAGE_STATUSES = ("scheduled", "sending")
+
 # Quanto tempo mensagens já encerradas continuam aparecendo dentro da conversa.
 _CONVERSATION_HISTORY_WINDOW = timedelta(days=3)
 _LIST_RECENT_FINISHED = 50
+# Até quantas mensagens programadas aparecem uma a uma dentro da conversa; a
+# partir daí elas viram um botão só ("Ver mensagens programadas").
+CONVERSATION_INLINE_LIMIT = 4
+# Painel de mensagens programadas: quantas mensagens vêm por vez (sempre
+# sequências inteiras) e o teto de "carregar mais".
+PANEL_PAGE_SIZE = 30
+PANEL_MAX_LIMIT = 1000
 
 
 @dataclass
@@ -174,6 +194,40 @@ def message_status(schedule: Schedule, dispatches: list[Dispatch]) -> tuple[str,
         DispatchStatus.skipped: "skipped",
         DispatchStatus.canceled: "canceled",
     }.get(last.status, "scheduled"), last
+
+
+def _dispatch_exists(*conditions):
+    return exists().where(col(Dispatch.schedule_id) == col(Schedule.id), *conditions)
+
+
+def open_clause():
+    """`message_status(...) in ("scheduled", "sending")` em SQL, pra contar sem
+    carregar as linhas: tem dispatch aberta, ou ainda nenhuma e está ativa."""
+    return or_(
+        _dispatch_exists(col(Dispatch.status).in_(list(OPEN_STATUSES))),
+        and_(col(Schedule.enabled).is_(True), ~_dispatch_exists()),
+    )
+
+
+def canceled_clause():
+    """`message_status(...) == "canceled"` em SQL: nenhuma dispatch aberta e
+    (desativada sem nunca ter tido dispatch, ou a ÚLTIMA dispatch foi cancelada).
+    `test_sql_status_clauses_match_message_status` garante que não divergem."""
+    later = aliased(Dispatch)
+    last_is_canceled = _dispatch_exists(
+        col(Dispatch.status) == DispatchStatus.canceled,
+        # Compara com a dispatch do nível de cima (e não com `Schedule.id`): o SQLAlchemy só
+        # correlaciona com o SELECT imediatamente acima — com Schedule aqui o subselect virava
+        # um produto cartesiano com `schedules`.
+        ~exists().where(
+            col(later.schedule_id) == col(Dispatch.schedule_id),
+            col(later.scheduled_at_utc) > col(Dispatch.scheduled_at_utc),
+        ),
+    )
+    return and_(
+        ~_dispatch_exists(col(Dispatch.status).in_(list(OPEN_STATUSES))),
+        or_(and_(col(Schedule.enabled).is_(False), ~_dispatch_exists()), last_is_canceled),
+    )
 
 
 def group_status(message_statuses: list[str]) -> str:
@@ -317,59 +371,319 @@ def get_group_view(db: Session, group_id: str, user_id: str, tz_name: str) -> Gr
     return views[0] if views else None
 
 
-def conversation_items(
-    db: Session, user_id: str, session_name: str, chat_id: str, tz_name: str
-) -> tuple[list[MessageView], set[str]]:
-    """Mensagens agendadas desta conversa, para aparecerem DENTRO dela.
+# --------------------------------------------------------------------------- #
+# Conversas: o que aparece DENTRO da conversa e o painel "Mensagens programadas"
+# --------------------------------------------------------------------------- #
+def _chat_scope(user_id: str, session_name: str, chat_id: str) -> tuple:
+    """Uma conversa = (usuário, WhatsApp, chat). Toda consulta daqui passa por isso."""
+    return (
+        col(Schedule.user_id) == user_id,
+        col(Schedule.session) == session_name,
+        col(Schedule.chat_id) == chat_id,
+    )
 
-    Devolve (itens, ids_enviados):
-    - itens: agendadas/enviando sempre; falhas/canceladas dos últimos dias; e
-      enviadas que ainda não aparecem no histórico local (raro — o scheduler
-      já grava a mensagem enviada no cache da conversa).
-    - ids_enviados: `waha_message_id` das enviadas por agendamento, pra marcar
-      no histórico quais bolhas vieram de um agendamento (✓ agendada)."""
+
+def _count(db: Session, scope: tuple, clause) -> int:
+    return int(db.exec(select(func.count()).select_from(Schedule).where(*scope, clause)).one())
+
+
+def _by_time(m: MessageView) -> tuple:
+    return (m.when_utc, m.position)
+
+
+@dataclass
+class ConversationScheduled:
+    """Mensagens agendadas de uma conversa, do jeito que a conversa as mostra:
+
+    - até `CONVERSATION_INLINE_LIMIT` programadas: uma bolha por mensagem;
+    - acima disso: um botão só ("Ver mensagens programadas"), que abre o painel;
+    - canceladas nunca viram bolha — ficam no painel; enquanto houver
+      cancelamento recente aparece só um link discreto;
+    - falhas e enviadas que ainda não estão no histórico continuam como bolhas
+      (são o histórico real da conversa)."""
+
+    open_items: list[MessageView] = field(default_factory=list)
+    recent_items: list[MessageView] = field(default_factory=list)
+    recent_canceled: int = 0  # canceladas nos últimos dias
+    # Todas as canceladas da conversa (o mesmo número do painel) — só é contado
+    # quando há cancelamento recente, o único caso em que a conversa o mostra.
+    canceled_count: int = 0
+    sent_ids: set[str] = field(default_factory=set)
+    # Epoch do último envio confirmado: quando aumenta, a tela recarrega o histórico
+    # pra a bolha real da mensagem aparecer.
+    last_sent_ts: int = 0
+
+    @property
+    def open_count(self) -> int:
+        return len(self.open_items)
+
+    @property
+    def collapsed(self) -> bool:
+        return self.open_count > CONVERSATION_INLINE_LIMIT
+
+    @property
+    def inline_items(self) -> list[MessageView]:
+        items = self.recent_items if self.collapsed else self.recent_items + self.open_items
+        return sorted(items, key=_by_time)
+
+    @property
+    def next_open(self) -> MessageView | None:
+        return self.open_items[0] if self.open_items else None
+
+    @property
+    def show_canceled_link(self) -> bool:
+        return self.recent_canceled > 0 and not self.collapsed
+
+
+def conversation_scheduled(
+    db: Session, user_id: str, session_name: str, chat_id: str, tz_name: str
+) -> ConversationScheduled:
+    """Mensagens agendadas desta conversa, para aparecerem DENTRO dela (ver
+    `ConversationScheduled`). Roda a cada poucos segundos com a conversa aberta,
+    então só carrega as programadas e as encerradas (não canceladas) dos últimos
+    dias; as canceladas são só contadas, no banco — nunca viram bolha."""
     now = utcnow()
     window_start = now - _CONVERSATION_HISTORY_WINDOW
+    scope = _chat_scope(user_id, session_name, chat_id)
+    recent = col(Schedule.updated_at) >= window_start
+    view = ConversationScheduled(recent_canceled=_count(db, scope, and_(recent, canceled_clause())))
+    if view.recent_canceled:  # o total só aparece no link, que só existe com cancelamento recente
+        view.canceled_count = _count(db, scope, canceled_clause())
     schedules = list(
         db.exec(
             select(Schedule)
-            .where(col(Schedule.user_id) == user_id)
-            .where(col(Schedule.session) == session_name)
-            .where(col(Schedule.chat_id) == chat_id)
-            .where((col(Schedule.enabled).is_(True)) | (col(Schedule.updated_at) >= window_start))
+            .where(*scope)
+            .where(or_(open_clause(), and_(recent, ~canceled_clause())))
             .order_by(col(Schedule.created_at), col(Schedule.position))
         ).all()
     )
     if not schedules:
-        return [], set()
+        return view
     dispatches = _load_dispatches(db, [s.id for s in schedules])
 
-    sent_ids: set[str] = set()
-    for ds in dispatches.values():
-        sent_ids.update(d.waha_message_id for d in ds if d.status == DispatchStatus.sent and d.waha_message_id)
+    sent = [d for ds in dispatches.values() for d in ds if d.status == DispatchStatus.sent]
+    view.sent_ids = {d.waha_message_id for d in sent if d.waha_message_id}
+    view.last_sent_ts = max(
+        (int(d.sent_at_utc.replace(tzinfo=timezone.utc).timestamp()) for d in sent if d.sent_at_utc is not None),
+        default=0,
+    )
     cached_ids: set[str] = set()
-    if sent_ids:
-        for chunk in _chunks(list(sent_ids)):
-            cached_ids.update(
-                db.exec(
-                    select(CachedMessage.message_id)
-                    .where(col(CachedMessage.user_id) == user_id)
-                    .where(col(CachedMessage.message_id).in_(chunk))
-                ).all()
-            )
+    for chunk in _chunks(list(view.sent_ids)):
+        cached_ids.update(
+            db.exec(
+                select(CachedMessage.message_id)
+                .where(col(CachedMessage.user_id) == user_id)
+                .where(col(CachedMessage.message_id).in_(chunk))
+            ).all()
+        )
 
-    items: list[MessageView] = []
     for schedule in schedules:
-        view = _message_view(schedule, dispatches.get(schedule.id, []), tz_name)
-        if view.status in ("scheduled", "sending"):
-            items.append(view)
-        elif view.status == "sent":
-            mid = view.dispatch.waha_message_id if view.dispatch else None
+        item = _message_view(schedule, dispatches.get(schedule.id, []), tz_name)
+        if item.status in OPEN_MESSAGE_STATUSES:
+            view.open_items.append(item)
+        elif item.status == "canceled":
+            continue  # não deveria chegar aqui (a consulta já as exclui): cancelada nunca vira bolha
+        elif item.status == "sent":
+            mid = item.dispatch.waha_message_id if item.dispatch else None
             if mid and mid in cached_ids:
                 continue  # já é uma bolha normal do histórico
-            if view.when_utc >= window_start:
-                items.append(view)
-        elif view.when_utc >= window_start:
-            items.append(view)
-    items.sort(key=lambda m: (m.when_utc, m.position))
-    return items, sent_ids
+            if item.when_utc >= window_start:
+                view.recent_items.append(item)
+        elif item.when_utc >= window_start:
+            view.recent_items.append(item)
+    view.open_items.sort(key=_by_time)
+    return view
+
+
+def chat_recipient_name(db: Session, user_id: str, session_name: str, chat_id: str) -> str | None:
+    """Nome do contato como ficou no agendamento mais recente desta conversa (sem ir ao WhatsApp)."""
+    return db.exec(
+        select(ScheduleGroup.recipient_name)
+        .where(col(ScheduleGroup.user_id) == user_id)
+        .where(col(ScheduleGroup.session) == session_name)
+        .where(col(ScheduleGroup.chat_id) == chat_id)
+        .where(col(ScheduleGroup.recipient_name).is_not(None))
+        .order_by(col(ScheduleGroup.created_at).desc())
+    ).first()
+
+
+@dataclass
+class PanelGroup:
+    """Um agendamento (sequência) dentro do painel, só com as mensagens do filtro."""
+
+    group: ScheduleGroup | None  # None = mensagem antiga, de antes dos agendamentos agrupados
+    messages: list[MessageView]
+    total_messages: int
+    start_local: datetime | None = None
+    event_title: str | None = None
+
+    @property
+    def id(self) -> str | None:
+        return self.group.id if self.group is not None else None
+
+    @property
+    def source_label(self) -> str:
+        return SOURCE_LABELS.get(self.group.source, "") if self.group is not None else ""
+
+    @property
+    def can_cancel_all(self) -> bool:
+        return self.group is not None and sum(1 for m in self.messages if m.can_cancel) >= 2
+
+    @property
+    def time_format(self) -> str:
+        """As mensagens de uma sequência saem com segundos de diferença: aí os segundos aparecem."""
+        return "%H:%M:%S" if any(m.when_local.second for m in self.messages) else "%H:%M"
+
+
+@dataclass
+class ScheduledPanel:
+    """Painel "Mensagens programadas" de uma conversa (componente ScheduledMessagesPanel)."""
+
+    chat_id: str
+    show_scheduled: bool
+    show_canceled: bool
+    limit: int
+    scheduled_count: int
+    canceled_count: int
+    groups: list[PanelGroup] = field(default_factory=list)
+    has_more: bool = False
+
+    @property
+    def no_filter(self) -> bool:
+        return not (self.show_scheduled or self.show_canceled)
+
+    @property
+    def can_load_more(self) -> bool:
+        return self.has_more and self.limit < PANEL_MAX_LIMIT
+
+    @property
+    def next_limit(self) -> int:
+        return min(self.limit + PANEL_PAGE_SIZE, PANEL_MAX_LIMIT)
+
+    def params(self, **overrides: object) -> dict:
+        """Estado do painel (filtros + quanto já carregou) — acompanha toda requisição dele."""
+        params: dict = {
+            "chat": self.chat_id,
+            "scheduled": int(self.show_scheduled),
+            "canceled": int(self.show_canceled),
+            "limit": self.limit,
+        }
+        params.update(overrides)
+        return params
+
+
+def _event_titles(db: Session, user_id: str, group_ids: list[str]) -> dict[str, str]:
+    """Título do evento de cada agendamento criado por uma automação do Calendário."""
+    titles: dict[str, str] = {}
+    for chunk in _chunks(group_ids):
+        rows = db.exec(
+            select(Schedule.group_id, Event.title)
+            .select_from(Schedule)
+            .join(AutomationSchedule, col(AutomationSchedule.schedule_id) == col(Schedule.id))
+            .join(Automation, col(Automation.id) == col(AutomationSchedule.automation_id))
+            .join(Event, col(Event.id) == col(Automation.event_id))
+            .where(col(Schedule.group_id).in_(chunk))
+            .where(col(Event.user_id) == user_id)
+        ).all()
+        for group_id, title in rows:
+            if title and group_id not in titles:
+                titles[group_id] = title
+    return titles
+
+
+def scheduled_panel(
+    db: Session,
+    user_id: str,
+    session_name: str,
+    chat_id: str,
+    tz_name: str,
+    *,
+    show_scheduled: bool = True,
+    show_canceled: bool = False,
+    limit: int = PANEL_PAGE_SIZE,
+) -> ScheduledPanel:
+    """Mensagens programadas e/ou canceladas de UMA conversa, agrupadas por
+    agendamento (cada sequência na sua ordem). O filtro e os contadores rodam
+    no banco; a lista vem em páginas de sequências inteiras (`limit` mensagens,
+    no mínimo) — as com mensagem programada primeiro, a próxima a sair no topo;
+    depois as só canceladas, a mais recente primeiro."""
+    scope = _chat_scope(user_id, session_name, chat_id)
+    panel = ScheduledPanel(
+        chat_id=chat_id,
+        show_scheduled=show_scheduled,
+        show_canceled=show_canceled,
+        limit=max(PANEL_PAGE_SIZE, min(int(limit or 0), PANEL_MAX_LIMIT)),
+        scheduled_count=_count(db, scope, open_clause()),
+        canceled_count=_count(db, scope, canceled_clause()),
+    )
+    wanted: set[str] = set()
+    clauses = []
+    if show_scheduled:
+        wanted.update(OPEN_MESSAGE_STATUSES)
+        clauses.append(open_clause())
+    if show_canceled:
+        wanted.add("canceled")
+        clauses.append(canceled_clause())
+    if not clauses:
+        return panel
+
+    schedules = list(db.exec(select(Schedule).where(*scope).where(or_(*clauses))).all())
+    dispatches = _load_dispatches(db, [s.id for s in schedules])
+    by_key: dict[str, list[MessageView]] = {}
+    for schedule in schedules:
+        item = _message_view(schedule, dispatches.get(schedule.id, []), tz_name)
+        if item.status in wanted:
+            by_key.setdefault(schedule.group_id or schedule.id, []).append(item)
+
+    def next_open(items: list[MessageView]) -> datetime | None:
+        return min((m.when_utc for m in items if m.status in OPEN_MESSAGE_STATUSES), default=None)
+
+    pending = sorted((k for k in by_key if next_open(by_key[k]) is not None), key=lambda k: next_open(by_key[k]))
+    pending_set = set(pending)
+    done = sorted(
+        (k for k in by_key if k not in pending_set), key=lambda k: max(m.when_utc for m in by_key[k]), reverse=True
+    )
+    page: list[str] = []
+    shown = 0
+    for key in pending + done:
+        if shown >= panel.limit:
+            break
+        page.append(key)
+        shown += len(by_key[key])
+    panel.has_more = len(page) < len(by_key)
+
+    group_ids = [k for k in page if by_key[k][0].schedule.group_id]
+    groups: dict[str, ScheduleGroup] = {}
+    totals: dict[str, int] = {}
+    for chunk in _chunks(group_ids):
+        groups.update(
+            (g.id, g)
+            for g in db.exec(
+                select(ScheduleGroup)
+                .where(col(ScheduleGroup.id).in_(chunk))
+                .where(col(ScheduleGroup.user_id) == user_id)
+            ).all()
+        )
+        totals.update(
+            db.exec(
+                select(Schedule.group_id, func.count())
+                .where(col(Schedule.group_id).in_(chunk))
+                .group_by(col(Schedule.group_id))
+            ).all()
+        )
+    titles = _event_titles(db, user_id, [gid for gid, g in groups.items() if g.source == ScheduleSource.calendar])
+
+    for key in page:
+        group = groups.get(key)
+        panel.groups.append(
+            PanelGroup(
+                group=group,
+                messages=sorted(by_key[key], key=lambda m: (m.position, m.when_utc)),
+                total_messages=totals.get(key, len(by_key[key])),
+                start_local=(
+                    timing.to_local(timing.to_utc(group.start_local, group.timezone), tz_name) if group else None
+                ),
+                event_title=titles.get(key),
+            )
+        )
+    return panel

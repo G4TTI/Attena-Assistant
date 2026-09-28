@@ -335,15 +335,16 @@ def test_times_are_shown_in_the_users_timezone_not_the_schedules(db, test_user):
     assert view.when_local == datetime(2026, 9, 25, 19, 0)  # o mesmo instante, em São Paulo
 
 
-def test_conversation_items_only_this_chat_and_user(db, test_user):
+def test_conversation_scheduled_only_this_chat_and_user(db, test_user):
     _sequence(db, test_user, start=datetime(2026, 9, 25, 18, 0))
     create_sequence(db, user_id=test_user.id, session=test_user.waha_session, recipient="5511999998888@c.us",
                     messages=["outra conversa"], start=datetime(2026, 9, 25, 18, 0), timezone=TZ)
-    items, _ = schedule_views.conversation_items(db, test_user.id, test_user.waha_session, CHAT, TZ)
-    assert [m.text for m in items] == ["Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
-    assert all(m.status == "scheduled" for m in items)
-    other_items, _ = schedule_views.conversation_items(db, "someone-else", test_user.waha_session, CHAT, TZ)
-    assert other_items == []
+    conv = schedule_views.conversation_scheduled(db, test_user.id, test_user.waha_session, CHAT, TZ)
+    assert [m.text for m in conv.inline_items] == [
+        "Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
+    assert all(m.status == "scheduled" for m in conv.inline_items) and conv.open_count == 3
+    other = schedule_views.conversation_scheduled(db, "someone-else", test_user.waha_session, CHAT, TZ)
+    assert other.inline_items == [] and other.open_count == 0 and other.canceled_count == 0
 
 
 # --------------------------------------------------------------------------- #

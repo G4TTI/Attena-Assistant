@@ -16,10 +16,10 @@ from ..chatsvc import cached_chat_name, get_history, list_chats, send_now
 from ..clock import utcnow
 from ..db import get_session
 from ..errors import ValidationError
-from ..models import ScheduleSource, User
+from ..models import Schedule, ScheduleSource, User
 from ..recipients import RecipientError, normalize_recipient
 from ..recurrence import utc_to_local
-from ..service import cancel_group, cancel_schedule, create_sequence, run_group_now, update_sequence
+from ..service import cancel_group, cancel_schedule, create_sequence, get_group, run_group_now, update_sequence
 from ..waha import WahaError
 
 # Teto de destinatários por envio do formulário (cada um vira um agendamento).
@@ -458,6 +458,13 @@ def _owned_wa_session(db: Session, session_id: str, user_id: str):
     return session
 
 
+def _owned_chat_schedule(db: Session, schedule_id: str, user_id: str, wa_session, chat: str) -> None:
+    """404 se a mensagem não for desta conversa (usuário + WhatsApp + chat)."""
+    schedule = db.get(Schedule, schedule_id)
+    if schedule is None or (schedule.user_id, schedule.session, schedule.chat_id) != (user_id, wa_session.session_name, chat):
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+
+
 async def _chats_ctx(request: Request, db: Session, current_user: User, session_id: str, *, force: bool = False) -> dict:
     wa_session = _owned_wa_session(db, session_id, current_user.id)
     try:
@@ -488,10 +495,10 @@ async def ui_chats(
 
 
 def _scheduled_ctx(db: Session, current_user: User, wa_session, chat_id: str) -> dict:
-    items, _sent_ids = schedule_views.conversation_items(
+    conv = schedule_views.conversation_scheduled(
         db, current_user.id, wa_session.session_name, chat_id, app_settings.user_timezone(current_user)
     )
-    return {"scheduled_items": items, "open_count": sum(1 for m in items if m.status in ("scheduled", "sending"))}
+    return {"conv": conv}
 
 
 def _chat_schedule_form(db: Session, current_user: User, **overrides: object) -> dict:
@@ -555,11 +562,11 @@ async def ui_chat_messages(
     hist = await get_history(
         db, request.app.state.waha, current_user.id, wa_session.session_name, chat, tz_name, force=refresh,
     )
-    _items, sent_ids = schedule_views.conversation_items(db, current_user.id, wa_session.session_name, chat, tz_name)
+    conv = schedule_views.conversation_scheduled(db, current_user.id, wa_session.session_name, chat, tz_name)
     return templates.TemplateResponse(
         "_chat_messages.html",
         {
-            "request": request, "chat_id": chat, "hist": hist, "sent_ids": sent_ids,
+            "request": request, "chat_id": chat, "hist": hist, "sent_ids": conv.sent_ids,
             "synced_local": _sync_label(hist.synced_at, tz_name),
         },
     )
@@ -592,12 +599,137 @@ async def ui_chat_scheduled_cancel(
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
     """Cancela UMA mensagem agendada (pelo mecanismo de sempre, `service.cancel_schedule`):
-    ela fica como "Cancelada" na conversa e não é enviada. As outras da sequência continuam."""
+    ela não é enviada e sai da conversa (fica no painel, como "Cancelada"). As outras da
+    sequência continuam."""
     wa_session = _owned_wa_session(db, session_id, current_user.id)
+    _owned_chat_schedule(db, schedule_id, current_user.id, wa_session, chat)
     cancel_schedule(db, schedule_id, user_id=current_user.id)
     return templates.TemplateResponse(
         "_chat_scheduled.html",
         {"request": request, "session_id": session_id, "chat_id": chat, **_scheduled_ctx(db, current_user, wa_session, chat)},
+    )
+
+
+# ---- Conversas: painel "Mensagens programadas" ------------------------------ #
+def _chat_label(db: Session, user_id: str, wa_session, chat_id: str) -> str:
+    """Nome do contato sem ir ao WhatsApp: a lista de conversas em cache, o nome
+    gravado no último agendamento, ou o número."""
+    name = cached_chat_name(wa_session.session_name, chat_id) or schedule_views.chat_recipient_name(
+        db, user_id, wa_session.session_name, chat_id
+    )
+    if name:
+        return name
+    head = chat_id.split("@", 1)[0]
+    return f"+{head}" if chat_id.endswith("@c.us") and head.isdigit() else head
+
+
+def _panel_ctx(
+    request: Request, db: Session, current_user: User, wa_session, session_id: str, chat: str,
+    *, show_scheduled: bool, show_canceled: bool, limit: int, refresh_conversation: bool = False,
+) -> dict:
+    tz_name = app_settings.user_timezone(current_user)
+    ctx = {
+        "request": request,
+        "session_id": session_id,
+        "chat_id": chat,
+        "panel": schedule_views.scheduled_panel(
+            db, current_user.id, wa_session.session_name, chat, tz_name,
+            show_scheduled=show_scheduled, show_canceled=show_canceled, limit=limit,
+        ),
+        "list_only": True,
+    }
+    if refresh_conversation:  # depois de cancelar: a conversa por trás do painel atualiza junto
+        ctx["conv"] = schedule_views.conversation_scheduled(db, current_user.id, wa_session.session_name, chat, tz_name)
+    return ctx
+
+
+@router.get("/ui/chats/{session_id}/scheduled/panel", response_class=HTMLResponse)
+async def ui_chat_scheduled_panel(
+    request: Request,
+    session_id: str,
+    chat: str = Query(...),
+    scheduled: bool | None = Query(None),
+    canceled: bool | None = Query(None),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Abre o painel (modal). Sem filtro explícito: só as programadas."""
+    wa_session = _owned_wa_session(db, session_id, current_user.id)
+    if scheduled is None and canceled is None:
+        scheduled = True
+    ctx = _panel_ctx(
+        request, db, current_user, wa_session, session_id, chat,
+        show_scheduled=bool(scheduled), show_canceled=bool(canceled), limit=schedule_views.PANEL_PAGE_SIZE,
+    )
+    ctx.update(list_only=False, chat_name=_chat_label(db, current_user.id, wa_session, chat))
+    return templates.TemplateResponse("_scheduled_panel.html", ctx)
+
+
+@router.get("/ui/chats/{session_id}/scheduled/panel/list", response_class=HTMLResponse)
+async def ui_chat_scheduled_panel_list(
+    request: Request,
+    session_id: str,
+    chat: str = Query(...),
+    scheduled: bool = Query(False),
+    canceled: bool = Query(False),
+    limit: int = Query(schedule_views.PANEL_PAGE_SIZE),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Só a lista do painel: troca de filtro, "carregar mais" e a atualização periódica."""
+    wa_session = _owned_wa_session(db, session_id, current_user.id)
+    return templates.TemplateResponse(
+        "_scheduled_panel_list.html",
+        _panel_ctx(request, db, current_user, wa_session, session_id, chat,
+                   show_scheduled=scheduled, show_canceled=canceled, limit=limit),
+    )
+
+
+@router.post("/ui/chats/{session_id}/scheduled/panel/messages/{schedule_id}/cancel", response_class=HTMLResponse)
+async def ui_chat_panel_cancel_message(
+    request: Request,
+    session_id: str,
+    schedule_id: str,
+    chat: str = Form(...),
+    scheduled: bool = Form(False),
+    canceled: bool = Form(False),
+    limit: int = Form(schedule_views.PANEL_PAGE_SIZE),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """Cancela UMA mensagem pelo painel — o mesmo `service.cancel_schedule` da conversa."""
+    wa_session = _owned_wa_session(db, session_id, current_user.id)
+    _owned_chat_schedule(db, schedule_id, current_user.id, wa_session, chat)
+    cancel_schedule(db, schedule_id, user_id=current_user.id)
+    return templates.TemplateResponse(
+        "_scheduled_panel_list.html",
+        _panel_ctx(request, db, current_user, wa_session, session_id, chat, show_scheduled=scheduled,
+                   show_canceled=canceled, limit=limit, refresh_conversation=True),
+    )
+
+
+@router.post("/ui/chats/{session_id}/scheduled/panel/groups/{group_id}/cancel", response_class=HTMLResponse)
+async def ui_chat_panel_cancel_group(
+    request: Request,
+    session_id: str,
+    group_id: str,
+    chat: str = Form(...),
+    scheduled: bool = Form(False),
+    canceled: bool = Form(False),
+    limit: int = Form(schedule_views.PANEL_PAGE_SIZE),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """"Cancelar todas" de uma sequência — o mesmo `service.cancel_group` da tela Agendamentos."""
+    wa_session = _owned_wa_session(db, session_id, current_user.id)
+    group = get_group(db, group_id, current_user.id)
+    if group is None or (group.session, group.chat_id) != (wa_session.session_name, chat):
+        raise HTTPException(status_code=404, detail="Agendamento não encontrado.")
+    cancel_group(db, group_id, user_id=current_user.id)
+    return templates.TemplateResponse(
+        "_scheduled_panel_list.html",
+        _panel_ctx(request, db, current_user, wa_session, session_id, chat, show_scheduled=scheduled,
+                   show_canceled=canceled, limit=limit, refresh_conversation=True),
     )
 
 

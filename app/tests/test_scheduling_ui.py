@@ -348,14 +348,17 @@ def test_scheduled_bubbles_do_not_wait_for_the_slow_whatsapp_history(client):
 
 
 def test_cancel_one_message_from_the_conversation(client):
+    """A cancelada sai da conversa (não polui) e fica no painel de programadas, como "Cancelada"."""
     sid, _ = _chat_post(client)
     middle = _schedules()[1]
     r = client.post(f"/ui/chats/{sid}/scheduled/{middle.id}/cancel", data={"chat": LEO})
     assert r.status_code == 200
     statuses = re.findall(r'<div class="bubble me scheduled (\w+)"', r.text)
-    assert statuses == ["scheduled", "canceled", "scheduled"]
-    assert "Cancelada" in r.text
+    assert statuses == ["scheduled", "scheduled"]
+    assert "Ver mensagens canceladas (1)" in r.text
     assert [s.enabled for s in _schedules()] == [True, False, True]
+    panel = client.get(f"/ui/chats/{sid}/scheduled/panel", params={"chat": LEO, "canceled": 1}).text
+    assert re.findall(r'<li class="smp-msg (\w+)"', panel) == ["canceled"] and "Cancelada" in panel
 
 
 def test_cannot_cancel_another_users_scheduled_message_from_a_chat(client):

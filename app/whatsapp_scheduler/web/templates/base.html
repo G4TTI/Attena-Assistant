@@ -598,6 +598,54 @@
       .summary-kv { grid-template-columns:minmax(0,1fr); gap:1px; }
       .summary-kv dd { margin-bottom:6px; }
     }
+    /* ---------------- Conversas: muitas programadas viram um botão; painel "Mensagens programadas" ---------------- */
+    .sched-summary { align-self:flex-end; display:flex; align-items:center; gap:12px; max-width:min(65%, 480px); margin-top:6px; padding:10px 12px 10px 14px; border:1px dashed color-mix(in oklab, var(--warn) 55%, transparent); border-radius:9px; border-top-right-radius:2px; background:var(--bub-me); color:var(--fg); box-shadow:0 1px 1px rgba(0,0,0,.15); font-weight:400; text-align:left; cursor:pointer; }
+    .sched-summary:hover { background:color-mix(in oklab, var(--bub-me) 90%, var(--warn)); color:var(--fg); }
+    .sched-summary:focus-visible, .sched-canceled-link:focus-visible, .smp-filter:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:2px; }
+    .sched-summary-icon { display:flex; flex:none; color:var(--warn); }
+    .sched-summary-text { display:flex; flex-direction:column; min-width:0; line-height:1.35; }
+    .sched-summary-text strong { font-size:14px; font-weight:600; }
+    .sched-summary-text span { font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; }
+    .sched-summary-chev { margin-left:auto; padding-left:4px; color:var(--mut); font-size:20px; line-height:1; }
+    .sched-canceled-link { align-self:center; display:inline-flex; align-items:center; gap:5px; margin-top:6px; padding:3px 10px; border:0; border-radius:999px; background:transparent; color:var(--mut); font-size:11.5px; font-weight:500; cursor:pointer; }
+    .sched-canceled-link:hover { background:color-mix(in oklab, var(--mut) 12%, transparent); color:var(--fg); }
+
+    .modal.modal-panel { max-width:760px; min-height:min(60vh, 480px); max-height:min(88vh, 900px); display:flex; flex-direction:column; overflow:hidden; }
+    .modal-panel .modal-hd { flex:none; }
+    .smp-contact { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .smp-filters { flex:none; display:flex; flex-wrap:wrap; gap:8px; padding:12px 22px; border-bottom:1px solid var(--bd); }
+    .smp-filter { display:inline-flex; align-items:center; gap:7px; min-height:40px; margin:0; padding:6px 14px 6px 10px; border:1px solid var(--bd2); border-radius:999px; background:var(--card); color:var(--fg); font-size:13.5px; font-weight:500; cursor:pointer; user-select:none; }
+    .smp-filter input { width:18px; height:18px; margin:0; accent-color:var(--accent); cursor:pointer; }
+    .smp-filter:has(input:checked) { border-color:var(--accent); background:var(--soft); }
+    .smp-filter .smp-n { color:var(--mut); font-variant-numeric:tabular-nums; }
+    .smp-body { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:18px 22px 22px; }
+    .smp-list { display:flex; flex-direction:column; gap:16px; }
+    .smp-group { display:flex; flex-direction:column; gap:10px; min-width:0; }
+    .smp-group + .smp-group { padding-top:16px; border-top:1px solid var(--bd); }
+    .smp-group-hd { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .smp-group-info { min-width:0; }
+    .smp-group-title { font-size:13.5px; font-weight:600; font-variant-numeric:tabular-nums; }
+    .smp-group-sub { font-size:12.5px; color:var(--mut); overflow-wrap:anywhere; }
+    button.smp-cancel-all { flex:none; padding:5px 12px; font-size:12.5px; font-weight:500; }
+    .smp-confirm { padding:12px 14px; border-radius:10px; border:1px solid color-mix(in oklab, var(--err) 35%, transparent); background:color-mix(in oklab, var(--err) 7%, transparent); font-size:13.5px; }
+    .smp-confirm p { margin:0 0 10px; }
+    .smp-confirm-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+    .smp-confirm-actions button { padding:7px 14px; font-size:13px; }
+    .smp-msgs .msg-meta .when { font-variant-numeric:tabular-nums; }
+    .smp-msg.canceled .msg-text { color:var(--mut); text-decoration:line-through; }
+    .smp-msg.canceled .msg-num { background:var(--mut); }
+    .smp-list .sched-cancel { margin-left:auto; padding:2px 6px; border:0; background:none; color:var(--mut); font-size:12px; font-weight:600; text-decoration:underline; cursor:pointer; }
+    .smp-list .sched-cancel:hover { color:var(--err); background:none; }
+    .smp-empty { margin:28px 0; text-align:center; color:var(--mut); font-size:14px; }
+    button.smp-more { align-self:center; }
+    @media (max-width: 720px) {
+      .sched-summary { max-width:86%; }
+      .modal.modal-panel { max-width:none; min-height:60vh; max-height:94vh; max-height:94dvh; border-radius:16px 16px 0 0; }
+      .smp-filters { padding:10px 16px; }
+      .smp-filter { flex:1 1 140px; min-height:44px; justify-content:center; }
+      .smp-body { padding:14px 16px 20px; }
+      .smp-group-hd { flex-wrap:wrap; }
+    }
   </style>
 </head>
 <body>
@@ -750,14 +798,19 @@
        que a pessoa estava preenchendo). Por isso o cancelamento é feito aqui,
        por evento, sem eval. Marque o elemento que faz o polling com
        data-pause-on-input: ele pula o ciclo se há um campo de texto focado
-       dentro dele ou se ele está escondido (ex.: outra aba de Configurações). */
+       dentro dele, se ele está escondido (ex.: outra aba de Configurações) ou se há
+       uma confirmação aberta dentro dele ([data-hold-poll] visível — a atualização
+       apagaria a pergunta). data-pause-when-hidden sozinho: pula enquanto a aba do
+       navegador está em segundo plano. */
     document.body.addEventListener('htmx:beforeRequest', function(e){
       var el = e.detail && e.detail.elt;
-      if(!el || !el.hasAttribute || !el.hasAttribute('data-pause-on-input')) return;
+      if(!el || !el.hasAttribute) return;
+      if(el.hasAttribute('data-pause-when-hidden') && document.hidden){ e.preventDefault(); return; }
+      if(!el.hasAttribute('data-pause-on-input')) return;
       var a = document.activeElement;
       var typing = a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
-      var hiddenTab = el.hasAttribute('data-pause-when-hidden') && document.hidden;
-      if(typing || hiddenTab || el.offsetParent === null) e.preventDefault();
+      var holding = !!el.querySelector('[data-hold-poll]:not([hidden])');
+      if(typing || holding || el.offsetParent === null) e.preventDefault();
     });
 
     /* QR do WhatsApp sem piscar. O passo do onboarding e a lista de conexões se
@@ -1153,20 +1206,39 @@
       if(form) updateFormSummary(form);
       if(first && !first.value.trim()) first.focus();
     }
-    /* Estado do painel de Conversas: se algum agendamento saiu (deixou de estar "agendado"), busca o
-       histórico local de novo pra a bolha real aparecer sem precisar recarregar a conversa. */
-    document.body.addEventListener('htmx:afterSwap', function(e){
-      var t = e.target;
-      if(!t || t.id !== 'chat-scheduled') return;
-      var counter = t.querySelector('#chat-open-count');
-      var now = counter ? parseInt(counter.getAttribute('data-open') || '0', 10) : 0;
-      var prev = window.__chatOpenCount;
-      window.__chatOpenCount = now;
-      if(typeof prev === 'number' && now < prev){
+    /* Mensagens agendadas da conversa (#chat-scheduled): quando uma delas SAI (o último envio
+       confirmado ficou mais recente), busca o histórico local de novo pra a bolha real aparecer sem
+       recarregar a conversa. Cancelar não muda o histórico, então não recarrega. A área é trocada
+       pelo polling (afterSwap) ou pelo painel de programadas, depois de um cancelamento (oob). */
+    function chatScheduledUpdated(box){
+      var st = box && box.querySelector('#chat-sched-state');
+      if(!st) return;
+      var now = parseInt(st.getAttribute('data-last-sent') || '0', 10);
+      var prev = window.__chatLastSent;
+      window.__chatLastSent = now;
+      if(typeof prev === 'number' && now > prev){
         var hist = document.getElementById('chat-history');
         if(hist && hist.getAttribute('data-reload-url')) htmx.ajax('GET', hist.getAttribute('data-reload-url'), {target: hist, swap: 'innerHTML'});
       }
+    }
+    document.body.addEventListener('htmx:afterSwap', function(e){
+      if(e.target && e.target.id === 'chat-scheduled') chatScheduledUpdated(e.target);
     });
+    document.body.addEventListener('htmx:oobAfterSwap', function(e){
+      var t = e.detail && e.detail.target;
+      if(t && t.id === 'chat-scheduled') chatScheduledUpdated(t);
+    });
+    /* Painel "Mensagens programadas": confirmação de "Cancelar todas" dentro da própria sequência. */
+    function smpConfirm(btn, open){
+      var group = btn.closest('.smp-group');
+      if(!group) return;
+      var box = group.querySelector('.smp-confirm');
+      var trigger = group.querySelector('.smp-cancel-all');
+      if(box) box.hidden = !open;
+      if(trigger) trigger.hidden = !!open;
+      var focus = open ? (box && box.querySelector('[data-confirm-default]')) : trigger;
+      if(focus) focus.focus();
+    }
     function composerKeydown(e){
       if(e.key === 'Enter' && !e.shiftKey){
         e.preventDefault();
@@ -1198,8 +1270,11 @@
     }
     document.body.addEventListener('htmx:afterSwap', function(e){
       var cm = document.getElementById('chat-scroll');
-      /* A atualização periódica das mensagens agendadas não deve puxar quem está lendo o histórico pro fim. */
-      if(cm && !(e && e.target && e.target.id === 'chat-scheduled')) cm.scrollTop = cm.scrollHeight;
+      /* A atualização periódica das mensagens agendadas (e o painel de programadas, que abre por cima)
+         não deve puxar quem está lendo o histórico pro fim. */
+      var t = e && e.target;
+      var keep = t && (t.id === 'chat-scheduled' || t.id === 'modal-root' || (t.closest && t.closest('#modal-root')));
+      if(cm && !keep) cm.scrollTop = cm.scrollHeight;
       var si = document.getElementById('chat-search-input');
       if(si && si.value) filterChats(si.value);
     });
