@@ -1,5 +1,5 @@
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,8 +45,13 @@ def test_month_grid_hoje_button_links_to_day_view(client):
 
 
 def test_day_view_page_shows_todays_event(client):
-    now = utcnow()
-    _make_event(client.user.id, "Reunião de hoje", now + timedelta(hours=1), now + timedelta(hours=2))
+    # Meio-dia de HOJE no fuso do usuário (antes: "agora + 1h", que caía no dia
+    # seguinte quando o teste rodava entre 23h e 0h de São Paulo).
+    from whatsapp_scheduler import timing
+
+    today_local = timing.to_local(utcnow(), "America/Sao_Paulo").date()
+    noon_utc = timing.to_utc(datetime.combine(today_local, datetime.min.time()).replace(hour=12), "America/Sao_Paulo")
+    _make_event(client.user.id, "Reunião de hoje", noon_utc, noon_utc + timedelta(hours=1))
 
     resp = client.get("/calendario/dia")
     assert resp.status_code == 200

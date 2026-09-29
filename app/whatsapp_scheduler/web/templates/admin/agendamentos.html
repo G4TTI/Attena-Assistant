@@ -52,7 +52,7 @@
           <td>{{ dispatch_pill(d.status) }}</td>
           <td>{% if d.whatsapp_id %}{{ d.whatsapp_label }}<span class="cell-sub"><code>{{ d.whatsapp_id[:8] }}</code></span>{% else %}<span class="muted">—</span>{% endif %}</td>
           <td class="num">{{ d.attempts }}</td>
-          <td>{% if d.failure_code %}<strong>{{ d.failure_label }}</strong><span class="cell-sub"><code>{{ d.failure_code }}</code>{% if d.error %} · {{ d.error }}{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{% if d.failure_code and d.status != 'canceled' %}<strong>{{ d.failure_label }}</strong><span class="cell-sub"><code>{{ d.failure_code }}</code>{% if d.error %} · {{ d.error }}{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         </tr>
         {% else %}
         <tr><td colspan="7"><div class="empty-state"><strong>Nenhum envio encontrado</strong><p>Ajuste os filtros.</p></div></td></tr>

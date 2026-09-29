@@ -139,8 +139,8 @@ async def admin_user_detail(
         try:
             info = await request.app.state.waha.get_session_status(session_name)
             return str(info.get("status") or "desconhecido").upper()
-        except WahaError:
-            return "INDISPONÍVEL"
+        except WahaError as exc:
+            return "NÃO INICIADA" if exc.status_code == 404 else "INDISPONÍVEL"
 
     statuses = await asyncio.gather(*(_status(name) for name in names.values()))
     live = dict(zip(names.keys(), statuses))

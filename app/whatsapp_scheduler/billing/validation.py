@@ -63,6 +63,18 @@ def normalize_phone(value: str | None) -> str:
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
+def display_phone(value: str | None) -> str:
+    """"+5511988887777" -> "(11) 98888-7777" (formato nacional, só para exibir ao dono)."""
+    if not value:
+        return ""
+    try:
+        parsed = phonenumbers.parse(value, None if value.startswith("+") else "BR")
+    except phonenumbers.NumberParseException:
+        return value
+    fmt = phonenumbers.PhoneNumberFormat.NATIONAL if parsed.country_code == 55 else phonenumbers.PhoneNumberFormat.INTERNATIONAL
+    return phonenumbers.format_number(parsed, fmt)
+
+
 @dataclass
 class BillingForm:
     full_name: str

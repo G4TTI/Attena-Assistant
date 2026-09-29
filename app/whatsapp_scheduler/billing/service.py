@@ -21,7 +21,7 @@ from ..models import (
     SubscriptionStatus,
     User,
 )
-from .validation import BillingForm, UF_NAMES, format_cep, mask_cpf
+from .validation import BillingForm, UF_NAMES, display_phone, format_cep, mask_cpf
 
 _T = "billing_profiles"
 _ENCRYPTED_FIELDS = (
@@ -78,7 +78,7 @@ def owner_form_values(profile: BillingProfile | None, user: User) -> dict:
         "full_name": _open(profile, "full_name") or user.name,
         "cpf": "",
         "cpf_masked": mask_cpf(profile.cpf_last2) if profile.cpf_encrypted else None,
-        "phone": _open(profile, "phone") or user.phone or "",
+        "phone": display_phone(_open(profile, "phone")) or user.phone or "",
         "postal_code": format_cep(cep) if len(cep) == 8 else cep,
         "address": _open(profile, "address"),
         "address_number": _open(profile, "address_number"),

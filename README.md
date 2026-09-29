@@ -28,8 +28,18 @@ Navegador ──▶ FastAPI (app) ──▶ SQLite (data/app.db)
 cp .env.example .env
 ```
 
-Edite o `.env` e defina uma `WAHA_API_KEY` forte (e as senhas do dashboard).
-Opcionalmente gere tudo com o utilitário do WAHA:
+Edite o `.env` e defina uma `WAHA_API_KEY` forte. Gere também as **chaves de
+dados** (obrigatórias desde a v1.4 — sem elas o app não sobe) e cole no `.env`:
+
+```bash
+docker compose run --rm --no-deps app python -m whatsapp_scheduler.cli generate-keys
+```
+
+Use chaves diferentes em cada ambiente e guarde uma cópia offline (perder a chave
+= perder as mensagens programadas pendentes). Detalhes em
+[docs/SECURITY_AND_PRIVACY.md](docs/SECURITY_AND_PRIVACY.md).
+
+Opcionalmente gere a `WAHA_API_KEY` com o utilitário do WAHA:
 
 ```bash
 docker run --rm -v "$PWD/waha:/app/env" devlikeapro/waha init-waha /app/env
@@ -41,8 +51,10 @@ Depois:
 docker compose up -d --build
 ```
 
-- App: <http://localhost:8000>
-- Dashboard nativo do WAHA: <http://localhost:3000/dashboard>
+- App: <http://localhost:8090> (`APP_HOST_PORT`)
+- O dashboard/Swagger do WAHA ficam **desligados** por padrão (eles permitem ler as
+  conversas). Para depurar, ligue temporariamente com `WAHA_DASHBOARD_ENABLED=true`.
+- Administrador: `docker compose exec app python -m whatsapp_scheduler.cli grant-admin voce@exemplo.com`
 
 ## Parear o WhatsApp
 
@@ -66,6 +78,8 @@ A interface tem uma barra lateral com cinco telas:
 | **🔌 Sessão** | Status da conexão + QR de pareamento. |
 | **🗓️ Calendário** | Agenda de eventos internos e sincronizados do Google Agenda; permite associar uma automação de WhatsApp a qualquer evento. |
 | **⚙️ Configurações** | "Calendários conectados" — conectar/desconectar o Google Agenda, escolher quais calendários sincronizar, sincronizar manualmente. |
+| **⭐ Planos** | Plano atual, uso x limites, catálogo e upgrade (dados de faturamento só aqui, cifrados). |
+| **🛡️ Administração** | Só para admins: visão geral, usuários, CRM, planos, faturamento real, saúde dos envios, logins e auditoria — **apenas metadados**, nunca conversas ou mensagens. |
 
 ### Conversas
 
@@ -74,10 +88,11 @@ WAHA retorna uma) e o histórico + composer à direita.
 
 - **Busca:** o campo no topo da lista filtra por nome/prévia da última mensagem,
   em tempo real, no navegador (sem round-trip ao servidor).
-- A lista de chats vem do WAHA (`chats/overview`) com cache curto em memória.
-- O histórico de cada conversa fica em cache local (`cached_messages` no SQLite):
-  a primeira abertura pode levar **até ~1 min** no engine `WEBJS`; as seguintes
-  são instantâneas. O botão **↻** no cabeçalho força nova busca.
+- **Só visualização (v1.4):** a lista de chats e o histórico vêm do WAHA na hora e
+  **não são gravados** pelo Attena (nem mensagens recebidas, nem mídias, nem
+  contatos). Há só um cache em memória de poucos segundos (lista 20 s, histórico
+  60 s). No engine `WEBJS` a primeira abertura pode levar **até ~1 min**. O botão
+  **↻** no cabeçalho força nova busca.
 - **Composer:** caixa de texto + botão verde de enviar (envia na hora, `POST
   /api/sendText`) + ícone **🕐** que abre o painel **Agendar mensagens**: uma
   data/hora de início e uma **sequência** de mensagens (adicionar/mover/excluir).
@@ -87,6 +102,8 @@ WAHA retorna uma) e o histórico + composer à direita.
   própria com o status (🕐 agendada · ⏳ enviando · ✓ enviada · ⚠ falhou · ○
   cancelada) e o horário real do disparo, no seu fuso. Dá para cancelar uma
   por uma. As já enviadas viram bolhas normais do histórico, marcadas "agendada".
+  Depois de enviada/cancelada, o **conteúdo da mensagem programada é apagado** do
+  Attena (retenção mínima) — ela continua aparecendo só como status.
 - Para histórico bem mais rápido, troque o engine para `NOWEB` no `.env`
   (`WHATSAPP_DEFAULT_ENGINE=NOWEB`) — exige parear de novo.
 
@@ -227,6 +244,15 @@ exatamente o que falta configurar, em vez de quebrar.
 | `GOOGLE_OAUTH_REDIRECT_URI` | `http://localhost:8090/calendario/oauth/callback` | Precisa bater com o registrado no Google Cloud Console |
 | `TOKEN_ENCRYPTION_KEY` | — | Chave Fernet para cifrar os tokens salvos (obrigatória para conectar o Google) |
 | `CALENDAR_SYNC_SECONDS` | `300` | Intervalo da sincronização automática com o Google Calendar |
+| `DATA_ENCRYPTION_KEYS` | — | **Obrigatória.** Chaves AES-256-GCM versionadas (`1:<b64>`) do conteúdo/destinatários/faturamento |
+| `DATA_HASH_KEY` | — | **Obrigatória.** Chave HMAC dos índices cegos (hash de telefone) |
+| `PRIVACY_CLEANUP_SECONDS` | `3600` | Intervalo do job de retenção `privacy_cleanup` |
+| `RECIPIENT_HASH_RETENTION_DAYS` / `LOGIN_IP_RETENTION_DAYS` | `30` / `30` | Prazos de retenção |
+| `ADMIN_SESSION_MAX_AGE_HOURS` | `12` | Idade máxima da sessão para abrir `/admin` |
+| `ENFORCE_PLAN_LIMITS` | `false` | `true` = limites dos planos passam a bloquear |
+| `PAYMENT_PROVIDER` | — | Gateway de pagamento (vazio = nenhum; nada é cobrado) |
+| `WAHA_DASHBOARD_ENABLED` / `WHATSAPP_SWAGGER_ENABLED` | `false` | Dashboard/Swagger do WAHA (leem conversas — deixe desligado) |
+| `WAHA_NOWEB_STORE_ENABLED` | `false` | Engine NOWEB: gravar chats/mensagens no disco do WAHA |
 
 ## Riscos e limites
 
@@ -236,10 +262,13 @@ exatamente o que falta configurar, em vez de quebrar.
 - **Uma instância só.** O SQLite pressupõe um único processo escritor (o poller).
   Não rode o serviço `app` replicado. Para alta disponibilidade, migrar para
   Postgres + `SELECT ... FOR UPDATE SKIP LOCKED`.
-- **Backup:** copie o volume `./data` (`app.db` + arquivos `-wal`/`-shm`).
+- **Backup:** copie o volume `./data` (`app.db` + arquivos `-wal`/`-shm`). O
+  conteúdo sensível sai cifrado; guarde as chaves de dados **separadas** do backup.
+- **Privacidade:** ver [docs/SECURITY_AND_PRIVACY.md](docs/SECURITY_AND_PRIVACY.md) —
+  inclusive o que o próprio WAHA (engine WEBJS) guarda no volume `./waha/sessions`.
 - **Número brasileiro sem entrega:** alguns números antigos exigem o dígito 9
   ausente/presente. Se um envio falhar com "número não existe", teste o `chatId`
-  manualmente no dashboard do WAHA.
+  pela API do WAHA (dashboard desligado por padrão).
 - **Espaço em disco.** O WAHA (`WEBJS`) roda um Chromium e o Docker Desktop
   guarda a imagem/VM no disco do sistema. Com o disco cheio a sessão vira
   `FAILED` e o `docker build` falha com `read-only file system`. No Windows dá

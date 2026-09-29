@@ -20,11 +20,12 @@ services:
       WHATSAPP_SWAGGER_ENABLED: ${WHATSAPP_SWAGGER_ENABLED:-false}
       WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-admin}
-      # QR Code nunca no log; logs do WAHA só com avisos/erros (o log de acesso
-      # HTTP traria o chatId/telefone na URL).
+      # QR Code nunca no log; logs do WAHA só com avisos/erros. O log de acesso
+      # HTTP (que traria o chatId/telefone na URL) é emitido NO nível de
+      # WAHA_HTTP_LOG_LEVEL: "debug" fica abaixo do limiar "warn" e não sai.
       WAHA_PRINT_QR: ${WAHA_PRINT_QR:-False}
       WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-warn}
-      WAHA_HTTP_LOG_LEVEL: ${WAHA_HTTP_LOG_LEVEL:-warn}
+      WAHA_HTTP_LOG_LEVEL: ${WAHA_HTTP_LOG_LEVEL:-debug}
       # O Attena nunca pede mídia; nem por evento nem por API o WAHA baixa arquivos.
       WAHA_API_DOWNLOAD_MEDIA: ${WAHA_API_DOWNLOAD_MEDIA:-false}
       WAHA_EVENTS_DOWNLOAD_MEDIA: ${WAHA_EVENTS_DOWNLOAD_MEDIA:-false}
@@ -71,6 +72,9 @@ services:
       DATA_ENCRYPTION_KEYS: ${DATA_ENCRYPTION_KEYS:-}
       DATA_ENCRYPTION_ACTIVE_VERSION: ${DATA_ENCRYPTION_ACTIVE_VERSION:-}
       DATA_HASH_KEY: ${DATA_HASH_KEY:-}
+      # Alternativa às duas acima: caminhos de arquivos com as chaves (Docker secret).
+      DATA_ENCRYPTION_KEYS_FILE: ${DATA_ENCRYPTION_KEYS_FILE:-}
+      DATA_HASH_KEY_FILE: ${DATA_HASH_KEY_FILE:-}
       # v1.4 — retenção, segurança, planos
       PRIVACY_CLEANUP_SECONDS: ${PRIVACY_CLEANUP_SECONDS:-3600}
       RECIPIENT_HASH_RETENTION_DAYS: ${RECIPIENT_HASH_RETENTION_DAYS:-30}
