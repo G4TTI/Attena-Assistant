@@ -104,12 +104,6 @@ def authenticate_user(db: Session, *, email: str, password: str, request: Reques
         # colada no campo errado. Só o usuário, quando ele existe.
         log_event(db, AuditEventType.login_failed, user_id=user.id if user else None, request=request)
         raise AuthenticationError("E-mail ou senha inválidos.")
-    now = utcnow()
-    user.last_login_at = now
-    user.last_activity_at = now
-    user.login_count = (user.login_count or 0) + 1
-    db.add(user)
-    db.commit()
     log_event(db, AuditEventType.login_success, user_id=user.id, request=request)
     return user
 

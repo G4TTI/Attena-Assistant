@@ -1,6 +1,6 @@
 """Consultas do admin — só METADADOS, sempre por SELECT de colunas explícitas
-e devolvendo DTOs (dataclasses). Nenhuma consulta aqui lê ciphertext, hash de
-destinatário, token OAuth, `password_hash` ou CPF; nenhuma decifra nada."""
+e devolvendo DTOs (dataclasses). Nenhuma consulta aqui lê conteúdo cifrado,
+hash de destinatário, token OAuth, hash de senha ou CPF; nenhuma decifra nada."""
 
 from __future__ import annotations
 

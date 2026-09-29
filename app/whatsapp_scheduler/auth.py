@@ -85,6 +85,13 @@ def client_user_agent(request: Request) -> str | None:
 # Sessão (cookie httponly)
 # --------------------------------------------------------------------------- #
 def create_user_session(db: Session, user: User, request: Request) -> tuple[UserSession, str]:
+    """Abre uma sessão (login ou cadastro) e registra o login no usuário —
+    base de "último login"/"usuários ativos" no admin."""
+    now = utcnow()
+    user.last_login_at = now
+    user.last_activity_at = now
+    user.login_count = (user.login_count or 0) + 1
+    db.add(user)
     raw_token = generate_token()
     session = UserSession(
         user_id=user.id,

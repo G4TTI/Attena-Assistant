@@ -86,6 +86,10 @@ def _ts(value) -> str:
 
 
 def _v14_privacy(conn: Connection) -> None:
+    # O driver sqlite3 do Python só abre a transação (BEGIN) antes de um comando
+    # DML; um DDL executado antes disso rodaria em autocommit. Este UPDATE
+    # vazio garante que TUDO abaixo (inclusive os DROP COLUMN) é uma transação só.
+    conn.execute(text("UPDATE schema_migrations SET version = version WHERE 0"))
     now = _ts(utcnow())
     tables = _tables(conn)
     counts: dict[str, int] = {}
