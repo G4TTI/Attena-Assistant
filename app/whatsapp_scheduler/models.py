@@ -417,6 +417,16 @@ def _waha_session_default() -> str:
     return f"u_{uuid4().hex[:12]}"
 
 
+# Papéis (`User.role`). "owner" é a CONTA PRINCIPAL da plataforma: única, criada
+# só pelo CLI no servidor (`cli setup-owner`, e-mail em ADMIN_OWNER_EMAIL). Só
+# ela concede ou remove "admin" — pelo painel, atribuindo/trocando o plano
+# "Administrador". Nenhum papel é derivado do e-mail no cadastro.
+ROLE_USER = "user"
+ROLE_ADMIN = "admin"
+ROLE_OWNER = "owner"
+ADMIN_ROLES = (ROLE_ADMIN, ROLE_OWNER)
+
+
 class User(SQLModel, table=True):
     __tablename__ = "users"
     __table_args__ = (UniqueConstraint("email", name="uq_user_email"),)
@@ -437,8 +447,8 @@ class User(SQLModel, table=True):
     email_verified: bool = False
     # False = conta suspensa pelo admin (não entra; mensagens não saem).
     is_active: bool = True
-    # "user" | "admin". Só muda pelo CLI no servidor (nunca por tela/API):
-    # uma sessão de admin roubada não consegue criar outro admin.
+    # "user" | "admin" | "owner" (ver ROLE_* acima). "admin" só é concedido pela
+    # conta principal (owner); "owner" só pelo CLI no servidor.
     role: str = Field(default="user", index=True)
     last_login_at: datetime | None = None
     # Última requisição autenticada (atualizada no máximo a cada 5 min).

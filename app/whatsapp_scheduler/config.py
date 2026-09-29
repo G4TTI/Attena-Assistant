@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     # Gateway de pagamento. Vazio = nenhum configurado (o upgrade para em
     # "Pagamento ainda não configurado"; nada é marcado como pago).
     payment_provider: str = ""
+    # E-mail da CONTA PRINCIPAL (owner). Reservado: o cadastro público recusa;
+    # a conta só é criada/redefinida pelo CLI `setup-owner` no servidor.
+    admin_owner_email: str = "admin@caiogatti.com"
     # Sessões mais velhas que isto precisam entrar de novo para abrir /admin.
     admin_session_max_age_hours: int = 12
     admin_rate_limit_requests: int = 300

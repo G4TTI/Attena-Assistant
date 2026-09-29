@@ -3,16 +3,18 @@
     docker compose exec app python -m whatsapp_scheduler.cli <comando>
 
   generate-keys            imprime chaves novas para o .env (não grava nada)
-  grant-admin <e-mail>     concede o papel de administrador
-  revoke-admin <e-mail>    remove o papel de administrador
+  setup-owner              cria/redefine a CONTA PRINCIPAL (e-mail de ADMIN_OWNER_EMAIL);
+                           a senha é lida da entrada padrão (nunca como argumento)
+  revoke-admin <e-mail>    emergência: remove o acesso de um administrador
   reset-link <e-mail>      gera um link de redefinição de senha (sem provedor de e-mail)
   verify-link <e-mail>     gera um link de verificação de e-mail
   rotate-keys              recifra tudo com a versão ativa de DATA_ENCRYPTION_KEYS
   privacy-cleanup          roda a limpeza de retenção uma vez
   privacy-report           contagens do que existe cifrado/expurgado (nunca conteúdo)
 
-O papel de admin só é concedido aqui, de propósito: nenhuma tela ou API
-consegue promover alguém a admin (uma sessão roubada não cria outro admin).
+A conta principal só nasce aqui (servidor). Todo outro administrador é
+concedido POR ELA, no painel (plano "Administrador") — não há comando para
+promover alguém direto a admin.
 Links e chaves vão para a saída do terminal de quem rodou o comando — nunca
 para o log da aplicação.
 """
@@ -21,12 +23,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import sys
 
 from sqlmodel import Session, col, select
 
 from . import auth, privacy, retention
-from .auth_service import create_email_verification_link, create_password_reset_link
+from .admin.access import revoke_admin
+from .auth_service import create_email_verification_link, create_password_reset_link, setup_owner
 from .config import settings
 from .db import get_engine, init_db
 from .models import (
@@ -54,15 +58,40 @@ def cmd_generate_keys(_args) -> None:
     print(f"DATA_HASH_KEY={privacy.generate_key()}")
 
 
-def cmd_set_role(args, role: str) -> None:
+def _read_password() -> str:
+    """Senha pela entrada padrão (pipe) ou digitada duas vezes no terminal —
+    nunca como argumento de linha de comando (ficaria no histórico/`ps`)."""
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\n")
+    first = getpass.getpass("Senha da conta principal: ")
+    if first != getpass.getpass("Repita a senha: "):
+        print("As senhas não coincidem.", file=sys.stderr)
+        raise SystemExit(1)
+    return first
+
+
+def cmd_setup_owner(args) -> None:
+    email = args.email or settings.admin_owner_email
+    password = _read_password()
+    with Session(get_engine()) as db:
+        try:
+            _user, created, demoted = setup_owner(db, email=email, password=password, name=args.name)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
+    print(f"conta principal {'criada' if created else 'redefinida'}: {email}")
+    print(f"administradores anteriores rebaixados: {demoted} (conceda de novo pelo painel, se quiser)")
+
+
+def cmd_revoke_admin(args) -> None:
     with Session(get_engine()) as db:
         user = _user(db, args.email)
-        user.role = role
-        db.add(user)
-        db.commit()
-        if role != "admin":
-            auth.revoke_all_sessions(db, user)
-    print(f"{args.email}: papel = {role}" + ("" if role == "admin" else " (sessões encerradas)"))
+        if user.role == "owner":
+            print("A conta principal não é rebaixada por aqui; use setup-owner com outro e-mail.", file=sys.stderr)
+            raise SystemExit(1)
+        changed = revoke_admin(db, user)
+        auth.revoke_all_sessions(db, user)
+    print(f"{args.email}: " + ("acesso de administrador removido (sessões encerradas)" if changed else "não era administrador"))
 
 
 def cmd_reset_link(args) -> None:
@@ -163,7 +192,8 @@ def cmd_privacy_report(_args) -> None:
                 select(func.count()).select_from(ScheduleGroup).where(col(ScheduleGroup.recipient_encrypted).is_not(None))
             ),
             "perfis de faturamento": count(select(func.count()).select_from(BillingProfile)),
-            "administradores": count(select(func.count()).select_from(User).where(col(User.role) == "admin")),
+            "conta principal": count(select(func.count()).select_from(User).where(col(User.role) == "owner")),
+            "administradores concedidos": count(select(func.count()).select_from(User).where(col(User.role) == "admin")),
         }
     for key, value in report.items():
         print(f"{key}: {value}")
@@ -173,10 +203,13 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m whatsapp_scheduler.cli", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("generate-keys").set_defaults(func=cmd_generate_keys, needs_db=False)
-    for name, role in (("grant-admin", "admin"), ("revoke-admin", "user")):
-        p = sub.add_parser(name)
-        p.add_argument("email")
-        p.set_defaults(func=lambda args, role=role: cmd_set_role(args, role), needs_db=True)
+    p = sub.add_parser("setup-owner")
+    p.add_argument("--email", default="", help="padrão: ADMIN_OWNER_EMAIL")
+    p.add_argument("--name", default="Administrador")
+    p.set_defaults(func=cmd_setup_owner, needs_db=True)
+    p = sub.add_parser("revoke-admin")
+    p.add_argument("email")
+    p.set_defaults(func=cmd_revoke_admin, needs_db=True)
     for name, fn in (("reset-link", cmd_reset_link), ("verify-link", cmd_verify_link)):
         p = sub.add_parser(name)
         p.add_argument("email")

@@ -7,7 +7,7 @@
   <div>
     <a class="muted" href="/admin/usuarios" style="text-decoration:none">← Usuários</a>
     <h1 style="margin-top:6px">{{ u.name }}</h1>
-    <p class="sub">{{ u.email }}{% if u.role == 'admin' %} · administrador{% endif %}</p>
+    <p class="sub">{{ u.email }}{% if u.role == 'owner' %} · conta principal{% elif u.role == 'admin' %} · administrador{% endif %}</p>
   </div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     {% if u.is_active %}<span class="pill sent">Conta ativa</span>{% else %}<span class="pill failed">Conta suspensa</span>{% endif %}
@@ -67,15 +67,21 @@
         </dl>
       </div>
       <div class="card-ft">
+        {% if u.role == 'owner' %}
+          <span class="hint">Conta principal: sempre com o plano Administrador — não pode ser alterado pelo painel.</span>
+        {% elif can_manage %}
         <form method="post" action="/admin/usuarios/{{ u.id }}/plano" class="inline-form">
           {{ csrf() }}
           <label for="plan_id" class="sr-only">Alterar plano</label>
           <select id="plan_id" name="plan_id">
-            {% for p in plans_list %}<option value="{{ p.id }}" {{ 'selected' if p.id == u.plan_id }}>{{ p.name }}</option>{% endfor %}
+            {% for p in plans_list %}<option value="{{ p.id }}" {{ 'selected' if p.id == u.plan_id }}>{{ p.name }}{% if p.code == admin_plan_code %} — acesso ao painel{% elif not p.is_public or not p.is_active %} (interno){% endif %}</option>{% endfor %}
           </select>
           <button type="submit" class="ghost">Alterar plano manualmente</button>
         </form>
-        <span class="hint">Alteração manual é cortesia: não gera cobrança nem conta como faturamento.</span>
+        <span class="hint">Alteração manual é cortesia: não gera cobrança nem conta como faturamento.{% if is_owner %} O plano <strong>Administrador</strong> dá acesso ao painel e ao CRM; trocar para outro plano remove esse acesso.{% endif %}</span>
+        {% else %}
+          <span class="hint">Só a conta principal altera o plano de um administrador.</span>
+        {% endif %}
       </div>
     </div>
 
@@ -84,6 +90,8 @@
       <div class="card-bd">
         {% if u.id == current_user.id %}
           <p class="hint">Esta é a sua própria conta.</p>
+        {% elif not can_manage %}
+          <p class="hint">{% if u.role == 'owner' %}A conta principal não pode ser suspensa pelo painel.{% else %}Só a conta principal pode suspender um administrador.{% endif %}</p>
         {% elif u.is_active %}
           <form method="post" action="/admin/usuarios/{{ u.id }}/suspender" onsubmit="return confirm('Suspender esta conta? O acesso é encerrado na hora e as mensagens programadas deixam de ser enviadas.')">
             {{ csrf() }}

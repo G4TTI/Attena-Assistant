@@ -1,14 +1,15 @@
 """Controle de acesso do /admin — tudo no servidor.
 
-- Papel lido do BANCO a cada requisição (`User.role == "admin"`); nada de
-  cookie/header/query/localStorage decide isso. Sem papel = 404 (a área nem
-  "existe" para quem não é admin).
+- Papel lido do BANCO a cada requisição (`User.role` "owner" = conta
+  principal, ou "admin" = concedido por ela); nada de cookie/header/query/
+  localStorage decide isso. Sem papel = 404 (a área nem "existe" para os demais).
 - Sessão de admin tem idade máxima (`ADMIN_SESSION_MAX_AGE_HOURS`): passou
   disso, precisa entrar de novo (reautenticação — ponto onde o MFA entrará).
 - Rate limit por admin.
 - POSTs exigem token CSRF ligado à sessão (HMAC), além do SameSite=Lax do
   cookie e da checagem de Origin global (main.py).
-- O papel admin só é concedido pelo CLI no servidor (`cli grant-admin`).
+- A conta principal só é criada pelo CLI no servidor (`cli setup-owner`); o
+  papel admin só é concedido por ela, pelo painel (admin/access.py).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from .. import auth, privacy
 from ..clock import utcnow
 from ..config import settings
 from ..db import get_session
-from ..models import AdminAuditLog, User, UserSession
+from ..models import ADMIN_ROLES, AdminAuditLog, User, UserSession
 from ..ratelimit import RateLimitExceeded, check_rate_limit, record_attempt
 
 
@@ -44,7 +45,7 @@ def _check(request: Request, db: Session) -> tuple[User, UserSession]:
     user = auth.get_current_user_optional(request, db) if session is not None else None
     if session is None or user is None:
         raise auth.NotAuthenticated(next_path=_next_path(request))
-    if user.role != "admin" or not user.is_active:
+    if user.role not in ADMIN_ROLES or not user.is_active:
         raise HTTPException(status_code=404, detail="Not Found")
     if session.created_at < utcnow() - timedelta(hours=settings.admin_session_max_age_hours):
         from ..auth_service import AuditEventType, log_event

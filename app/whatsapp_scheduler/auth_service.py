@@ -16,7 +16,15 @@ from . import auth, whatsapp_service
 from .clock import utcnow
 from .config import settings
 from .db import claim_orphan_data
-from .models import AuditEventType, EmailVerificationToken, LoginAuditEvent, PasswordResetToken, User
+from .models import (
+    ADMIN_ROLES,
+    ROLE_OWNER,
+    AuditEventType,
+    EmailVerificationToken,
+    LoginAuditEvent,
+    PasswordResetToken,
+    User,
+)
 from .service import ValidationError
 
 logger = logging.getLogger("whatsapp_scheduler.auth")
@@ -70,6 +78,11 @@ def register_user(
     if password != password_confirm:
         raise ValidationError("As senhas não coincidem.")
     _validate_password(password)
+    if email_norm == auth.normalize_email(settings.admin_owner_email):
+        # O e-mail da conta principal é reservado: ela só nasce pelo CLI no
+        # servidor (`setup-owner`). Sem isto, quem se cadastrasse primeiro com
+        # esse e-mail teria a conta que depois viraria a principal.
+        raise ValidationError("Este e-mail é reservado. Use outro e-mail para criar sua conta.")
 
     if _find_by_email(db, email_norm) is not None:
         # Diferente do "esqueci minha senha": aqui é normal e esperado dizer
@@ -233,3 +246,56 @@ def verify_email(db: Session, *, token: str) -> User:
     db.add(row)
     db.commit()
     return user
+
+
+# --------------------------------------------------------------------------- #
+# Conta principal (owner) — só pelo CLI no servidor (`cli setup-owner`)
+# --------------------------------------------------------------------------- #
+def setup_owner(db: Session, *, email: str, password: str, name: str = "Administrador") -> tuple[User, bool, int]:
+    """Cria ou redefine a CONTA PRINCIPAL. Idempotente e seguro de repetir:
+
+    - a senha é (re)definida (só o hash Argon2id vai para o banco) e todas as
+      sessões da conta são encerradas — se alguém tivesse criado essa conta
+      antes, perde o acesso;
+    - a conta vira `owner`, com o plano interno "Administrador";
+    - qualquer outro admin/owner é rebaixado: acesso administrativo passa a
+      existir só por concessão desta conta, pelo painel.
+
+    Devolve (usuário, criado?, quantos admins foram rebaixados)."""
+    from . import plans
+    from .admin.access import revoke_admin
+    from .billing import service as billing
+
+    email_norm = auth.normalize_email(email)
+    if not email_norm or "@" not in email_norm:
+        raise ValidationError("E-mail inválido.")
+    _validate_password(password)
+    user = _find_by_email(db, email_norm)
+    created = user is None
+    if created:
+        user = User(name=(name or "Administrador").strip(), email=email_norm, password_hash=auth.hash_password(password))
+    else:
+        user.password_hash = auth.hash_password(password)
+    now = utcnow()
+    user.role = ROLE_OWNER
+    user.is_active = True
+    user.email_verified = True
+    user.onboarding_completed_at = user.onboarding_completed_at or now
+    user.updated_at = now
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    if created:
+        whatsapp_service.ensure_first_session(db, user)
+
+    demoted = 0
+    for other in db.exec(select(User).where(col(User.role).in_(list(ADMIN_ROLES))).where(col(User.id) != user.id)).all():
+        if other.role == ROLE_OWNER:
+            other.role = "admin"  # vira admin comum só para o revoke_admin abaixo tratá-lo igual
+        if revoke_admin(db, other):
+            demoted += 1
+
+    billing.grant_plan_manually(db, user, plans.ensure_admin_plan(db))
+    auth.revoke_all_sessions(db, user)
+    logger.info("conta principal definida (user_id=%s, criada=%s, admins rebaixados=%d)", user.id, created, demoted)
+    return user, created, demoted

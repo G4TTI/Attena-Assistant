@@ -798,7 +798,7 @@
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"></path></svg></span>
         <span class="rail-label">Planos</span>
       </a>
-      {% if current_user is defined and current_user and current_user.role == 'admin' %}
+      {% if current_user is defined and current_user and current_user.role in ('admin', 'owner') %}
       {# Só um atalho: o acesso é validado no servidor em toda rota /admin (admin/security.py). #}
       <a class="rail-btn" href="/admin" title="Administração">
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z"></path><path d="M9 12l2.2 2.2L15.5 10"></path></svg></span>

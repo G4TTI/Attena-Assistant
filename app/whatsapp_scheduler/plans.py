@@ -19,6 +19,7 @@ from .clock import utcnow
 from .config import settings
 from .errors import ValidationError
 from .models import (
+    ADMIN_ROLES,
     ENTITLED_SUBSCRIPTION_STATUSES,
     BillingPeriod,
     Plan,
@@ -36,6 +37,19 @@ LIMIT_LABELS: dict[str, str] = {
 }
 
 PERIOD_LABELS = {BillingPeriod.monthly: "mês", BillingPeriod.yearly: "ano"}
+
+# Plano interno que dá acesso ao painel administrativo. Nunca é vendido (inativo
+# e oculto), não tem limites e só a conta principal (owner) o atribui/remove.
+ADMIN_PLAN_CODE = "admin"
+_ADMIN_PLAN = {
+    "code": ADMIN_PLAN_CODE,
+    "name": "Administrador",
+    "description": "Acesso ao painel administrativo. Atribuído só pela conta principal.",
+    "price_cents": 0,
+    "features": ["Acesso ao painel administrativo e CRM", "Sem limites de uso"],
+    "limits": {"whatsapp_connections": None, "pending_messages": None, "calendar_connections": None},
+    "sort_order": 100,
+}
 
 _DEFAULT_CATALOG = [
     {
@@ -91,7 +105,29 @@ def seed_default_plans(db: Session) -> int:
             )
         )
     db.commit()
+    ensure_admin_plan(db)
     return len(_DEFAULT_CATALOG)
+
+
+def ensure_admin_plan(db: Session) -> Plan:
+    """Idempotente: garante o plano interno "Administrador" (também em bancos
+    que já tinham catálogo). Sempre inativo, oculto e gratuito."""
+    plan = get_plan(db, ADMIN_PLAN_CODE)
+    if plan is None:
+        plan = Plan(
+            code=ADMIN_PLAN_CODE, name=_ADMIN_PLAN["name"], description=_ADMIN_PLAN["description"],
+            features_json=json.dumps(_ADMIN_PLAN["features"], ensure_ascii=False),
+            limits_json=json.dumps(_ADMIN_PLAN["limits"]), sort_order=_ADMIN_PLAN["sort_order"],
+        )
+    plan.price_cents, plan.is_active, plan.is_public, plan.is_default = 0, False, False, False
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def is_admin_plan(plan: Plan | None) -> bool:
+    return plan is not None and plan.code == ADMIN_PLAN_CODE
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +244,7 @@ def check_limit(db: Session, user: User, key: str, *, adding: int = 1) -> None:
     """Levanta `PlanLimitReached` se `adding` itens a mais estourariam o limite
     do plano. Com ENFORCE_PLAN_LIMITS=false (padrão) nunca bloqueia; admins
     também não são limitados."""
-    if not settings.enforce_plan_limits or user.role == "admin":
+    if not settings.enforce_plan_limits or user.role in ADMIN_ROLES:
         return
     ent = entitlements(db, user)
     limit = ent.limit(key)

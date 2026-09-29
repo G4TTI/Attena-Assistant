@@ -16,6 +16,7 @@ from ..billing import metrics as billing_metrics
 from ..billing import service as billing
 from ..clock import utcnow
 from ..models import (
+    ADMIN_ROLES,
     ENTITLED_SUBSCRIPTION_STATUSES,
     AdminAuditLog,
     AuditEventType,
@@ -52,6 +53,8 @@ ACTION_LABELS = {
     "user_suspended": "Suspendeu conta",
     "user_reactivated": "Reativou conta",
     "plan_changed_manually": "Alterou plano manualmente",
+    "admin_granted": "Concedeu acesso de administrador",
+    "admin_revoked": "Removeu acesso de administrador",
     "plan_updated": "Editou plano do catálogo",
 }
 
@@ -282,7 +285,7 @@ def list_users(db: Session, filters: UserFilters, now: datetime | None = None) -
     elif filters.status == "suspended":
         query = query.where(col(User.is_active).is_(False))
     elif filters.status == "admin":
-        query = query.where(col(User.role) == "admin")
+        query = query.where(col(User.role).in_(list(ADMIN_ROLES)))
     signup_days = {"7d": 7, "30d": 30, "90d": 90}.get(filters.signup)
     if signup_days:
         query = query.where(col(User.created_at) >= now - timedelta(days=signup_days))

@@ -54,7 +54,9 @@ docker compose up -d --build
 - App: <http://localhost:8090> (`APP_HOST_PORT`)
 - O dashboard/Swagger do WAHA ficam **desligados** por padrão (eles permitem ler as
   conversas). Para depurar, ligue temporariamente com `WAHA_DASHBOARD_ENABLED=true`.
-- Administrador: `docker compose exec app python -m whatsapp_scheduler.cli grant-admin voce@exemplo.com`
+- Conta principal (admin): `docker compose exec -it app python -m whatsapp_scheduler.cli setup-owner`
+  cria/redefine `ADMIN_OWNER_EMAIL` pedindo a senha no terminal. Outros administradores
+  são concedidos por ela no painel (plano **Administrador**).
 
 ## Parear o WhatsApp
 

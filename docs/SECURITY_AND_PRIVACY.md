@@ -220,8 +220,17 @@ store) se a tela Conversas puder ser dispensada.
 
 ## 12. Administração (`/admin`)
 
-- Papel `admin` só pelo servidor: `docker compose exec app python -m whatsapp_scheduler.cli grant-admin <e-mail>`
-  (e `revoke-admin`). Nenhuma tela/API promove alguém a admin.
+- **Conta principal** (`role="owner"`, e-mail `ADMIN_OWNER_EMAIL`): única, criada ou
+  redefinida só no servidor com `docker compose exec -it app python -m whatsapp_scheduler.cli setup-owner`
+  (senha lida da entrada padrão — nunca argumento, arquivo, Git ou log; no banco, só o hash
+  Argon2id). O e-mail é reservado: o cadastro público recusa. Rodar `setup-owner` de novo
+  redefine a senha, encerra as sessões da conta e rebaixa qualquer outro admin.
+- **Outros administradores** só por concessão da conta principal, no painel: atribuir o plano
+  interno **Administrador** (oculto, não vendável, sem limites) dá acesso ao `/admin` e ao CRM;
+  trocar para outro plano remove. Só a conta principal atribui/remove esse plano, altera o plano
+  ou suspende outro admin; ninguém altera o plano da conta principal nem a suspende pelo painel.
+  A conta principal pode atribuir qualquer plano (inclusive ocultos/inativos) a qualquer usuário.
+  `cli revoke-admin <e-mail>` existe só para emergência (retira acesso; não concede).
 - Validação no servidor a cada requisição (papel lido do banco). Quem não é admin
   recebe 404; cookie/header/query/localStorage com "admin" não mudam nada (testado).
 - Sessão de admin com idade máxima (`ADMIN_SESSION_MAX_AGE_HOURS`, padrão 12 h): depois

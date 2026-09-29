@@ -72,6 +72,7 @@ async def lifespan(app: FastAPI):
         onboarding_service.migrate_legacy_users(db)
         app_settings.load_from_db(db)
         plans.seed_default_plans(db)
+        plans.ensure_admin_plan(db)
         admin_crm.seed_default_tags(db)
     waha = WahaClient(settings.waha_base_url, settings.waha_api_key, settings.request_timeout)
     scheduler = SchedulerService(waha)

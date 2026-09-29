@@ -11,7 +11,9 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from tests.conftest import FakeWaha, db_locations_containing, register_and_login, whatsapp_session_id
-from whatsapp_scheduler import cli, plans
+from whatsapp_scheduler import auth_service, cli, plans
+from whatsapp_scheduler.admin import access
+from whatsapp_scheduler.config import settings
 from whatsapp_scheduler.billing import metrics as billing_metrics
 from whatsapp_scheduler.billing import service as billing_service
 from whatsapp_scheduler.billing.validation import validate_form
@@ -25,8 +27,17 @@ SECRET = "conteúdo privadíssimo da mensagem"
 PHONE = "+55 14 99111-0001"
 
 
-def _make_admin(email: str) -> None:
-    cli.main(["grant-admin", email])
+OWNER_EMAIL = settings.admin_owner_email
+OWNER_PASSWORD = "senha-de-teste-da-conta-principal"
+
+
+def login_as_owner(client) -> None:
+    """Cria a conta principal (como o CLI `setup-owner` faz) e entra com ela."""
+    with Session(get_engine()) as db:
+        auth_service.setup_owner(db, email=OWNER_EMAIL, password=OWNER_PASSWORD)
+    client.cookies.clear()
+    r = client.post("/login", data={"email": OWNER_EMAIL, "password": OWNER_PASSWORD}, follow_redirects=False)
+    assert r.status_code == 303, r.text
 
 
 def _csrf(html: str) -> str:
@@ -65,8 +76,7 @@ def customer(client):
 
 @pytest.fixture
 def admin_client(client, customer):
-    register_and_login(client, name="Admin", email="admin@example.com")
-    _make_admin("admin@example.com")
+    login_as_owner(client)
     return client
 
 
@@ -96,10 +106,17 @@ def test_regular_user_gets_404_everywhere_even_forging_role(client, customer):
     assert 'href="/admin"' not in client.get("/planos").text
 
 
-def test_admin_role_is_read_from_the_database_every_request(admin_client):
-    assert admin_client.get("/admin").status_code == 200
-    cli.main(["revoke-admin", "admin@example.com"])  # também encerra as sessões
-    assert admin_client.get("/admin", follow_redirects=False).status_code in (303, 404)
+def test_admin_role_is_read_from_the_database_every_request(client, customer):
+    """Admin concedido pela conta principal perde o acesso na hora em que ela troca o plano."""
+    with Session(get_engine()) as db:
+        owner, _, _ = auth_service.setup_owner(db, email=OWNER_EMAIL, password=OWNER_PASSWORD)
+        access.set_plan(db, owner, db.get(User, customer.id), plans.get_plan(db, plans.ADMIN_PLAN_CODE))
+    client.post("/login", data={"email": "cliente@example.com", "password": "testpass123"})
+    assert client.get("/admin").status_code == 200
+    with Session(get_engine()) as db:
+        owner = db.exec(select(User).where(User.email == OWNER_EMAIL)).one()
+        access.set_plan(db, owner, db.get(User, customer.id), plans.get_plan(db, "free"))
+    assert client.get("/admin", follow_redirects=False).status_code == 404
 
 
 def test_every_admin_page_renders_for_admin(admin_client):
@@ -249,7 +266,7 @@ def test_suspend_and_reactivate(admin_client, customer, client):
 
 def test_admin_cannot_suspend_self(admin_client):
     with Session(get_engine()) as db:
-        admin = db.exec(select(User).where(User.email == "admin@example.com")).one()
+        admin = db.exec(select(User).where(User.email == OWNER_EMAIL)).one()
     token = _csrf(admin_client.get(f"/admin/usuarios/{admin.id}").text)
     r = admin_client.post(f"/admin/usuarios/{admin.id}/suspender", data={"csrf_token": token})
     assert "não pode suspender a própria conta" in r.text
@@ -264,7 +281,8 @@ def test_manual_plan_change_is_not_revenue(admin_client, customer):
     with Session(get_engine()) as db:
         assert plans.current_plan(db, db.get(User, customer.id)).code == "plus"
         summary = billing_metrics.summary(db)
-        assert summary.mrr_cents == 0 and summary.revenue_total_cents == 0 and summary.manual_subscriptions == 1
+        # cortesias (a do cliente e o plano Administrador da conta principal) nunca são receita
+        assert summary.mrr_cents == 0 and summary.revenue_total_cents == 0 and summary.manual_subscriptions == 2
     assert "R$ 0,00" in admin_client.get("/admin/faturamento").text
 
 
@@ -303,3 +321,107 @@ def test_dashboard_counts_do_not_need_content(admin_client, customer):
     html = admin_client.get("/admin").text
     assert "Total de usuários" in html and "Mensagens agendadas" in html and "MRR" in html
     assert "Nenhum pagamento registrado" in html
+
+
+
+# --------------------------------------------------------------------------- #
+# Conta principal (owner) e concessão de acesso administrativo
+# --------------------------------------------------------------------------- #
+def test_owner_email_is_reserved_on_public_signup(client):
+    r = client.post("/cadastro", data={"name": "Intruso", "email": OWNER_EMAIL.upper(), "password": "x" * 12,
+                                       "password_confirm": "x" * 12})
+    assert r.status_code == 422 and "reservado" in r.text
+    with Session(get_engine()) as db:
+        assert db.exec(select(User).where(User.email == OWNER_EMAIL)).first() is None
+
+
+def test_setup_owner_resets_password_kills_sessions_and_demotes_other_admins(client, customer):
+    with Session(get_engine()) as db:
+        owner, created, _ = auth_service.setup_owner(db, email=OWNER_EMAIL, password=OWNER_PASSWORD)
+        access.set_plan(db, owner, db.get(User, customer.id), plans.get_plan(db, plans.ADMIN_PLAN_CODE))
+        assert created and owner.role == "owner" and db.get(User, customer.id).role == "admin"
+        assert plans.current_plan(db, owner).code == plans.ADMIN_PLAN_CODE
+    login_as_owner(client)  # roda setup_owner de novo: redefine senha e rebaixa os outros admins
+    with Session(get_engine()) as db:
+        assert db.get(User, customer.id).role == "user"
+        assert plans.current_plan(db, db.get(User, customer.id)).code == "free"
+        owner = db.exec(select(User).where(User.email == OWNER_EMAIL)).one()
+        assert owner.password_hash != OWNER_PASSWORD and "senha" not in owner.password_hash
+    assert db_locations_containing(OWNER_PASSWORD) == []
+    assert client.get("/admin").status_code == 200
+
+
+def test_only_the_owner_grants_admin_through_the_admin_plan(admin_client, customer):
+    with Session(get_engine()) as db:
+        admin_plan_id = plans.get_plan(db, plans.ADMIN_PLAN_CODE).id
+        hidden = plans.get_plan(db, "pro")
+        hidden.is_public, hidden.is_active = False, False  # a principal atribui até plano oculto/inativo
+        db.add(hidden)
+        db.commit()
+        hidden_id = hidden.id
+    page = admin_client.get(f"/admin/usuarios/{customer.id}").text
+    assert f'value="{admin_plan_id}"' in page and "acesso ao painel" in page
+    token = _csrf(page)
+    r = admin_client.post(f"/admin/usuarios/{customer.id}/plano", data={"plan_id": admin_plan_id, "csrf_token": token})
+    assert "agora é administrador" in r.text
+    with Session(get_engine()) as db:
+        assert db.get(User, customer.id).role == "admin"
+        actions = {a.action for a in db.exec(select(AdminAuditLog)).all()}
+        assert "admin_granted" in actions
+    r = admin_client.post(f"/admin/usuarios/{customer.id}/plano", data={"plan_id": hidden_id, "csrf_token": token})
+    assert "Acesso de administrador removido" in r.text
+    with Session(get_engine()) as db:
+        user = db.get(User, customer.id)
+        assert user.role == "user" and plans.current_plan(db, user).id == hidden_id
+
+
+def test_granted_admin_cannot_grant_admin_or_touch_other_admins(client, customer):
+    other = register_and_login(client, name="Outro", email="outro@example.com")
+    with Session(get_engine()) as db:
+        owner, _, _ = auth_service.setup_owner(db, email=OWNER_EMAIL, password=OWNER_PASSWORD)
+        admin_plan = plans.get_plan(db, plans.ADMIN_PLAN_CODE)
+        access.set_plan(db, owner, db.get(User, customer.id), admin_plan)
+        access.set_plan(db, owner, db.get(User, other.id), admin_plan)
+        owner_id, admin_plan_id = owner.id, admin_plan.id
+    client.cookies.clear()
+    client.post("/login", data={"email": "cliente@example.com", "password": "testpass123"})
+    with Session(get_engine()) as db:
+        comum = User(name="Comum", email="comum@example.com", password_hash="x")
+        db.add(comum)
+        db.commit()
+        comum_id = comum.id
+    page = client.get(f"/admin/usuarios/{comum_id}").text
+    assert f'value="{admin_plan_id}"' not in page  # a opção nem aparece para admin comum
+    token = _csrf(page)
+    r = client.post(f"/admin/usuarios/{comum_id}/plano", data={"plan_id": admin_plan_id, "csrf_token": token})
+    assert "Só a conta principal" in r.text
+    r = client.post(f"/admin/usuarios/{other.id}/suspender", data={"csrf_token": token})
+    assert "Só a conta principal" in r.text
+    r = client.post(f"/admin/usuarios/{owner_id}/suspender", data={"csrf_token": token})
+    assert "não pode ser suspensa" in r.text
+    with Session(get_engine()) as db:
+        assert db.get(User, comum_id).role == "user"
+        assert db.get(User, other.id).is_active and db.get(User, owner_id).is_active
+    # plano comum para usuário comum: permitido a qualquer admin
+    with Session(get_engine()) as db:
+        plus_id = plans.get_plan(db, "plus").id
+    r = client.post(f"/admin/usuarios/{comum_id}/plano", data={"plan_id": plus_id, "csrf_token": token})
+    assert "Plano alterado para Plus" in r.text
+
+
+def test_owner_plan_cannot_be_changed(admin_client):
+    with Session(get_engine()) as db:
+        owner = db.exec(select(User).where(User.email == OWNER_EMAIL)).one()
+        free_id = plans.get_plan(db, "free").id
+    page = admin_client.get(f"/admin/usuarios/{owner.id}").text
+    assert "Conta principal: sempre com o plano Administrador" in page
+    r = admin_client.post(f"/admin/usuarios/{owner.id}/plano", data={"plan_id": free_id, "csrf_token": _csrf(page)})
+    assert "não pode ser alterado" in r.text
+    with Session(get_engine()) as db:
+        assert db.get(User, owner.id).role == "owner"
+
+
+def test_admin_plan_is_internal_and_not_sellable(client):
+    register_and_login(client)
+    assert client.get(f"/planos/{plans.ADMIN_PLAN_CODE}/upgrade").status_code == 404
+    assert "Administrador" not in client.get("/planos").text.split("plan-grid")[1]

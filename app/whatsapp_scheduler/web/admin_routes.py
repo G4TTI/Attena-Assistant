@@ -18,10 +18,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session, col, select
 
 from .. import app_settings, auth, failures, plans
-from ..admin import crm
+from ..admin import access, crm
 from ..admin import service as admin_service
 from ..admin.security import audit, csrf_token, require_admin, verify_csrf
-from ..billing import service as billing
 from ..billing.validation import UF_NAMES
 from ..clock import utcnow
 from ..db import get_session
@@ -42,6 +41,7 @@ def _ctx(request: Request, admin: User, section: str, **extra) -> dict:
         "current_user": admin,
         "section": section,
         "csrf_token": csrf_token(request),
+        "is_owner": access.is_owner(admin),
         "admin_tz": app_settings.user_timezone(admin),
         "now": utcnow(),
         **extra,
@@ -144,12 +144,14 @@ async def admin_user_detail(
 
     statuses = await asyncio.gather(*(_status(name) for name in names.values()))
     live = dict(zip(names.keys(), statuses))
+    target = db.get(User, user_id)
     return templates.TemplateResponse(
         "admin/usuario.html",
         _ctx(
             request, admin, "usuarios", page_title=detail.name, u=detail, live=live,
             connected=sum(1 for s in statuses if s == "WORKING"), ok=ok, error=error,
-            plans_list=plans.list_plans(db), all_tags=crm.list_tags(db), uf_names=UF_NAMES,
+            plans_list=access.assignable_plans(db, admin), can_manage=access.can_manage(admin, target),
+            admin_plan_code=plans.ADMIN_PLAN_CODE, all_tags=crm.list_tags(db), uf_names=UF_NAMES,
         ),
     )
 
@@ -260,6 +262,8 @@ async def admin_suspend(
     back = f"/admin/usuarios/{user_id}"
     if user.id == admin.id:
         return _back(back, error="Você não pode suspender a própria conta.")
+    if not access.can_manage(admin, user):
+        return _back(back, error="Só a conta principal pode suspender administradores; a conta principal não pode ser suspensa.")
     if user.is_active:
         user.is_active = False
         user.updated_at = utcnow()
@@ -276,6 +280,8 @@ async def admin_reactivate(
 ) -> RedirectResponse:
     await verify_csrf(request)
     user = _target_user(db, user_id)
+    if not access.can_manage(admin, user):
+        return _back(f"/admin/usuarios/{user_id}", error="Sem permissão para reativar esta conta.")
     if not user.is_active:
         user.is_active = True
         user.updated_at = utcnow()
@@ -295,12 +301,20 @@ async def admin_change_plan(
     back = f"/admin/usuarios/{user_id}"
     if plan is None:
         return _back(back, error="Escolha um plano.")
-    previous = plans.current_plan(db, user)
-    billing.grant_plan_manually(db, user, plan)
+    try:
+        previous, change = access.set_plan(db, admin, user, plan)
+    except ValidationError as exc:
+        return _back(back, error=str(exc))
     audit(
         db, admin, "plan_changed_manually", target_type="user", target_id=user_id,
-        detail={"from": previous.code if previous else None, "to": plan.code},
+        detail={"from": previous, "to": plan.code},
     )
+    if change == "granted":
+        audit(db, admin, "admin_granted", target_type="user", target_id=user_id)
+        return _back(back, ok=f"{user.name} agora é administrador (plano {plan.name}).")
+    if change == "revoked":
+        audit(db, admin, "admin_revoked", target_type="user", target_id=user_id, detail={"to": plan.code})
+        return _back(back, ok=f"Acesso de administrador removido; plano alterado para {plan.name}.")
     return _back(back, ok=f"Plano alterado para {plan.name} (cortesia — não conta como faturamento).")
 
 
@@ -412,6 +426,8 @@ async def admin_update_plan(
     features = [line.strip()[:120] for line in str(form.get("features") or "").splitlines() if line.strip()][:20]
     import json
 
+    if plans.is_admin_plan(plan) and not access.is_owner(admin):
+        return _back(back, error="Só a conta principal pode editar o plano Administrador.")
     before = {"price_cents": plan.price_cents, "is_active": plan.is_active, "is_public": plan.is_public}
     plan.name = name
     plan.description = str(form.get("description") or "").strip()[:200]
@@ -421,6 +437,9 @@ async def admin_update_plan(
     plan.limits_json = json.dumps(limits)
     plan.is_active = form.get("is_active") == "on"
     plan.is_public = form.get("is_public") == "on"
+    if plans.is_admin_plan(plan):
+        # Plano interno: nunca vendido, nunca público, sem preço.
+        plan.is_active, plan.is_public, plan.price_cents = False, False, 0
     plans.touch(plan)
     db.add(plan)
     db.commit()

@@ -112,7 +112,7 @@
             <a href="/admin/usuarios/{{ u.id }}">{{ u.name }}</a>
             <span class="cell-sub">
               {% if u.online %}<span class="dot ok" style="display:inline-block;vertical-align:1px;margin-right:4px"></span>online · {% endif %}
-              {{ crm_statuses.get(u.crm_status, u.crm_status) }}{% if not u.is_active %} · <span style="color:var(--err)">suspensa</span>{% endif %}{% if u.role == 'admin' %} · admin{% endif %}
+              {{ crm_statuses.get(u.crm_status, u.crm_status) }}{% if not u.is_active %} · <span style="color:var(--err)">suspensa</span>{% endif %}{% if u.role == 'owner' %} · conta principal{% elif u.role == 'admin' %} · admin{% endif %}
             </span>
           </td>
           <td>{{ u.email }}</td>

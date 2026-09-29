@@ -51,8 +51,12 @@ Nunca escreva valores de teste direto no `docker-compose.yml`.
 - **Migrações de dados** ficam em `migrations.py` (tabela `schema_migrations`); as
   aditivas continuam em `db.py`. Em teste, descarte o pool (`engine.dispose()`)
   depois de trocar o schema por fora, senão conexões antigas veem o schema velho.
-- Admin só pelo CLI no servidor: `cli grant-admin <e-mail>` / `revoke-admin`.
-  Sem provedor de e-mail, links de senha: `cli reset-link <e-mail>`.
+- Admin: a CONTA PRINCIPAL (`role="owner"`, e-mail `ADMIN_OWNER_EMAIL`,
+  padrão `admin@caiogatti.com`) só nasce pelo CLI `setup-owner` (senha pela
+  entrada padrão; o e-mail é reservado no cadastro). Só ela concede/remove
+  admin, atribuindo o plano interno "Administrador" no painel
+  (`admin/access.py`). `cli revoke-admin <e-mail>` = emergência. Sem provedor
+  de e-mail, links de senha: `cli reset-link <e-mail>`.
 
 ## Testes
 
