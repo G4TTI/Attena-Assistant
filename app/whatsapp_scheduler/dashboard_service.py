@@ -17,7 +17,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from . import calendar_service, whatsapp_service
+from . import calendar_service, privacy, whatsapp_service
 from .clock import utcnow
 from .models import (
     Automation,
@@ -126,14 +126,13 @@ def failed_count_on(db: Session, user_id: str, day: date, tz_name: str) -> int:
 
 def _group_info(db: Session, schedule: Schedule) -> tuple[int, str]:
     """(quantas mensagens tem o agendamento a que este `Schedule` pertence,
-    nome do destinatário) — 1 mensagem e o próprio `recipient_input` se o
-    schedule ainda não tem grupo."""
+    nome do destinatário — decifrado em memória, só para o dono)."""
     if schedule.group_id is None:
-        return 1, schedule.recipient_input
+        return 1, privacy.schedule_recipient(schedule, safe=True) or "—"
     group = db.get(ScheduleGroup, schedule.group_id)
     count = db.exec(select(func.count()).select_from(Schedule).where(col(Schedule.group_id) == schedule.group_id)).one()
-    name = (group.recipient_name if group and group.recipient_name else schedule.recipient_input)
-    return int(count or 1), name
+    info = privacy.group_recipient(group, safe=True) if group is not None else None
+    return int(count or 1), (info.display if info is not None else "—")
 
 
 def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5, tz_name: str | None = None) -> list[dict]:
@@ -150,6 +149,7 @@ def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5, tz_name
             {
                 "dispatch": dispatch,
                 "schedule": schedule,
+                "text": privacy.schedule_message(schedule, safe=True),
                 "recipient": recipient,
                 "send_local": utc_to_local(dispatch.scheduled_at_utc, tz_name or schedule.timezone),
                 "message_count": message_count,
@@ -178,9 +178,8 @@ def recent_activity(db: Session, user_id: str, *, limit: int = 6) -> list[dict]:
         schedule = db.get(Schedule, dispatch.schedule_id)
         if schedule is None:
             continue
-        items.append(
-            {"kind": "sent", "at": dispatch.sent_at_utc, "label": f"Mensagem enviada para {schedule.recipient_input}"}
-        )
+        # O destinatário de uma mensagem já enviada foi expurgado (retenção mínima).
+        items.append({"kind": "sent", "at": dispatch.sent_at_utc, "label": "Mensagem agendada enviada"})
 
     for dispatch in db.exec(
         select(Dispatch)
@@ -193,13 +192,7 @@ def recent_activity(db: Session, user_id: str, *, limit: int = 6) -> list[dict]:
         schedule = db.get(Schedule, dispatch.schedule_id)
         if schedule is None:
             continue
-        items.append(
-            {
-                "kind": "failed",
-                "at": dispatch.updated_at,
-                "label": f"Falha ao enviar mensagem para {schedule.recipient_input}",
-            }
-        )
+        items.append({"kind": "failed", "at": dispatch.updated_at, "label": "Falha ao enviar uma mensagem agendada"})
 
     for event in db.exec(
         select(Event)

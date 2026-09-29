@@ -23,10 +23,10 @@ def list_connections(
 
 
 @router.delete("/connections/{connection_id}")
-def disconnect(
+async def disconnect(
     connection_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
 ) -> dict:
-    if not calendar_service.disconnect(db, connection_id, current_user.id):
+    if not await calendar_service.disconnect_and_revoke(db, connection_id, current_user.id):
         raise HTTPException(status_code=404, detail="Conexão não encontrada.")
     return {"status": "disconnected", "id": connection_id}
 

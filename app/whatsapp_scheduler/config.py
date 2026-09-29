@@ -8,7 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # env_ignore_empty: variável vazia no compose (`${X:-}`) = usar o padrão daqui.
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True)
 
     # Ambiente — controla flags sensíveis a produção (cookie `Secure`, HSTS).
     # "development" (padrão, ex.: localhost sem HTTPS) | "production".
@@ -16,6 +17,9 @@ class Settings(BaseSettings):
 
     # Autenticação
     session_cookie_name: str = "attena_session"
+    # None = segue o ambiente (Secure só em produção). Force True quando o app
+    # for servido só por HTTPS (ex.: atrás do Cloudflare) mesmo fora de produção.
+    session_cookie_secure: bool | None = None
     session_ttl_days: int = 30
     password_reset_ttl_minutes: int = 30
     email_verification_ttl_hours: int = 48
@@ -51,11 +55,13 @@ class Settings(BaseSettings):
     # errado, não só o relógio exibido na tela). Ver time_sync.py.
     clock_sync_seconds: int = 900
 
-    # Conversas (histórico do WhatsApp)
+    # Conversas (histórico do WhatsApp) — só VISUAIS: nada disto é gravado no
+    # banco. Os caches abaixo vivem apenas na memória do processo e expiram
+    # sozinhos (ver chatsvc.py).
     chat_list_limit: int = 50
     chat_messages_limit: int = 50
     chat_list_cache_seconds: int = 20
-    chat_messages_cache_seconds: int = 90
+    chat_messages_cache_seconds: int = 60
     # A lista de chats deve responder rápido ou falhar rápido (sessão ruim).
     chat_list_timeout: float = 12.0
     # O engine WEBJS demora para trazer histórico; timeout dedicado.
@@ -78,6 +84,54 @@ class Settings(BaseSettings):
     # Quantos dias a partir de hoje a tela de Calendário mostra por padrão
     # (independente de quanto é sincronizado/guardado).
     calendar_agenda_default_days: int = 30
+
+    # ------------------------------------------------------------------ #
+    # Criptografia de dados de usuário em repouso (ver privacy.py e
+    # docs/SECURITY_AND_PRIVACY.md). Sem estas chaves o app NÃO sobe.
+    # ------------------------------------------------------------------ #
+    # Chaves AES-256-GCM versionadas: "1:<base64 de 32 bytes>[,2:<...>]".
+    # A versão ativa (a que cifra dados novos) é a maior, salvo
+    # `data_encryption_active_version`. Versões antigas continuam só pra decifrar.
+    data_encryption_keys: str = ""
+    data_encryption_keys_file: str = ""  # alternativa: caminho de um arquivo (Docker secret)
+    data_encryption_active_version: int | None = None
+    # Chave HMAC-SHA256 (base64, 32 bytes) dos índices cegos (hash de telefone).
+    # Separada da de cifra e de vida longa: trocá-la invalida as buscas por hash.
+    data_hash_key: str = ""
+    data_hash_key_file: str = ""
+
+    # ------------------------------------------------------------------ #
+    # Retenção (ver retention.py / privacy_cleanup)
+    # ------------------------------------------------------------------ #
+    privacy_cleanup_seconds: int = 3600
+    # Por quanto tempo o HASH (nunca o número) do destinatário de uma mensagem
+    # já encerrada continua existindo — permite ao usuário ver "3 canceladas"
+    # na conversa. Depois disso vira NULL.
+    recipient_hash_retention_days: int = 30
+    # IP/user-agent de login e de sessões: só para segurança, prazo curto.
+    login_ip_retention_days: int = 30
+    login_audit_retention_days: int = 180
+    session_record_retention_days: int = 30
+    auth_token_retention_days: int = 7
+
+    # WAHA: armazenamento de conversas do engine NOWEB (desligado por padrão —
+    # com ele ligado o WAHA grava chats/contatos/mensagens em store.sqlite3).
+    waha_noweb_store_enabled: bool = False
+
+    # ------------------------------------------------------------------ #
+    # Planos, cobrança e admin
+    # ------------------------------------------------------------------ #
+    # False = limites dos planos só aparecem na tela (não bloqueiam nada).
+    enforce_plan_limits: bool = False
+    # Gateway de pagamento. Vazio = nenhum configurado (o upgrade para em
+    # "Pagamento ainda não configurado"; nada é marcado como pago).
+    payment_provider: str = ""
+    # Sessões mais velhas que isto precisam entrar de novo para abrir /admin.
+    admin_session_max_age_hours: int = 12
+    admin_rate_limit_requests: int = 300
+    admin_rate_limit_window_seconds: int = 300
+    # Origens extras aceitas em POST (além do próprio Host), separadas por vírgula.
+    allowed_origins: str = ""
 
 
 @lru_cache

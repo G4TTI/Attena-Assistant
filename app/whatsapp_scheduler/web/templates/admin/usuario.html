@@ -1,0 +1,209 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import csrf, dt, sub_pill, privacy_note with context %}
+{% from "_components.html" import icon %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <a class="muted" href="/admin/usuarios" style="text-decoration:none">← Usuários</a>
+    <h1 style="margin-top:6px">{{ u.name }}</h1>
+    <p class="sub">{{ u.email }}{% if u.role == 'admin' %} · administrador{% endif %}</p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    {% if u.is_active %}<span class="pill sent">Conta ativa</span>{% else %}<span class="pill failed">Conta suspensa</span>{% endif %}
+    <span class="pill pending">CRM: {{ crm_statuses.get(u.crm_status, u.crm_status) }}</span>
+  </div>
+</div>
+
+{% if error %}<div class="alert err" role="alert">{{ error }}</div>{% endif %}
+{% if ok %}<div class="alert ok" role="status">{{ ok }}</div>{% endif %}
+
+<div class="admin-cards">
+  <div class="stat-card"><span class="stat-label">Automações</span><span class="stat-value">{{ u.automations }}</span><span class="stat-sub">Criadas no Calendário</span></div>
+  <div class="stat-card"><span class="stat-label">Mensagens pendentes</span><span class="stat-value">{{ u.pending_messages }}</span><span class="stat-sub">Ainda vão sair</span></div>
+  <div class="stat-card"><span class="stat-label">Mensagens enviadas</span><span class="stat-value">{{ u.sent_messages }}</span><span class="stat-sub">Confirmadas</span></div>
+  <div class="stat-card {{ 'stat-warn' if u.error_messages }}"><span class="stat-label">Com erro</span><span class="stat-value">{{ u.error_messages }}</span><span class="stat-sub">Falhas + ignoradas</span></div>
+</div>
+
+<div class="detail-grid">
+  <div class="detail-col">
+    <div class="card">
+      <div class="card-hd">{{ icon('list', 16) }}<h2>Conta</h2></div>
+      <div class="card-bd">
+        <dl class="kv" style="margin-top:0">
+          <dt>Nome</dt><dd>{{ u.name }}</dd>
+          <dt>E-mail</dt><dd>{{ u.email }}{% if not u.email_verified %} <span class="muted">(não verificado)</span>{% endif %}</dd>
+          <dt>Telefone</dt><dd>{{ u.phone or '—' }}</dd>
+          <dt>Conta criada</dt><dd>{{ dt(u.created_at) }}</dd>
+          <dt>Último login</dt><dd>{{ dt(u.last_login_at) }} <span class="muted">· {{ u.login_count }} login{{ 's' if u.login_count != 1 }}</span></dd>
+          <dt>Última atividade</dt><dd>{{ dt(u.last_activity_at) }}</dd>
+          <dt>WhatsApps conectados</dt><dd>{{ connected }} de {{ u.whatsapp_sessions | length }} configurado{{ 's' if u.whatsapp_sessions | length != 1 }}</dd>
+          <dt>Google Agenda</dt><dd>{{ 'Sim' if u.google_connected else 'Não' }}</dd>
+        </dl>
+        {% if u.whatsapp_sessions %}
+        <p class="section-label" style="margin:18px 0 8px">Conexões WhatsApp</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Rótulo</th><th>ID interno</th><th>Status</th></tr></thead>
+          <tbody>
+          {% for s in u.whatsapp_sessions %}
+            <tr><td>{{ s.label }}</td><td><code>{{ s.id[:8] }}</code></td><td>{% set st = live.get(s.id, '') %}<span class="pill {{ 'working' if st == 'WORKING' else 'pending' }}">{{ st | lower or '—' }}</span></td></tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">{{ icon('check', 16) }}<h2>Plano e assinatura</h2></div>
+      <div class="card-bd">
+        <dl class="kv" style="margin-top:0">
+          <dt>Plano</dt><dd><strong>{{ u.plan_name }}</strong>{% if u.subscription and u.subscription.manual %} <span class="muted">(cortesia)</span>{% endif %}</dd>
+          <dt>Status</dt><dd>{{ sub_pill(u.subscription.status if u.subscription else None) }}</dd>
+          <dt>Início da assinatura</dt><dd>{{ dt(u.subscription.started_at if u.subscription else None) }}</dd>
+          <dt>Próxima renovação</dt><dd>{{ dt(u.subscription.current_period_end if u.subscription else None) }}</dd>
+          {% if u.pending_upgrade %}<dt>Upgrade pedido</dt><dd>{{ u.pending_upgrade.plan_name }} · {{ sub_pill('incomplete') }}</dd>{% endif %}
+          <dt>Faturamento</dt><dd>{% if u.billing.has_profile %}CPF <code>{{ u.billing.cpf_masked }}</code> · {{ u.billing.state }}{% else %}<span class="muted">sem dados de faturamento</span>{% endif %}</dd>
+        </dl>
+      </div>
+      <div class="card-ft">
+        <form method="post" action="/admin/usuarios/{{ u.id }}/plano" class="inline-form">
+          {{ csrf() }}
+          <label for="plan_id" class="sr-only">Alterar plano</label>
+          <select id="plan_id" name="plan_id">
+            {% for p in plans_list %}<option value="{{ p.id }}" {{ 'selected' if p.id == u.plan_id }}>{{ p.name }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="ghost">Alterar plano manualmente</button>
+        </form>
+        <span class="hint">Alteração manual é cortesia: não gera cobrança nem conta como faturamento.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">{{ icon('alert', 16) }}<h2>Acesso</h2></div>
+      <div class="card-bd">
+        {% if u.id == current_user.id %}
+          <p class="hint">Esta é a sua própria conta.</p>
+        {% elif u.is_active %}
+          <form method="post" action="/admin/usuarios/{{ u.id }}/suspender" onsubmit="return confirm('Suspender esta conta? O acesso é encerrado na hora e as mensagens programadas deixam de ser enviadas.')">
+            {{ csrf() }}
+            <button type="submit" class="danger">Suspender conta</button>
+            <p class="hint" style="margin-top:8px">Encerra todas as sessões. Mensagens programadas não saem enquanto a conta estiver suspensa.</p>
+          </form>
+        {% else %}
+          <form method="post" action="/admin/usuarios/{{ u.id }}/reativar">
+            {{ csrf() }}
+            <button type="submit">Reativar conta</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-col">
+    <div class="card">
+      <div class="card-hd">{{ icon('list', 16) }}<h2>CRM</h2></div>
+      <div class="card-bd" style="display:flex;flex-direction:column;gap:18px">
+        <form method="post" action="/admin/usuarios/{{ u.id }}/crm/status" class="inline-form">
+          {{ csrf() }}
+          <label for="crm_status" class="sr-only">Status do CRM</label>
+          <select id="crm_status" name="status">
+            {% for key, label in crm_statuses.items() %}<option value="{{ key }}" {{ 'selected' if u.crm_status == key }}>{{ label }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="ghost">Salvar status</button>
+        </form>
+
+        <div>
+          <p class="section-label" style="margin-bottom:8px">Tags</p>
+          <div class="tag-list">
+            {% for t in u.tags %}
+            <form method="post" action="/admin/usuarios/{{ u.id }}/crm/tags/{{ t.id }}/remover" style="display:contents">
+              {{ csrf() }}
+              <span class="tag-chip">{{ t.name }}<button type="submit" aria-label="Remover a tag {{ t.name }}" title="Remover">×</button></span>
+            </form>
+            {% else %}<span class="muted">Nenhuma tag.</span>{% endfor %}
+          </div>
+          <form method="post" action="/admin/usuarios/{{ u.id }}/crm/tags" class="inline-form" style="margin-top:10px">
+            {{ csrf() }}
+            <label for="tag_id" class="sr-only">Tag existente</label>
+            <select id="tag_id" name="tag_id">
+              <option value="">Escolher tag…</option>
+              {% for t in all_tags %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+            </select>
+            <label for="new_tag" class="sr-only">Nova tag</label>
+            <input id="new_tag" name="new_tag" type="text" maxlength="40" placeholder="ou criar nova tag">
+            <button type="submit" class="ghost">Adicionar</button>
+          </form>
+        </div>
+
+        <div>
+          <p class="section-label" style="margin-bottom:8px">Notas internas</p>
+          <div class="admin-note" style="margin-bottom:10px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z"></path><path d="M12 10v4.5M12 17.6h.01"></path></svg>
+            <span>Só informações da relação comercial (ex.: "pediu plano empresarial"). <strong>Não copie conteúdo de conversas ou mensagens do cliente</strong> para cá.</span>
+          </div>
+          <form method="post" action="/admin/usuarios/{{ u.id }}/crm/notas">
+            {{ csrf() }}
+            <label for="note_body" class="sr-only">Nova nota</label>
+            <textarea id="note_body" name="body" maxlength="2000" placeholder="Nova nota…" required></textarea>
+            <div class="form-actions" style="margin-top:8px"><button type="submit">Adicionar nota</button></div>
+          </form>
+          <ul class="note-list" style="margin-top:12px">
+            {% for n in u.notes %}
+            <li>
+              <div class="note-body">{{ n.body }}</div>
+              <div class="note-meta">
+                Criada por {{ n.created_by }} em {{ dt(n.created_at) }}{% if n.updated_at %} · alterada por {{ n.updated_by or '—' }} em {{ dt(n.updated_at) }}{% endif %}
+              </div>
+              <details style="margin-top:6px">
+                <summary class="muted" style="cursor:pointer;font-size:12px">Editar / excluir</summary>
+                <form method="post" action="/admin/usuarios/{{ u.id }}/crm/notas/{{ n.id }}" style="margin-top:8px">
+                  {{ csrf() }}
+                  <textarea name="body" maxlength="2000" required>{{ n.body }}</textarea>
+                  <div class="form-actions" style="margin-top:8px"><button type="submit" class="ghost">Salvar alteração</button></div>
+                </form>
+                <form method="post" action="/admin/usuarios/{{ u.id }}/crm/notas/{{ n.id }}/excluir" onsubmit="return confirm('Excluir esta nota?')">
+                  {{ csrf() }}
+                  <button type="submit" class="danger" style="margin-top:6px">Excluir nota</button>
+                </form>
+              </details>
+            </li>
+            {% else %}<li class="muted" style="background:none;border:0;padding:0">Nenhuma nota.</li>{% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">{{ icon('clock', 16) }}<h2>Logins recentes</h2></div>
+      <div class="card-bd">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Horário</th><th>Resultado</th></tr></thead>
+          <tbody>
+          {% for l in u.recent_logins %}
+            <tr><td>{{ dt(l.at) }}</td><td>{% if l.result == 'success' %}<span class="pill sent">sucesso</span>{% else %}<span class="pill failed">falhou</span>{% endif %}</td></tr>
+          {% else %}<tr><td colspan="2" class="muted">Nenhum login registrado.</td></tr>{% endfor %}
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">{{ icon('edit', 16) }}<h2>Ações administrativas</h2></div>
+      <div class="card-bd">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Quando</th><th>Admin</th><th>Ação</th></tr></thead>
+          <tbody>
+          {% for a in u.audit %}
+            <tr><td>{{ dt(a.at) }}</td><td>{{ a.admin_name or '—' }}</td><td>{{ a.action_label }}{% if a.detail and a.detail.to %} <span class="muted">→ {{ a.detail.to }}</span>{% elif a.detail and a.detail.tag %} <span class="muted">{{ a.detail.tag }}</span>{% endif %}</td></tr>
+          {% else %}<tr><td colspan="3" class="muted">Nenhuma ação registrada.</td></tr>{% endfor %}
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{{ privacy_note() }}
+
+{% endblock %}

@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import delete as sa_delete
 from sqlmodel import Session, col, select
 
-from . import crypto, timing, whatsapp_service
+from . import crypto, privacy, timing, whatsapp_service
 from .calendar_providers import get_provider
 from .calendar_providers.base import CalendarProviderError, RemoteCalendar
 from .calendar_sync import (
@@ -256,9 +256,36 @@ def disconnect(db: Session, connection_id: str, user_id: str) -> bool:
                 cancel_schedules(db, [link.schedule_id for link in links])
 
     connection.status = CalendarConnectionStatus.disconnected
+    # Tokens do Google não servem mais pra nada: saem do banco já (não só a flag).
+    connection.access_token_enc = ""
+    connection.refresh_token_enc = ""
     connection.updated_at = utcnow()
     db.add(connection)
     db.commit()
+    return True
+
+
+async def disconnect_and_revoke(db: Session, connection_id: str, user_id: str) -> bool:
+    """Desconecta (apaga os tokens locais) e pede ao Google para revogar o
+    acesso — best-effort: se o Google não responder, os tokens já não existem
+    mais aqui de qualquer forma."""
+    connection = _owned_connection(db, connection_id, user_id)
+    if connection is None:
+        return False
+    refresh_token = None
+    try:
+        refresh_token = crypto.decrypt(connection.refresh_token_enc) if connection.refresh_token_enc else None
+    except (crypto.DecryptionFailed, crypto.CryptoNotConfigured):
+        refresh_token = None
+    provider_key = connection.provider
+    if not disconnect(db, connection_id, user_id):
+        return False
+    revoke = getattr(get_provider(provider_key), "revoke", None)
+    if refresh_token and revoke is not None:
+        try:
+            await revoke(refresh_token)
+        except CalendarProviderError:
+            logger.warning("revogação do token no provedor falhou (conexão %s) — tokens locais já apagados", connection_id)
     return True
 
 
@@ -300,7 +327,7 @@ def _find_duplicate_automation(
     amount: int,
     custom_time_local: str | None,
     message_texts: list[str],
-    chat_ids: set[str],
+    chat_hashes: set[str],
     now: datetime,
 ) -> Automation | None:
     """Evita duplicar: duplo clique, duplo submit, ou salvar a mesma automação
@@ -328,12 +355,12 @@ def _find_duplicate_automation(
             .where(col(AutomationMessage.automation_id) == automation.id)
             .order_by(col(AutomationMessage.position))
         ).all()
-        if [m.text for m in messages] != message_texts:
+        if [privacy.automation_message(m, safe=True) for m in messages] != message_texts:
             continue
         links = db.exec(
             select(AutomationSchedule).where(col(AutomationSchedule.automation_id) == automation.id)
         ).all()
-        if {link.recipient_chat_id for link in links} != chat_ids:
+        if {link.recipient_phone_hash for link in links} != chat_hashes:
             continue
         schedule_ids = [link.schedule_id for link in links]
         schedules = (
@@ -421,7 +448,7 @@ def create_event_automation(
         amount=offset_amount,
         custom_time_local=custom_time_local,
         message_texts=message_texts,
-        chat_ids=set(chat_ids),
+        chat_hashes={privacy.recipient_hash(user_id, chat_id) for chat_id in chat_ids},
         now=now,
     )
     if duplicate is not None:
@@ -441,7 +468,8 @@ def create_event_automation(
 
     message_rows: list[AutomationMessage] = []
     for position, text in enumerate(message_texts):
-        message = AutomationMessage(automation_id=automation.id, position=position, text=text)
+        message = AutomationMessage(automation_id=automation.id, position=position)
+        privacy.seal_automation_message(message, text)
         db.add(message)
         message_rows.append(message)
     db.commit()
@@ -475,7 +503,7 @@ def create_event_automation(
                     automation_id=automation.id,
                     message_id=message.id,
                     schedule_id=schedule.id,
-                    recipient_chat_id=chat_id,
+                    recipient_phone_hash=privacy.recipient_hash(user_id, chat_id),
                 )
             )
         db.commit()
@@ -622,16 +650,20 @@ def event_automations(db: Session, event_id: str, user_id: str) -> list[dict]:
             if group_ids
             else {}
         )
+        # Destinatários decifrados em memória, só para o dono; depois que a
+        # automação termina eles já foram expurgados (retenção) e somem daqui.
+        group_recipients = {gid: privacy.group_recipient(g, safe=True) for gid, g in groups.items()}
         recipients: dict[str, str] = {}
         recipient_labels: dict[str, str] = {}
         for link in links:
             sch = schedules.get(link.schedule_id)
-            if sch is not None:
-                recipients.setdefault(link.recipient_chat_id, sch.recipient_input)
-                group = groups.get(sch.group_id or "")
-                recipient_labels.setdefault(
-                    link.recipient_chat_id, (group.recipient_name if group and group.recipient_name else sch.recipient_input)
-                )
+            if sch is None:
+                continue
+            info = group_recipients.get(sch.group_id or "")
+            key = link.recipient_phone_hash or link.schedule_id
+            if info is not None:
+                recipients.setdefault(key, info.input)
+                recipient_labels.setdefault(key, info.display)
         any_schedule = next(iter(schedules.values()), None)
         rule = timing.OffsetRule(
             str(automation.offset_direction), automation.offset_amount, str(automation.offset_unit),
@@ -639,9 +671,13 @@ def event_automations(db: Session, event_id: str, user_id: str) -> list[dict]:
         )
         message_rows = [
             {
-                "message": message,
+                "message": {
+                    "id": message.id,
+                    "position": message.position,
+                    "text": privacy.automation_message(message, safe=True),
+                },
                 "per_recipient": [
-                    {"recipient": schedules[link.schedule_id].recipient_input, "schedule": schedules[link.schedule_id]}
+                    {"recipient": recipient_labels.get(link.recipient_phone_hash or link.schedule_id, ""), "schedule": schedules[link.schedule_id]}
                     for link in links
                     if link.message_id == message.id and link.schedule_id in schedules
                 ],
@@ -704,7 +740,12 @@ def migrate_legacy_automations(db: Session) -> None:
         )
         db.add(automation)
         db.flush()
-        message = AutomationMessage(automation_id=automation.id, position=0, text=schedule.text)
+        message = AutomationMessage(automation_id=automation.id, position=0)
+        text = privacy.schedule_message(schedule, safe=True)
+        if text is not None:
+            privacy.seal_automation_message(message, text)
+        else:
+            message.content_purged_at = utcnow()
         db.add(message)
         db.flush()
         db.add(
@@ -712,7 +753,7 @@ def migrate_legacy_automations(db: Session) -> None:
                 automation_id=automation.id,
                 message_id=message.id,
                 schedule_id=schedule.id,
-                recipient_chat_id=schedule.chat_id,
+                recipient_phone_hash=schedule.recipient_phone_hash,
             )
         )
         migrated += 1

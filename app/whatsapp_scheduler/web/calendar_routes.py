@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, col, select
 
-from .. import app_settings, auth, calendar_service, timing, whatsapp_service
+from .. import app_settings, auth, calendar_service, plans, privacy, timing, whatsapp_service
 from ..db import get_session
 from ..models import (
     Automation,
@@ -256,13 +256,17 @@ def _prefill_from_automation(db: Session, automation: Automation) -> tuple[dict,
         if group_ids
         else {}
     )
+    # Decifrado em memória para o próprio dono editar (só automações ainda ativas
+    # têm conteúdo — as encerradas já foram expurgadas e não mostram "Editar").
     recipients: dict[str, dict] = {}
     for link in links:
         sch = schedules.get(link.schedule_id)
-        if sch is not None and link.recipient_chat_id not in recipients:
-            group = groups.get(sch.group_id or "")
-            label = (group.recipient_name if group and group.recipient_name else "") or ""
-            recipients[link.recipient_chat_id] = {"value": link.recipient_chat_id, "label": label}
+        if sch is None:
+            continue
+        group = groups.get(sch.group_id or "")
+        info = privacy.group_recipient(group, safe=True) if group is not None else None
+        if info is not None and info.chat_id not in recipients:
+            recipients[info.chat_id] = {"value": info.chat_id, "label": info.name or ""}
     messages = db.exec(
         select(AutomationMessage)
         .where(col(AutomationMessage.automation_id) == automation.id)
@@ -273,7 +277,7 @@ def _prefill_from_automation(db: Session, automation: Automation) -> tuple[dict,
     )
     prefill = {
         "recipients": list(recipients.values()),
-        "messages": [m.text for m in messages],
+        "messages": [privacy.automation_message(m, safe=True) or "" for m in messages],
         "rule": {
             "direction": str(automation.offset_direction),
             "interval_value": interval_value,
@@ -816,6 +820,10 @@ async def ui_automation_create(
             raise ValidationError("Escolha por qual WhatsApp esta automação deve enviar.")
         await whatsapp_service.require_session_ready(_waha(request), wa_session)
         rule = timing.build_offset_rule(offset_direction, offset_interval, custom_interval, custom_time)
+        plans.check_limit(
+            db, current_user, "pending_messages",
+            adding=max(1, len(picked)) * max(1, len([m for m in messages if (m or "").strip()])) * (1 + len(apply_to_event_ids)),
+        )
         # Recalcula quem é "igual" a este evento no servidor — nunca confia
         # nos ids que o formulário mandou (poderiam ter sido adulterados pra
         # apontar pro evento de outro usuário).

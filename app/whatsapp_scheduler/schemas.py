@@ -1,4 +1,6 @@
-"""DTOs da API REST."""
+"""DTOs da API REST — sempre campos explícitos, nunca o objeto do ORM inteiro
+(que carrega ciphertext, hashes etc.). Conteúdo e destinatário só aparecem
+decifrados para o PRÓPRIO dono, e só enquanto existem (retenção mínima)."""
 
 from __future__ import annotations
 
@@ -6,6 +8,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from . import privacy
 from .models import Dispatch, Schedule
 
 
@@ -26,7 +29,7 @@ class DispatchRead(BaseModel):
     status: str
     attempts: int
     last_error: str | None
-    waha_message_id: str | None
+    failure_code: str | None = None
     sent_at_utc: datetime | None
 
     @classmethod
@@ -38,7 +41,7 @@ class DispatchRead(BaseModel):
             status=str(d.status),
             attempts=d.attempts,
             last_error=d.last_error,
-            waha_message_id=d.waha_message_id,
+            failure_code=d.failure_code,
             sent_at_utc=d.sent_at_utc,
         )
 
@@ -46,9 +49,10 @@ class DispatchRead(BaseModel):
 class ScheduleRead(BaseModel):
     id: str
     session: str
-    recipient_input: str
-    chat_id: str
-    text: str
+    # None depois que a mensagem termina: conteúdo e destinatário são expurgados.
+    chat_id: str | None
+    text: str | None
+    content_removed: bool = False
     timezone: str
     first_run_local: datetime
     recurrence: str | None
@@ -65,12 +69,13 @@ class ScheduleRead(BaseModel):
         dispatches = dispatches or []
         pending = [d for d in dispatches if str(d.status) in ("pending", "processing")]
         pending.sort(key=lambda d: d.scheduled_at_utc)
+        text = privacy.schedule_message(s, safe=True)
         return cls(
             id=s.id,
             session=s.session,
-            recipient_input=s.recipient_input,
-            chat_id=s.chat_id,
-            text=s.text,
+            chat_id=privacy.schedule_recipient(s, safe=True),
+            text=text,
+            content_removed=text is None,
             timezone=s.timezone,
             first_run_local=s.first_run_local,
             recurrence=s.recurrence,

@@ -80,7 +80,7 @@
             {% for row in item.messages %}
             <li>
               <span class="msg-num">{{ loop.index }}</span>
-              <span class="msg-text">{{ row.message.text }}</span>
+              <span class="msg-text">{% if row.message.text is not none %}{{ row.message.text }}{% else %}<span class="content-removed">Conteúdo apagado (automação encerrada)</span>{% endif %}</span>
             </li>
             {% endfor %}
           </ol>

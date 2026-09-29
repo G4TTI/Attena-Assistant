@@ -21,7 +21,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
-from . import clock, timing
+from . import clock, failures, privacy, retention, timing
 from .clock import utcnow
 from .config import settings
 from .errors import ValidationError
@@ -130,7 +130,7 @@ def _recent_identical_group(
     candidates = db.exec(
         select(ScheduleGroup)
         .where(col(ScheduleGroup.user_id) == user_id)
-        .where(col(ScheduleGroup.chat_id) == chat_id)
+        .where(col(ScheduleGroup.recipient_phone_hash) == privacy.recipient_hash(user_id, chat_id))
         .where(col(ScheduleGroup.session) == session)
         .where(col(ScheduleGroup.start_local) == start_local)
         .where(col(ScheduleGroup.source) == source)
@@ -138,7 +138,8 @@ def _recent_identical_group(
     ).all()
     for group in candidates:
         schedules = group_schedules(db, group.id)
-        if schedules and all(s.enabled for s in schedules) and [s.text for s in schedules] == texts:
+        # Compara o texto decifrado em memória (a janela é de segundos, e só do próprio usuário).
+        if schedules and all(s.enabled for s in schedules) and [privacy.schedule_message(s, safe=True) for s in schedules] == texts:
             return group, schedules
     return None
 
@@ -200,12 +201,13 @@ def create_sequence(
         user_id=user_id,
         source=source,
         session=session,
-        recipient_input=recipient.strip(),
-        recipient_name=(recipient_name or "").strip()[:120] or None,
-        chat_id=chat_id,
         timezone=tz_name,
         start_local=start_local,
         message_gap_seconds=gap_seconds,
+    )
+    privacy.seal_group_recipient(
+        group, chat_id=chat_id, recipient_input=recipient.strip(),
+        recipient_name=(recipient_name or "").strip()[:120] or None,
     )
     db.add(group)
     db.flush()
@@ -217,9 +219,6 @@ def create_sequence(
             group_id=group.id,
             position=position,
             session=session,
-            recipient_input=group.recipient_input,
-            chat_id=chat_id,
-            text=text,
             timezone=tz_name,
             # A 1ª usa o horário digitado tal qual (sem ida-e-volta por UTC,
             # que mudaria um horário inexistente numa virada de horário de verão).
@@ -227,6 +226,8 @@ def create_sequence(
             recurrence=cron,
             max_attempts=max_attempts,
         )
+        privacy.seal_schedule_message(schedule, text)
+        privacy.seal_schedule_recipient(schedule, chat_id)
         db.add(schedule)
         schedules.append(schedule)
     db.flush()
@@ -295,6 +296,8 @@ def group_schedules(db: Session, group_id: str) -> list[Schedule]:
 # Cancelamento
 # --------------------------------------------------------------------------- #
 def _apply_cancel(db: Session, schedule: Schedule, now: datetime) -> None:
+    """Cancela a mensagem. Quem chama expurga o conteúdo com
+    `retention.finalize_schedules` antes do commit (cancelada = não precisa mais)."""
     schedule.enabled = False
     schedule.updated_at = now
     db.add(schedule)
@@ -306,6 +309,7 @@ def _apply_cancel(db: Session, schedule: Schedule, now: datetime) -> None:
     for dispatch in open_dispatches:
         dispatch.status = DispatchStatus.canceled
         dispatch.last_error = "Agendamento cancelado."
+        dispatch.failure_code = failures.CANCELED
         dispatch.updated_at = now
         db.add(dispatch)
 
@@ -338,8 +342,10 @@ def cancel_schedule(db: Session, schedule_id: str, *, user_id: str | None = None
         return False
     if user_id is not None and schedule.user_id != user_id:
         return False
+    now = utcnow()
     _rewire_dependents(db, schedule.id)
-    _apply_cancel(db, schedule, utcnow())
+    _apply_cancel(db, schedule, now)
+    retention.finalize_schedules(db, [schedule], now)
     db.commit()
     return True
 
@@ -351,16 +357,18 @@ def cancel_schedules(db: Session, schedule_ids: list[str], *, user_id: str | Non
     if not schedule_ids:
         return 0
     now = utcnow()
-    canceled = 0
-    for schedule in db.exec(select(Schedule).where(col(Schedule.id).in_(schedule_ids))).all():
-        if not schedule.enabled:
-            continue
-        if user_id is not None and schedule.user_id != user_id:
-            continue
-        _apply_cancel(db, schedule, now)
-        canceled += 1
+    canceled: list[Schedule] = []
+    for chunk in _chunks(list(dict.fromkeys(schedule_ids))):
+        for schedule in db.exec(select(Schedule).where(col(Schedule.id).in_(chunk))).all():
+            if not schedule.enabled:
+                continue
+            if user_id is not None and schedule.user_id != user_id:
+                continue
+            _apply_cancel(db, schedule, now)
+            canceled.append(schedule)
+    retention.finalize_schedules(db, canceled, now)
     db.commit()
-    return canceled
+    return len(canceled)
 
 
 def cancel_group(db: Session, group_id: str, *, user_id: str) -> bool:
@@ -385,16 +393,17 @@ def cancel_messages(db: Session, schedule_ids: list[str], *, user_id: str) -> in
     if not ids:
         return 0
     now = utcnow()
-    canceled = 0
+    canceled: list[Schedule] = []
     for chunk in _chunks(ids):
         for schedule in db.exec(select(Schedule).where(col(Schedule.id).in_(chunk))).all():
             if not schedule.enabled or schedule.user_id != user_id:
                 continue
             _rewire_dependents(db, schedule.id)
             _apply_cancel(db, schedule, now)
-            canceled += 1
+            canceled.append(schedule)
+    retention.finalize_schedules(db, canceled, now)
     db.commit()
-    return canceled
+    return len(canceled)
 
 
 def cancel_groups(db: Session, group_ids: list[str], *, user_id: str) -> int:
@@ -539,6 +548,10 @@ def update_sequence(
     now = utcnow()
     times_utc = timing.sequence_times_utc(start_utc, len(texts), group.message_gap_seconds)
     max_attempts = old[0].max_attempts
+    recipient = privacy.group_recipient(group)
+    if recipient is None:
+        db.rollback()
+        raise ValidationError("O destinatário deste agendamento não está mais disponível. Crie um novo agendamento.")
 
     kept = old[: len(texts)]
     _delete_schedule_rows(db, [s.id for s in old[len(texts):]])
@@ -550,16 +563,15 @@ def update_sequence(
         schedule = kept[position] if position < len(kept) else Schedule(
             user_id=user_id,
             group_id=group.id,
-            recipient_input=group.recipient_input,
-            chat_id=group.chat_id,
             max_attempts=max_attempts,
-            text="",
             timezone=group.timezone,
             first_run_local=start_local,
         )
         schedule.position = position
         schedule.session = session
-        schedule.text = text
+        privacy.seal_schedule_message(schedule, text)
+        if schedule.recipient_phone_encrypted is None:
+            privacy.seal_schedule_recipient(schedule, recipient.chat_id)
         schedule.first_run_local = start_local if position == 0 else timing.to_local(at_utc, group.timezone)
         schedule.recurrence = cron
         schedule.enabled = True
@@ -594,6 +606,9 @@ def run_now(db: Session, schedule_id: str, *, user_id: str | None = None) -> Dis
     if schedule is None:
         return None
     if user_id is not None and schedule.user_id != user_id:
+        return None
+    if schedule.message_ciphertext is None or schedule.recipient_phone_encrypted is None:
+        # Mensagem já encerrada: o conteúdo foi expurgado (retenção) e não há o que reenviar.
         return None
 
     pending = db.exec(
@@ -663,7 +678,7 @@ def backfill_groups(db: Session, user_id: str | None = None) -> int:
     for schedule in orphans:
         link = links.get(schedule.id)
         if link is not None:
-            key: tuple = ("automation", link.automation_id, link.recipient_chat_id)
+            key: tuple = ("automation", link.automation_id, link.recipient_phone_hash or schedule.id)
             position = message_positions.get(link.message_id, 0)
             source, gap = ScheduleSource.calendar, gaps.get(link.automation_id, DEFAULT_MESSAGE_GAP_SECONDS)
         else:
@@ -675,13 +690,17 @@ def backfill_groups(db: Session, user_id: str | None = None) -> int:
                 user_id=schedule.user_id,  # type: ignore[arg-type]  # filtrado por is_not(None) acima
                 source=source,
                 session=schedule.session,
-                recipient_input=schedule.recipient_input,
-                chat_id=schedule.chat_id,
                 timezone=schedule.timezone,
                 start_local=schedule.first_run_local,
                 message_gap_seconds=gap,
                 created_at=schedule.created_at,
+                recipient_phone_hash=schedule.recipient_phone_hash,
             )
+            chat_id = privacy.schedule_recipient(schedule, safe=True)
+            if chat_id:
+                privacy.seal_group_recipient(group, chat_id=chat_id, recipient_input=chat_id, recipient_name=None)
+            else:
+                group.content_purged_at = schedule.content_purged_at or utcnow()
             groups[key] = group
             db.add(group)
             lowest_position[group.id] = position

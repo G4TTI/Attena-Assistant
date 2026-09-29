@@ -1,0 +1,137 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import dt, pager, sub_pill with context %}
+{% macro sort_th(key, label, cls='') -%}
+{% set active = filters.sort == key %}
+{% set next_dir = 'asc' if active and filters.direction == 'desc' else 'desc' %}
+<th class="{{ cls }}"><a class="sort{{ ' on' if active }}" href="/admin/usuarios?{{ filters.as_params(sort=key, dir=next_dir, page=None) | qs }}">{{ label }}{% if active %} {{ '↓' if filters.direction == 'desc' else '↑' }}{% endif %}</a></th>
+{%- endmacro %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Usuários</h1>
+    <p class="sub">Contas do Attena: cadastro, atividade, plano e conexões.</p>
+  </div>
+</div>
+
+<form class="card card-pad filters-bar" method="get" action="/admin/usuarios" role="search">
+  <div class="field grow">
+    <label for="f_q">Busca</label>
+    <input id="f_q" name="q" type="search" value="{{ filters.q }}" placeholder="Nome ou e-mail">
+  </div>
+  <div class="field">
+    <label for="f_plan">Plano</label>
+    <select id="f_plan" name="plan">
+      <option value="">Todos</option>
+      {% for p in plans_list %}<option value="{{ p.code }}" {{ 'selected' if filters.plan == p.code }}>{{ p.name }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f_status">Status da conta</label>
+    <select id="f_status" name="status">
+      <option value="">Todos</option>
+      <option value="active" {{ 'selected' if filters.status == 'active' }}>Ativas</option>
+      <option value="suspended" {{ 'selected' if filters.status == 'suspended' }}>Suspensas</option>
+      <option value="admin" {{ 'selected' if filters.status == 'admin' }}>Administradores</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="f_signup">Cadastro</label>
+    <select id="f_signup" name="signup">
+      <option value="">Qualquer data</option>
+      <option value="7d" {{ 'selected' if filters.signup == '7d' }}>Últimos 7 dias</option>
+      <option value="30d" {{ 'selected' if filters.signup == '30d' }}>Últimos 30 dias</option>
+      <option value="90d" {{ 'selected' if filters.signup == '90d' }}>Últimos 90 dias</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="f_activity">Atividade</label>
+    <select id="f_activity" name="activity">
+      <option value="">Qualquer</option>
+      <option value="online" {{ 'selected' if filters.activity == 'online' }}>Online (15 min)</option>
+      <option value="24h" {{ 'selected' if filters.activity == '24h' }}>Ativos 24h</option>
+      <option value="7d" {{ 'selected' if filters.activity == '7d' }}>Ativos 7 dias</option>
+      <option value="30d" {{ 'selected' if filters.activity == '30d' }}>Ativos 30 dias</option>
+      <option value="inactive" {{ 'selected' if filters.activity == 'inactive' }}>Inativos há +30 dias</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="f_sub">Assinatura</label>
+    <select id="f_sub" name="subscription">
+      <option value="">Todas</option>
+      <option value="active" {{ 'selected' if filters.subscription == 'active' }}>Ativa</option>
+      <option value="trialing" {{ 'selected' if filters.subscription == 'trialing' }}>Em teste</option>
+      <option value="past_due" {{ 'selected' if filters.subscription == 'past_due' }}>Em atraso</option>
+      <option value="incomplete" {{ 'selected' if filters.subscription == 'incomplete' }}>Aguardando pagamento</option>
+      <option value="none" {{ 'selected' if filters.subscription == 'none' }}>Sem assinatura</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="f_crm">CRM</label>
+    <select id="f_crm" name="crm">
+      <option value="">Todos</option>
+      {% for key, label in crm_statuses.items() %}<option value="{{ key }}" {{ 'selected' if filters.crm == key }}>{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f_tag">Tag</label>
+    <select id="f_tag" name="tag">
+      <option value="">Todas</option>
+      {% for t in tags %}<option value="{{ t.id }}" {{ 'selected' if filters.tag == t.id }}>{{ t.name }}</option>{% endfor %}
+    </select>
+  </div>
+  <input type="hidden" name="sort" value="{{ filters.sort }}">
+  <input type="hidden" name="dir" value="{{ filters.direction }}">
+  <div class="filters-actions">
+    <button type="submit">Filtrar</button>
+    <a class="ghost-link" href="/admin/usuarios">Limpar</a>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          {{ sort_th('name', 'Nome') }}
+          {{ sort_th('email', 'E-mail') }}
+          <th>Telefone</th>
+          {{ sort_th('created', 'Cadastro') }}
+          {{ sort_th('login', 'Último login') }}
+          {{ sort_th('activity', 'Última atividade') }}
+          <th>Plano</th>
+          <th>Assinatura</th>
+          <th class="num">WhatsApps</th>
+          {{ sort_th('pending', 'Agendadas', 'num') }}
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in rows %}
+        <tr>
+          <td>
+            <a href="/admin/usuarios/{{ u.id }}">{{ u.name }}</a>
+            <span class="cell-sub">
+              {% if u.online %}<span class="dot ok" style="display:inline-block;vertical-align:1px;margin-right:4px"></span>online · {% endif %}
+              {{ crm_statuses.get(u.crm_status, u.crm_status) }}{% if not u.is_active %} · <span style="color:var(--err)">suspensa</span>{% endif %}{% if u.role == 'admin' %} · admin{% endif %}
+            </span>
+          </td>
+          <td>{{ u.email }}</td>
+          <td>{{ u.phone or '—' }}</td>
+          <td>{{ dt(u.created_at) }}</td>
+          <td>{{ dt(u.last_login_at) }}</td>
+          <td>{{ dt(u.last_activity_at) }}</td>
+          <td>{{ u.plan_name }}</td>
+          <td>{{ sub_pill(u.subscription_status) }}</td>
+          <td class="num">{{ u.whatsapp_count }}</td>
+          <td class="num">{{ u.pending_count }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10"><div class="empty-state"><strong>Nenhum usuário encontrado</strong><p>Ajuste os filtros.</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-ft">{{ pager(filters.page, pages, total, '/admin/usuarios', filters.as_params(page=None)) }}</div>
+</div>
+
+{% endblock %}

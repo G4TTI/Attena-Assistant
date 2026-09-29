@@ -1,0 +1,69 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import csrf with context %}
+{% from "_components.html" import icon %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Planos</h1>
+    <p class="sub">Catálogo configurável: preço, período, recursos e limites. Receita = só assinaturas pagas.</p>
+  </div>
+</div>
+
+{% if error %}<div class="alert err" role="alert">{{ error }}</div>{% endif %}
+{% if ok %}<div class="alert ok" role="status">{{ ok }}</div>{% endif %}
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Plano</th><th class="num">Preço</th><th class="num">Assinantes ativos</th><th class="num">Receita recorrente</th><th>Limites</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        {% set p = r.plan %}
+        <tr>
+          <td><strong>{{ p.name }}</strong><span class="cell-sub"><code>{{ p.code }}</code>{% if p.is_default %} · padrão{% endif %}</span></td>
+          <td class="num">{{ p.price_cents | brl(p.currency) }}<span class="cell-sub">/{{ periods.get(p.billing_period | string, 'mês') }}</span></td>
+          <td class="num">{{ r.active }}{% if r.manual %}<span class="cell-sub">+{{ r.manual }} cortesia</span>{% endif %}</td>
+          <td class="num">{{ r.mrr_cents | brl }}</td>
+          <td>{% for key, label in limit_labels.items() %}<span class="cell-sub">{{ label }}: {{ r.limits.get(key) if r.limits.get(key) is not none else 'ilimitado' }}</span>{% endfor %}</td>
+          <td>{% if p.is_active %}<span class="pill sent">ativo</span>{% else %}<span class="pill canceled">inativo</span>{% endif %}{% if not p.is_public %} <span class="pill canceled">oculto</span>{% endif %}</td>
+          <td><a class="ghost-link" href="/admin/planos?edit={{ p.id }}">{{ icon('edit', 13) }} Editar</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if editing %}
+{% set p = editing.plan %}
+<div class="card" id="editar">
+  <div class="card-hd">{{ icon('edit', 16) }}<h2>Editar plano {{ p.name }}</h2></div>
+  <form method="post" action="/admin/planos/{{ p.id }}" class="card-bd">
+    {{ csrf() }}
+    <div class="form-grid">
+      <div class="field"><label for="pl_name">Nome</label><input id="pl_name" name="name" value="{{ p.name }}" maxlength="60" required></div>
+      <div class="field"><label for="pl_price">Preço (R$)</label><input id="pl_price" name="price" inputmode="decimal" value="{{ '%.2f' | format(p.price_cents / 100) | replace('.', ',') }}" required></div>
+      <div class="field"><label for="pl_period">Período</label>
+        <select id="pl_period" name="billing_period">{% for key, label in periods.items() %}<option value="{{ key }}" {{ 'selected' if (p.billing_period | string) == key }}>por {{ label }}</option>{% endfor %}</select>
+      </div>
+      <div class="field"><label for="pl_desc">Descrição</label><input id="pl_desc" name="description" value="{{ p.description }}" maxlength="200"></div>
+      <div class="field full"><label for="pl_features">Recursos <b>(um por linha)</b></label><textarea id="pl_features" name="features" rows="4">{{ editing.features | join('\n') }}</textarea></div>
+      {% for key, label in limit_labels.items() %}
+      <div class="field"><label for="pl_{{ key }}">{{ label }} <b>(vazio = ilimitado)</b></label><input id="pl_{{ key }}" name="limit_{{ key }}" inputmode="numeric" value="{{ editing.limits.get(key) if editing.limits.get(key) is not none else '' }}"></div>
+      {% endfor %}
+      <div class="field full" style="flex-direction:row;gap:18px;flex-wrap:wrap">
+        <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="is_active" style="width:auto" {{ 'checked' if p.is_active }}> Pode ser contratado</label>
+        <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="is_public" style="width:auto" {{ 'checked' if p.is_public }}> Aparece na página Planos</label>
+      </div>
+    </div>
+    <p class="hint" style="margin-top:12px">Mudar o preço não altera assinaturas já existentes. Limites só bloqueiam uso com ENFORCE_PLAN_LIMITS=true.</p>
+    <div class="form-actions" style="margin-top:14px">
+      <a class="ghost-link" href="/admin/planos">Cancelar</a>
+      <button type="submit">Salvar plano</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{% endblock %}

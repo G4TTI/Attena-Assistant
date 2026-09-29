@@ -5,14 +5,14 @@
    - canceladas não viram bolha: ficam no painel (enquanto houver cancelamento recente, um link discreto);
    - falhas e enviadas que ainda não estão no histórico continuam como bolhas (são histórico real).
    Vêm do banco, então aparecem na hora, sem esperar o histórico do WhatsApp. #}
-{% from "_components.html" import icon, status_icon %}
+{% from "_components.html" import icon, status_icon, message_text %}
 <span id="chat-sched-state" data-last-sent="{{ conv.last_sent_ts }}" hidden></span>
 {% set items = conv.inline_items %}
 {% if items %}
 <div class="sched-divider">Mensagens agendadas</div>
 {% for m in items %}
 <div class="bubble me scheduled {{ m.status }}" data-status="{{ m.status }}">
-  <div class="text">{{ m.text }}</div>
+  <div class="text">{{ message_text(m.text, m.status) }}</div>
   <div class="sched-meta">
     <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
     <span class="when" title="{{ m.when_local.strftime('%d/%m/%Y %H:%M:%S') }}">{{ m.when_local.strftime('%d/%m/%Y · %H:%M') }}</span>

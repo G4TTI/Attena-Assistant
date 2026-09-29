@@ -24,6 +24,7 @@ from .base import (
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API_BASE = "https://www.googleapis.com/calendar/v3"
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 # calendar (leitura+escrita) é necessário desde o incremento 3 (criar/editar/
@@ -95,6 +96,20 @@ def _to_remote_event(item: dict, calendar_tz: str) -> RemoteEvent:
     )
 
 
+def _error_summary(resp: httpx.Response) -> str:
+    """Só o código/mensagem de erro do Google (nunca tokens do corpo)."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return resp.reason_phrase or "erro"
+    error = data.get("error") if isinstance(data, dict) else None
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("status") or "erro")[:200]
+    if isinstance(error, str):
+        return (error + (f": {data.get('error_description')}" if data.get("error_description") else ""))[:200]
+    return "erro"
+
+
 class GoogleCalendarClient:
     """Chamadas HTTP cruas: OAuth2 (accounts/oauth2.googleapis.com) + Calendar v3."""
 
@@ -112,7 +127,11 @@ class GoogleCalendarClient:
         if resp.status_code == 410:
             raise GoogleSyncTokenExpired("Google respondeu 410: syncToken expirado.")
         if resp.status_code >= 400:
-            raise GoogleCalendarError(f"Google respondeu {resp.status_code} em {method} {url}: {resp.text[:500]}")
+            # Sem query string (syncToken/pageToken) e sem o corpo inteiro: esta
+            # mensagem vai para `CalendarConnection.last_sync_error` e para o log.
+            raise GoogleCalendarError(
+                f"Google respondeu {resp.status_code} em {method} {url.split('?')[0]}: {_error_summary(resp)}"
+            )
         return resp
 
     async def exchange_code(self, *, client_id: str, client_secret: str, redirect_uri: str, code: str) -> dict:
@@ -141,6 +160,9 @@ class GoogleCalendarClient:
             },
         )
         return resp.json()
+
+    async def revoke(self, token: str) -> None:
+        await self._request("POST", REVOKE_URL, data={"token": token})
 
     async def get_userinfo(self, access_token: str) -> dict:
         resp = await self._request(
@@ -224,7 +246,7 @@ class GoogleCalendarClient:
         # 404/410/text-status "cancelled" (já removido do lado do Google) não é
         # erro pro chamador — o objetivo (evento não existir mais) já está atingido.
         if resp.status_code >= 400 and resp.status_code not in (404, 410):
-            raise GoogleCalendarError(f"Google respondeu {resp.status_code} ao excluir evento: {resp.text[:500]}")
+            raise GoogleCalendarError(f"Google respondeu {resp.status_code} ao excluir evento: {_error_summary(resp)}")
 
 
 class GoogleCalendarProvider(CalendarProvider):
@@ -258,7 +280,8 @@ class GoogleCalendarProvider(CalendarProvider):
     def _tokens_from_response(self, data: dict, *, fallback_refresh_token: str | None) -> OAuthTokens:
         access_token = data.get("access_token")
         if not access_token:
-            raise GoogleCalendarError(f"Resposta do Google sem access_token: {data}")
+            # Nunca o `data` inteiro na mensagem: pode trazer refresh_token/id_token.
+            raise GoogleCalendarError(f"Resposta do Google sem access_token (erro: {data.get('error') or 'desconhecido'}).")
         # Num refresh normal o Google não reenvia refresh_token — nunca sobrescrever com nulo.
         refresh_token = data.get("refresh_token") or fallback_refresh_token
         if not refresh_token:
@@ -293,6 +316,10 @@ class GoogleCalendarProvider(CalendarProvider):
             refresh_token=tokens.refresh_token,
         )
         return self._tokens_from_response(data, fallback_refresh_token=tokens.refresh_token)
+
+    async def revoke(self, refresh_token: str) -> None:
+        """Revoga o acesso no Google (o usuário desconectou a conta no Attena)."""
+        await self._client.revoke(refresh_token)
 
     async def get_account_identifier(self, tokens: OAuthTokens) -> str | None:
         try:

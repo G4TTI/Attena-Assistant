@@ -13,12 +13,33 @@ services:
     environment:
       WAHA_API_KEY: ${WAHA_API_KEY}
       WHATSAPP_DEFAULT_ENGINE: ${WHATSAPP_DEFAULT_ENGINE:-WEBJS}
+      # Privacidade (v1.4): o dashboard e o Swagger do WAHA permitem LER as
+      # conversas de todas as sessões — desligados por padrão. Só ligue
+      # temporariamente, para depuração, e com senha forte.
+      WAHA_DASHBOARD_ENABLED: ${WAHA_DASHBOARD_ENABLED:-false}
+      WHATSAPP_SWAGGER_ENABLED: ${WHATSAPP_SWAGGER_ENABLED:-false}
       WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-admin}
+      # QR Code nunca no log; logs do WAHA só com avisos/erros (o log de acesso
+      # HTTP traria o chatId/telefone na URL).
+      WAHA_PRINT_QR: ${WAHA_PRINT_QR:-False}
+      WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-warn}
+      WAHA_HTTP_LOG_LEVEL: ${WAHA_HTTP_LOG_LEVEL:-warn}
+      # O Attena nunca pede mídia; nem por evento nem por API o WAHA baixa arquivos.
+      WAHA_API_DOWNLOAD_MEDIA: ${WAHA_API_DOWNLOAD_MEDIA:-false}
+      WAHA_EVENTS_DOWNLOAD_MEDIA: ${WAHA_EVENTS_DOWNLOAD_MEDIA:-false}
       # Reinicia a sessão automaticamente quando o container sobe
       WHATSAPP_RESTART_ALL_SESSIONS: "true"
     volumes:
+      # Credenciais das sessões + perfil local do WhatsApp Web (engine WEBJS,
+      # inclui o cache local de conversas do próprio WhatsApp Web). Trate como
+      # segredo: ver docs/SECURITY_AND_PRIVACY.md -> WAHA.
       - ./waha/sessions:/app/.sessions
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   app:
     build: ./app
@@ -46,6 +67,21 @@ services:
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8090/calendario/oauth/callback}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
       CALENDAR_SYNC_SECONDS: ${CALENDAR_SYNC_SECONDS:-300}
+      # v1.4 — criptografia de dados (obrigatórias: sem elas o app não sobe).
+      DATA_ENCRYPTION_KEYS: ${DATA_ENCRYPTION_KEYS:-}
+      DATA_ENCRYPTION_ACTIVE_VERSION: ${DATA_ENCRYPTION_ACTIVE_VERSION:-}
+      DATA_HASH_KEY: ${DATA_HASH_KEY:-}
+      # v1.4 — retenção, segurança, planos
+      PRIVACY_CLEANUP_SECONDS: ${PRIVACY_CLEANUP_SECONDS:-3600}
+      RECIPIENT_HASH_RETENTION_DAYS: ${RECIPIENT_HASH_RETENTION_DAYS:-30}
+      LOGIN_IP_RETENTION_DAYS: ${LOGIN_IP_RETENTION_DAYS:-30}
+      LOGIN_AUDIT_RETENTION_DAYS: ${LOGIN_AUDIT_RETENTION_DAYS:-180}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ADMIN_SESSION_MAX_AGE_HOURS: ${ADMIN_SESSION_MAX_AGE_HOURS:-12}
+      ENFORCE_PLAN_LIMITS: ${ENFORCE_PLAN_LIMITS:-false}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-}
+      WAHA_NOWEB_STORE_ENABLED: ${WAHA_NOWEB_STORE_ENABLED:-false}
     volumes:
       - ./data:/app/data
       # Codigo montado do host: reiniciar o container aplica mudancas sem rebuild.
@@ -58,3 +94,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, col, select
 
-from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
+from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id, text_of, chat_of, name_of, db_locations_containing
 from whatsapp_scheduler import calendar_service, calendar_sync, clock, crypto, timing
 from whatsapp_scheduler.calendar_providers.base import OAuthTokens, RemoteEvent
 from whatsapp_scheduler.clock import utcnow
@@ -22,7 +22,6 @@ from whatsapp_scheduler.models import (
     Calendar,
     CalendarConnection,
     CalendarConnectionStatus,
-    CachedMessage,
     Dispatch,
     Event,
     EventSource,
@@ -109,10 +108,10 @@ def test_create_multi_message_schedule_keeps_the_typed_time(client):
     r = client.post("/ui/schedules", data=_form(whatsapp_session_id=whatsapp_session_id(client)))
     assert r.status_code == 200 and "Agendamento criado." in r.text
     (group,) = _groups()
-    assert (group.start_local, group.timezone, group.source, group.recipient_name) == (
+    assert (group.start_local, group.timezone, group.source, name_of(group)) == (
         datetime(2999, 9, 20, 18, 0), TZ, ScheduleSource.manual, "Leonardo Silva")
     rows = _schedules(group.id)
-    assert [s.text for s in rows] == ["Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
+    assert [text_of(s) for s in rows] == ["Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
     assert rows[0].first_run_local == datetime(2999, 9, 20, 18, 0)
     # o formulário devolvido mantém data, horário e WhatsApp (nada volta pra "agora"/vazio/00:00)
     assert 'value="2999-09-20"' in r.text and 'value="18:00"' in r.text
@@ -126,7 +125,7 @@ def test_manual_number_and_contact_are_accepted_and_duplicates_collapse(client):
         recipients=[LEO, "+55 14 99111-0001", "+55 11 98222-0002"],
         recipient_names=["Leonardo Silva", "+55 14 99111-0001", "+55 11 98222-0002"], messages=["oi"]))
     assert r.status_code == 200 and "2 agendamentos criados" in r.text
-    assert sorted(g.chat_id for g in _groups()) == sorted([LEO, GUI])
+    assert sorted(chat_of(g) for g in _groups()) == sorted([LEO, GUI])
 
 
 def test_error_keeps_everything_the_user_typed(client):
@@ -249,7 +248,7 @@ def test_edit_error_keeps_the_form_and_does_not_change_anything(client):
         "messages": ["novo texto"], "send_date": "2001-01-01", "send_time": "10:00",
         "whatsapp_session_id": whatsapp_session_id(client), "recurrence": ""})
     assert "já passou" in r.text and "novo texto" in r.text
-    assert [s.text for s in _schedules(group.id)][0] == "Olá Leonardo!"
+    assert [text_of(s) for s in _schedules(group.id)][0] == "Olá Leonardo!"
 
 
 def test_user_a_cannot_open_edit_or_cancel_user_bs_schedule(client):
@@ -266,7 +265,7 @@ def test_user_a_cannot_open_edit_or_cancel_user_bs_schedule(client):
     client.post(f"/ui/schedules/{group.id}/cancel")
     client.post(f"/ui/schedules/{group.id}/run-now")
     assert "Leonardo" not in client.get("/agendamentos").text and "Olá Leonardo!" not in client.get("/ui/schedules").text
-    assert all(s.enabled for s in _schedules(group.id)) and _schedules(group.id)[0].text == "Olá Leonardo!"
+    assert all(s.enabled for s in _schedules(group.id)) and text_of(_schedules(group.id)[0]) == "Olá Leonardo!"
     client.cookies.set(settings.session_cookie_name, token_a)
     assert client.get(f"/ui/schedules/{group.id}").status_code == 200
 
@@ -302,7 +301,7 @@ def test_chat_schedule_creates_one_group_with_the_whole_sequence(client):
     sid, r = _chat_post(client)
     assert r.status_code == 200 and "Agendamento criado — 3 mensagens." in r.text
     (group,) = _groups()
-    assert (group.source, group.chat_id, group.start_local) == (ScheduleSource.conversation, LEO, datetime(2999, 9, 20, 18, 0))
+    assert (group.source, chat_of(group), group.start_local) == (ScheduleSource.conversation, LEO, datetime(2999, 9, 20, 18, 0))
     assert [s.position for s in _schedules(group.id)] == [0, 1, 2]
     with Session(get_engine()) as db:
         wa = db.get(WhatsAppSession, sid)
@@ -377,7 +376,7 @@ def test_chat_schedule_still_accepts_the_old_single_text_fields(client):
     r = client.post(f"/ui/chats/{sid}/schedule", data={"chat": LEO, "text": "lembrete", "send_at": "2999-01-01T09:00"})
     assert "Agendamento criado." in r.text
     (group,) = _groups()
-    assert group.start_local == datetime(2999, 1, 1, 9, 0) and _schedules(group.id)[0].text == "lembrete"
+    assert group.start_local == datetime(2999, 1, 1, 9, 0) and text_of(_schedules(group.id)[0]) == "lembrete"
 
 
 def test_disconnected_whatsapp_blocks_scheduling_from_a_chat(client):
@@ -404,15 +403,20 @@ def test_end_to_end_conversation_sequence_is_sent_and_shown(client):
     asyncio.run(SchedulerService(client.waha).run_once())
     assert [m["text"] for m in client.waha.sent] == ["um", "dois", "três"]
     assert {m["session"] for m in client.waha.sent} == {wa_b.session_name}   # o WhatsApp escolhido, não o principal
-    # A conversa mostra as mensagens (cache local, sem ir ao WAHA) marcadas como vindas de agendamento…
+    # A conversa busca o histórico no WhatsApp (nada é guardado no Attena) e marca as bolhas que
+    # vieram de agendamento pelo HMAC do id do WAHA.
+    client.waha.messages = [
+        {"id": f"true_{LEO}_{i}", "timestamp": 1_760_000_000 + i, "fromMe": True, "body": body, "type": "chat"}
+        for i, body in enumerate(["um", "dois", "três"], start=1)
+    ]
     hist = client.get(f"/ui/chats/{sid}/messages", params={"chat": LEO}).text
     assert hist.count("agendada") == 3 and "três" in hist
     # …e o painel de agendadas não repete (já são bolhas reais do histórico)
     assert "bubble me scheduled" not in client.get(f"/ui/chats/{sid}/scheduled", params={"chat": LEO}).text
     # Histórico/lista: o agendamento aparece como enviado
     assert "Enviado" in client.get("/ui/schedules").text
-    with Session(get_engine()) as db:
-        assert len(db.exec(select(CachedMessage).where(col(CachedMessage.chat_id) == LEO)).all()) == 3
+    # …e nem o conteúdo nem o destinatário ficaram no banco depois do envio.
+    assert db_locations_containing("três") == [] and db_locations_containing(LEO.split("@")[0]) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -465,7 +469,7 @@ def test_create_automation_with_custom_interval_and_edit_keeps_it(client):
         (automation,) = db.exec(select(Automation)).all()
         assert (automation.offset_amount, str(automation.offset_unit), automation.custom_interval) == (105, "minutes", "1:45")
     (group,) = _groups()
-    assert (group.source, group.recipient_name) == (ScheduleSource.calendar, "Leonardo Silva")
+    assert (group.source, name_of(group)) == (ScheduleSource.calendar, "Leonardo Silva")
     rows = _schedules(group.id)
     assert rows[0].first_run_local == datetime(2999, 9, 20, 18, 15) and rows[1].first_run_local == datetime(2999, 9, 20, 18, 15, 3)
     assert group.timezone == TZ and group.session == rows[0].session

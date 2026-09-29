@@ -138,6 +138,25 @@ def disconnect_session(db: Session, session_id: str, user_id: str) -> bool:
     session.updated_at = utcnow()
     db.add(session)
     db.commit()
+    from . import chatsvc
+
+    chatsvc.forget_session(session.session_name)
+    return True
+
+
+async def disconnect_and_purge(db: Session, waha: WahaClient, session_id: str, user_id: str) -> bool:
+    """Desconecta no Attena e, em seguida, desloga + apaga a sessão no WAHA
+    (credenciais e dados locais do WhatsApp Web deixam o volume). Se o WAHA não
+    responder agora, o `privacy_cleanup` tenta de novo depois."""
+    from .retention import purge_waha_session
+
+    if not disconnect_session(db, session_id, user_id):
+        return False
+    session = db.get(WhatsAppSession, session_id)
+    if session is not None and await purge_waha_session(waha, session):
+        session.waha_purged_at = utcnow()
+        db.add(session)
+        db.commit()
     return True
 
 

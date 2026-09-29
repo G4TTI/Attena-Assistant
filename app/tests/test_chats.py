@@ -2,11 +2,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
-from whatsapp_scheduler import chatsvc
+from tests.conftest import FakeWaha, db_locations_containing, register_and_login, whatsapp_session_id
+from whatsapp_scheduler import chatsvc, privacy
 from whatsapp_scheduler.db import get_engine
 from whatsapp_scheduler.main import app
-from whatsapp_scheduler.models import CachedMessage, Schedule
+from whatsapp_scheduler.models import Schedule
 
 OVERVIEW = [
     {
@@ -31,9 +31,11 @@ MESSAGES = [
 
 @pytest.fixture(autouse=True)
 def _reset_chat_cache():
-    chatsvc._chat_cache.update(at=0.0, data=[])
+    chatsvc._chat_cache.clear()
+    chatsvc._history_cache.clear()
     yield
-    chatsvc._chat_cache.update(at=0.0, data=[])
+    chatsvc._chat_cache.clear()
+    chatsvc._history_cache.clear()
 
 
 @pytest.fixture
@@ -61,44 +63,52 @@ async def test_list_chats_normalizes_and_sorts(test_user):
     assert chats[1]["last_preview"] == "oi tudo bem?"
 
 
-async def test_get_history_caches(db: Session, test_user):
+async def test_get_history_caches_only_in_memory(test_user):
     waha = FakeWaha()
     waha.messages = MESSAGES
 
-    first = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "America/Sao_Paulo")
+    first = await chatsvc.get_history(waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "America/Sao_Paulo")
     assert first.from_cache is False
     assert [m["text"] for m in first.messages] == ["oi", "ola", "[imagem]"]
 
     waha.messages_error = RuntimeError("não deveria ser chamado")
-    second = await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "America/Sao_Paulo")
+    second = await chatsvc.get_history(waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "America/Sao_Paulo")
     assert second.from_cache is True
     assert len(second.messages) == 3
+    # ...e nada disso foi para o banco.
+    assert db_locations_containing("ola") == []
 
 
-async def test_get_history_falls_back_to_cache_on_error(db: Session, test_user):
+async def test_history_cache_expires_and_is_removed(test_user, monkeypatch):
+    waha = FakeWaha()
+    waha.messages = MESSAGES
+    await chatsvc.get_history(waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo")
+    assert chatsvc._history_cache
+    monkeypatch.setattr(chatsvc.settings, "chat_messages_cache_seconds", 0)
+    assert chatsvc.purge_expired() >= 1
+    assert chatsvc._history_cache == {}
+
+
+async def test_get_history_falls_back_to_memory_on_error(test_user):
     from whatsapp_scheduler.waha import WahaError
 
     waha = FakeWaha()
     waha.messages = MESSAGES
-    await chatsvc.get_history(db, waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo")
+    await chatsvc.get_history(waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo")
 
     waha.messages_error = WahaError("timeout")
-    out = await chatsvc.get_history(
-        db, waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo", force=True
-    )
+    out = await chatsvc.get_history(waha, test_user.id, test_user.waha_session, "chat@c.us", "America/Sao_Paulo", force=True)
     assert out.from_cache is True
     assert out.error is not None
     assert len(out.messages) == 3
 
 
-async def test_send_now_records_outgoing_message(db: Session, test_user):
+async def test_send_now_persists_nothing(test_user):
     waha = FakeWaha()
-    await chatsvc.send_now(db, waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "mensagem enviada")
-    rows = db.exec(select(CachedMessage).where(CachedMessage.chat_id == "5511999998888@c.us")).all()
-    assert len(rows) == 1
-    assert rows[0].from_me is True
-    assert rows[0].body == "mensagem enviada"
-    assert waha.sent[0]["text"] == "mensagem enviada"
+    await chatsvc.send_now(waha, test_user.id, test_user.waha_session, "5511999998888@c.us", "mensagem enviada agora")
+    assert waha.sent[0]["text"] == "mensagem enviada agora"
+    assert db_locations_containing("mensagem enviada agora") == []
+    assert db_locations_containing("5511999998888") == []
 
 
 def test_api_list_chats(client):
@@ -170,5 +180,7 @@ def test_schedule_from_chat_view(client):
 
     with Session(get_engine()) as s:
         sch = s.exec(select(Schedule)).one()
-    assert sch.chat_id == "12036300000000@g.us"
-    assert sch.text == "lembrete do grupo"
+    assert privacy.schedule_recipient(sch) == "12036300000000@g.us"
+    assert privacy.schedule_message(sch) == "lembrete do grupo"
+    assert db_locations_containing("lembrete do grupo") == []
+    assert db_locations_containing("12036300000000") == []

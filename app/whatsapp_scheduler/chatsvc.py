@@ -1,9 +1,17 @@
-"""Conversas do WhatsApp: lista de chats + histórico, com cache local.
+"""Conversas do WhatsApp: lista de chats + histórico — SÓ PARA VISUALIZAÇÃO.
 
-O engine WEBJS demora ~30-60s para trazer o histórico de uma conversa, então:
-- a lista de chats tem cache curto em memória;
-- as mensagens ficam em `cached_messages` (SQLite): abrir de novo é instantâneo,
-  e há um botão "atualizar" para forçar nova busca no WAHA.
+O Attena não é um banco de conversas: nada do que vem daqui (mensagens
+recebidas ou enviadas, nomes, fotos, mídias) é gravado no banco, em arquivo ou
+em log. Cada tela busca no WAHA na hora e entrega ao usuário autenticado.
+
+O engine WEBJS demora para trazer o histórico, então existe um cache — só em
+MEMÓRIA do processo, por (usuário, WhatsApp, conversa), com TTL curto
+(`chat_list_cache_seconds` / `chat_messages_cache_seconds`). Entrada vencida é
+removida (não só ignorada): em toda leitura/escrita e a cada tick do scheduler
+(`purge_expired`). Reiniciar o processo apaga tudo.
+
+Mídia nunca é baixada (`downloadMedia=false`); a foto de perfil é uma URL do
+próprio WhatsApp que o navegador do usuário carrega direto.
 """
 
 from __future__ import annotations
@@ -14,11 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlmodel import Session, col, select
-
 from .clock import utcnow
 from .config import settings
-from .models import CachedMessage
 from .waha import WahaClient, WahaError, extract_message_id
 
 logger = logging.getLogger("whatsapp_scheduler.chatsvc")
@@ -35,20 +40,41 @@ _MEDIA_LABEL = {
     "call_log": "[chamada]",
 }
 
-# Cache em memória por sessão WAHA (cada usuário tem a sua) — mesma
-# limitação de sempre: por processo, reseta a cada restart.
+# session_name -> {"at": monotonic, "data": [...]}
 _chat_cache: dict[str, dict] = {}
+# (user_id, session_name, chat_id) -> {"at": monotonic, "fetched_at": datetime, "messages": [...]}
+_history_cache: dict[tuple[str, str, str], dict] = {}
 
 
-def _cache_for(session: str) -> dict:
-    return _chat_cache.setdefault(session, {"at": 0.0, "data": []})
+def purge_expired() -> int:
+    """Remove da memória toda entrada vencida. Retorna quantas saíram."""
+    now = time.monotonic()
+    removed = 0
+    for key in [k for k, v in _chat_cache.items() if now - v["at"] >= settings.chat_list_cache_seconds]:
+        _chat_cache.pop(key, None)
+        removed += 1
+    for key in [k for k, v in _history_cache.items() if now - v["at"] >= settings.chat_messages_cache_seconds]:
+        _history_cache.pop(key, None)
+        removed += 1
+    return removed
+
+
+def forget_session(session: str) -> None:
+    """Descarta tudo em memória de uma sessão (ex.: WhatsApp desconectado)."""
+    _chat_cache.pop(session, None)
+    for key in [k for k in _history_cache if k[1] == session]:
+        _history_cache.pop(key, None)
+
+
+def _fresh_chats(session: str) -> list[dict] | None:
+    purge_expired()
+    entry = _chat_cache.get(session)
+    return entry["data"] if entry else None
 
 
 def cached_chat_name(session: str, chat_id: str) -> str | None:
-    """Nome do contato na lista de conversas JÁ em cache (nunca vai à rede) —
-    usado pra dar um nome legível ao agendamento feito de dentro da conversa.
-    A lista costuma estar quente: a tela de Conversas acabou de carregá-la."""
-    for chat in _cache_for(session)["data"]:
+    """Nome do contato na lista de conversas AINDA em cache (nunca vai à rede)."""
+    for chat in _fresh_chats(session) or []:
         if chat["id"] == chat_id:
             name = (chat.get("name") or "").strip()
             return name if name and name != chat_id.split("@")[0] else None
@@ -90,29 +116,34 @@ def _normalize_chat(c: dict, tz_name: str) -> dict:
 
 
 async def list_chats(waha: WahaClient, session: str, tz_name: str, *, force: bool = False) -> list[dict]:
-    cache = _cache_for(session)
-    now = time.monotonic()
-    if not force and cache["data"] and now - cache["at"] < settings.chat_list_cache_seconds:
-        return cache["data"]
+    cached = None if force else _fresh_chats(session)
+    if cached is not None:
+        return cached
     raw = await waha.get_chats_overview(session, settings.chat_list_limit, timeout=settings.chat_list_timeout)
     chats = [_normalize_chat(c, tz_name) for c in raw if c.get("id")]
     chats.sort(key=lambda c: c["last_ts"], reverse=True)
-    cache.update(at=now, data=chats)
+    _chat_cache[session] = {"at": time.monotonic(), "data": chats}
     return chats
 
 
-def _row_to_msg(m: CachedMessage, tz_name: str) -> dict:
-    text = (m.body or "").strip()
+def _normalize_message(m: dict, tz_name: str) -> dict | None:
+    mid = _msg_id(m)
+    if not mid:
+        return None
+    ts = int(m.get("timestamp") or 0)
+    msg_type = str(m.get("type") or "chat")
+    has_media = bool(m.get("hasMedia"))
+    text = (m.get("body") or "").strip()
     if not text:
-        text = _MEDIA_LABEL.get(m.msg_type, "[mídia]" if m.has_media else "")
+        text = _MEDIA_LABEL.get(msg_type, "[mídia]" if has_media else "")
     return {
-        "id": m.message_id,
-        "from_me": m.from_me,
-        "ts": m.ts,
-        "when": _fmt_ts(m.ts, tz_name),
+        "id": mid,
+        "from_me": bool(m.get("fromMe")),
+        "ts": ts,
+        "when": _fmt_ts(ts, tz_name),
         "text": text,
-        "type": m.msg_type,
-        "is_note": not text and not m.has_media,
+        "type": msg_type,
+        "is_note": not text and not has_media,
     }
 
 
@@ -124,82 +155,43 @@ class ChatHistory:
     error: str | None = None
 
 
-def _cached_rows(db: Session, user_id: str, chat_id: str) -> list[CachedMessage]:
-    return list(
-        db.exec(
-            select(CachedMessage)
-            .where(col(CachedMessage.user_id) == user_id)
-            .where(col(CachedMessage.chat_id) == chat_id)
-            .order_by(col(CachedMessage.ts))
-        ).all()
-    )
-
-
 async def get_history(
-    db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, tz_name: str, *, force: bool = False
+    waha: WahaClient, user_id: str, session: str, chat_id: str, tz_name: str, *, force: bool = False
 ) -> ChatHistory:
-    rows = _cached_rows(db, user_id, chat_id)
-    last_sync = max((r.synced_at for r in rows), default=None)
-    fresh = last_sync is not None and (
-        (utcnow() - last_sync).total_seconds() < settings.chat_messages_cache_seconds
-    )
-    if rows and not force and fresh:
-        return ChatHistory([_row_to_msg(r, tz_name) for r in rows], from_cache=True, synced_at=last_sync)
-
+    """Histórico de uma conversa, direto do WAHA (ou do cache em memória, se
+    ainda fresco). Nunca grava nada."""
+    purge_expired()
+    key = (user_id, session, chat_id)
+    entry = _history_cache.get(key)
+    if entry and not force:
+        return ChatHistory(entry["messages"], from_cache=True, synced_at=entry["fetched_at"])
     try:
-        raw = await waha.get_messages(
-            session,
-            chat_id,
-            settings.chat_messages_limit,
-            timeout=settings.history_timeout,
-        )
+        raw = await waha.get_messages(session, chat_id, settings.chat_messages_limit, timeout=settings.history_timeout)
     except WahaError as exc:
-        logger.warning("falha ao buscar histórico de %s: %s", chat_id, exc)
-        if rows:
-            return ChatHistory(
-                [_row_to_msg(r, tz_name) for r in rows], from_cache=True, synced_at=last_sync, error=str(exc)
-            )
+        logger.warning("falha ao buscar histórico de uma conversa (sessão %s): status=%s", session, exc.status_code)
+        if entry:
+            return ChatHistory(entry["messages"], from_cache=True, synced_at=entry["fetched_at"], error=str(exc))
         return ChatHistory([], from_cache=False, synced_at=None, error=str(exc))
-
-    now = utcnow()
-    for m in raw:
-        mid = _msg_id(m)
-        if not mid:
-            continue
-        row = db.get(CachedMessage, mid) or CachedMessage(message_id=mid, user_id=user_id, chat_id=chat_id)
-        row.user_id = user_id
-        row.chat_id = chat_id
-        row.ts = int(m.get("timestamp") or 0)
-        row.from_me = bool(m.get("fromMe"))
-        row.body = (m.get("body") or "")[:8000]
-        row.msg_type = str(m.get("type") or "chat")
-        row.has_media = bool(m.get("hasMedia"))
-        row.ack_name = m.get("ackName")
-        row.synced_at = now
-        db.add(row)
-    db.commit()
-    rows = _cached_rows(db, user_id, chat_id)
-    return ChatHistory([_row_to_msg(r, tz_name) for r in rows], from_cache=False, synced_at=now)
+    messages = [m for m in (_normalize_message(r, tz_name) for r in raw) if m is not None]
+    messages.sort(key=lambda m: m["ts"])
+    fetched_at = utcnow()
+    _history_cache[key] = {"at": time.monotonic(), "fetched_at": fetched_at, "messages": messages}
+    return ChatHistory(messages, from_cache=False, synced_at=fetched_at)
 
 
-async def send_now(db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, text: str) -> dict:
+def cached_message_ids(user_id: str, session: str, chat_id: str) -> set[str]:
+    entry = _history_cache.get((user_id, session, chat_id))
+    return {m["id"] for m in entry["messages"]} if entry else set()
+
+
+async def send_now(waha: WahaClient, user_id: str, session: str, chat_id: str, text: str) -> str | None:
+    """Envio imediato. Nada é gravado: só invalida os caches em memória para a
+    próxima leitura trazer a mensagem do próprio WhatsApp. Retorna o id da
+    mensagem no WAHA (quando o engine informa)."""
     payload = await waha.send_text(session, chat_id, text)
-    mid = extract_message_id(payload)
-    if mid and not db.get(CachedMessage, mid):
-        db.add(
-            CachedMessage(
-                message_id=mid,
-                user_id=user_id,
-                chat_id=chat_id,
-                ts=int(time.time()),
-                from_me=True,
-                body=text,
-                msg_type="chat",
-            )
-        )
-        db.commit()
-    _cache_for(session)["at"] = 0.0  # força a lista a atualizar no próximo load
-    return payload
+    _chat_cache.pop(session, None)
+    _history_cache.pop((user_id, session, chat_id), None)
+    return extract_message_id(payload)
 
 
 def _msg_id(m: dict) -> str | None:

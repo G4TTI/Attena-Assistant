@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from sqlmodel import Session
 
-from .. import app_settings, auth, auth_service, calendar_service, time_sync, whatsapp_service
+from .. import app_settings, auth, auth_service, calendar_service, plans, time_sync, whatsapp_service
 from ..calendar_providers.base import CalendarProviderError
 from ..clock import utcnow
 from ..config import settings
@@ -148,13 +148,16 @@ def ui_clock(current_user: User = Depends(auth.require_user_web)) -> str:
 
 
 @router.post("/configuracoes/google/connect")
-def connect_google(current_user: User = Depends(auth.require_user_web)) -> RedirectResponse:
+def connect_google(
+    db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+) -> RedirectResponse:
     try:
+        plans.check_limit(db, current_user, "calendar_connections")
         authorize_url, state = calendar_service.start_connect("google")
-    except calendar_service.NotConfiguredError as exc:
+    except (calendar_service.NotConfiguredError, plans.PlanLimitReached) as exc:
         return RedirectResponse(url="/configuracoes?error=" + quote(str(exc)), status_code=303)
     resp = RedirectResponse(url=authorize_url, status_code=302)
-    resp.set_cookie(_STATE_COOKIE, state, max_age=600, httponly=True, samesite="lax")
+    resp.set_cookie(_STATE_COOKIE, state, max_age=600, httponly=True, samesite="lax", secure=auth.cookie_secure())
     return resp
 
 
@@ -228,13 +231,13 @@ async def ui_sync_now(
 
 
 @router.post("/ui/configuracoes/connections/{connection_id}/disconnect", response_class=HTMLResponse)
-def ui_disconnect(
+async def ui_disconnect(
     request: Request,
     connection_id: str,
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    if calendar_service.disconnect(db, connection_id, current_user.id):
+    if await calendar_service.disconnect_and_revoke(db, connection_id, current_user.id):
         auth_service.log_event(
             db, auth_service.AuditEventType.google_disconnected, user_id=current_user.id, request=request
         )
@@ -285,7 +288,10 @@ def ui_change_password(
         )
     except ValidationError as exc:
         return RedirectResponse(url="/configuracoes?error=" + quote(str(exc)), status_code=303)
-    return RedirectResponse(url="/configuracoes?ok=" + quote("Senha alterada."), status_code=303)
+    # Senha trocada: nenhuma outra sessão (talvez de quem descobriu a antiga) continua valendo.
+    current_session = auth.get_current_session(request, db)
+    auth.revoke_other_sessions(db, current_user, keep_session_id=current_session.id if current_session else "")
+    return RedirectResponse(url="/configuracoes?ok=" + quote("Senha alterada. Outros dispositivos foram desconectados."), status_code=303)
 
 
 @router.post("/configuracoes/conta/sair-outros-dispositivos", response_class=HTMLResponse)

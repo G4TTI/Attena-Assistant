@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_components.html" import icon %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Upgrade para {{ plan.name }}</h1>
+    <p class="sub">{{ plan.price_cents | brl(plan.currency) }} por {{ period_label }}</p>
+  </div>
+</div>
+
+<ol class="steps-bar" aria-label="Etapas">
+  <li class="done"><span>1</span> Plano</li>
+  <li class="done"><span>2</span> Dados para faturamento</li>
+  <li class="active" aria-current="step"><span>3</span> Pagamento</li>
+</ol>
+
+<div class="card card-pad payment-pending" role="status">
+  <span class="payment-pending-icon">{{ icon('alert', 26) }}</span>
+  <h2>Pagamento ainda não configurado</h2>
+  <p>
+    Sua solicitação de upgrade para <strong>{{ plan.name }}</strong> e seus dados de faturamento foram salvos,
+    mas este ambiente do Attena ainda não tem um meio de pagamento ativo.
+  </p>
+  <p class="muted">Nada foi cobrado. Seu plano continua sendo <strong>{{ current_plan.name if current_plan else 'Gratuito' }}</strong> até o pagamento ser confirmado.</p>
+  <div class="dash-quick-actions" style="justify-content:center;margin-top:18px">
+    <a class="ghost-link" href="/planos">Voltar aos planos</a>
+    <form method="post" action="/planos/solicitacao/cancelar" style="display:contents">
+      <button type="submit" class="danger">Cancelar solicitação</button>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

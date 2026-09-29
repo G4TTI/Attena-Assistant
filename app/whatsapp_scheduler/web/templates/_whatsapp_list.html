@@ -13,6 +13,7 @@
    "conectando…" falso nos botões durante a consulta periódica. #}
 <div hx-get="/ui/whatsapps?sig={{ rows | wa_sig }}" hx-target="#whatsapp-list" hx-swap="innerHTML"
      hx-trigger="every {{ '3s' if ns.pending else '15s' }}" data-pause-on-input data-poll>
+{% if limit_error %}<div class="alert err" role="alert" style="margin-bottom:12px">{{ limit_error }} <a href="/planos">Ver planos</a></div>{% endif %}
 <form hx-post="/whatsapps" hx-target="#whatsapp-list" hx-swap="innerHTML" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
   <div class="field" style="flex:1 1 220px;margin:0">
     <label for="wa_new_name">Nome da conexão</label>

@@ -39,6 +39,14 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# Texto de uma mensagem programada. `text` None = conteúdo já expurgado pela
+   política de retenção (a mensagem terminou): mostra o motivo, nunca o conteúdo. #}
+{% macro message_text(text, status) -%}
+{%- if text is not none -%}{{ text }}
+{%- else -%}<span class="content-removed">{% if status == 'sent' %}Conteúdo apagado após o envio{% elif status == 'canceled' %}Conteúdo apagado no cancelamento{% else %}Conteúdo apagado (mensagem encerrada){% endif %}</span>
+{%- endif -%}
+{%- endmacro %}
+
 {# Ícone de status de uma MENSAGEM: scheduled 🕐 · sending ⏳ · sent ✓ · failed/skipped ⚠ · canceled ○ #}
 {% macro status_icon(status, size=13) -%}
 {%- if status == 'scheduled' %}{{ icon('clock', size) }}

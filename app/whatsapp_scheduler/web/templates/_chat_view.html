@@ -64,6 +64,7 @@
           data-recipient-label="{{ chat.name }}" data-wa-name="{{ wa_name }}"
           oninput="updateFormSummary(this)" onchange="updateFormSummary(this)">
       <input type="hidden" name="chat" value="{{ chat_id }}">
+      <input type="hidden" name="recipient_name" value="{{ chat.name if chat.name != chat_id.split('@')[0] else '' }}">
       <div class="field">
         <label for="cv_send_date">Data e horário do envio</label>
         {{ schedule_datetime_picker('cv_send', sf.send_date, sf.send_time, sf.min_date, tz_label) }}

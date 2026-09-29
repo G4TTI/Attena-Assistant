@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlmodel import Session
 
-from .. import auth, whatsapp_service
+from .. import auth, plans, whatsapp_service
 from ..db import get_session
 from ..models import User
 from ..waha import WahaClient, WahaError
@@ -80,6 +80,11 @@ async def ui_whatsapp_create(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
+    try:
+        plans.check_limit(db, current_user, "whatsapp_connections")
+    except plans.PlanLimitReached as exc:
+        ctx = await _list_ctx(request, db, current_user)
+        return templates.TemplateResponse("_whatsapp_list.html", {**ctx, "limit_error": str(exc)})
     session = whatsapp_service.create_session(db, current_user.id, name)
     try:
         await _waha(request).start_session(session.session_name)
@@ -129,7 +134,7 @@ async def ui_whatsapp_disconnect(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
-    whatsapp_service.disconnect_session(db, session_id, current_user.id)
+    await whatsapp_service.disconnect_and_purge(db, _waha(request), session_id, current_user.id)
     return templates.TemplateResponse("_whatsapp_list.html", await _list_ctx(request, db, current_user))
 
 

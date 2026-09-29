@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from sqlmodel import Session, col, select
 
-from tests.conftest import FakeWaha
+from tests.conftest import FakeWaha, chat_of
 from whatsapp_scheduler import calendar_service, whatsapp_service
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.db import get_engine
@@ -75,6 +75,6 @@ async def test_two_automations_on_same_event_send_through_different_whatsapps(te
 
     with Session(get_engine()) as db:
         schedules = db.exec(select(Schedule).where(col(Schedule.user_id) == test_user.id)).all()
-    by_recipient = {s.recipient_input: s.session for s in schedules}
-    assert by_recipient["+55 11 99999-8888"] == session_a_name
-    assert by_recipient["+55 11 97777-6666"] == session_b_name
+    by_recipient = {chat_of(s): s.session for s in schedules}
+    assert by_recipient["5511999998888@c.us"] == session_a_name
+    assert by_recipient["5511977776666@c.us"] == session_b_name

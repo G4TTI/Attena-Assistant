@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% from "_components.html" import icon %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Planos</h1>
+    <p class="sub">Escolha o plano ideal para a sua rotina. Dados de faturamento só são pedidos se você fizer upgrade.</p>
+  </div>
+</div>
+
+{% if error %}<div class="alert err">{{ error }}</div>{% endif %}
+{% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
+
+<div class="card">
+  <div class="card-hd">
+    {{ icon('check', 16) }}
+    <h2>Seu plano</h2>
+  </div>
+  <div class="card-bd plan-current">
+    <div class="plan-current-main">
+      <div class="plan-current-name">{{ current_plan.name if current_plan else 'Gratuito' }}</div>
+      <div class="muted">
+        {% if subscription and subscription.provider == 'manual' %}Concedido pela equipe Attena
+        {% elif subscription %}Assinatura {{ subscription.status | subscription_status }}{% if subscription.current_period_end %} · renova em {{ subscription.current_period_end | localtime(current_user.timezone or 'America/Sao_Paulo') }}{% endif %}
+        {% else %}Sem cobrança{% endif %}
+      </div>
+    </div>
+    <div class="plan-usage">
+      {% for key, label in limit_labels.items() %}
+      {% set limit = current_limits.get(key) %}
+      {% set used = usage.get(key, 0) %}
+      <div class="plan-usage-row">
+        <div class="plan-usage-head"><span>{{ label }}</span><span class="plan-usage-n">{{ used }}{% if limit is not none %} / {{ limit }}{% else %} · ilimitado{% endif %}</span></div>
+        {% if limit %}<div class="meter"><span style="width:{{ [100, (used / limit * 100) | round | int] | min }}%"{% if used >= limit %} class="full"{% endif %}></span></div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if pending and pending_plan %}
+  <div class="card-ft">
+    <p class="hint">Upgrade para <strong>{{ pending_plan.name }}</strong> aguardando pagamento — nada foi cobrado ainda.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="ghost-link" href="/planos/{{ pending_plan.code }}/pagamento">Continuar</a>
+      <form method="post" action="/planos/solicitacao/cancelar" style="display:contents">
+        <button type="submit" class="danger">Cancelar solicitação</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="plan-grid">
+  {% for item in catalog %}
+  {% set p = item.plan %}
+  {% set is_current = current_plan and current_plan.id == p.id %}
+  <article class="plan-card{{ ' current' if is_current }}{{ ' featured' if loop.index == 2 }}">
+    <div class="plan-card-hd">
+      <h2 class="plan-name">{{ p.name }}</h2>
+      {% if is_current %}<span class="pill sent">Plano atual</span>{% endif %}
+    </div>
+    <div class="plan-price">
+      {% if item.is_paid %}<span class="plan-price-value">{{ p.price_cents | brl(p.currency) }}</span><span class="plan-price-period">/{{ period_labels.get(p.billing_period | string, 'mês') }}</span>
+      {% else %}<span class="plan-price-value">Grátis</span>{% endif %}
+    </div>
+    {% if p.description %}<p class="plan-desc">{{ p.description }}</p>{% endif %}
+    <ul class="plan-features">
+      {% for feature in item.features %}<li>{{ icon('check', 14) }} {{ feature }}</li>{% endfor %}
+    </ul>
+    <dl class="plan-limits">
+      {% for key, label in limit_labels.items() %}
+      <dt>{{ label }}</dt><dd>{{ item.limits.get(key) if item.limits.get(key) is not none else 'Ilimitado' }}</dd>
+      {% endfor %}
+    </dl>
+    <div class="plan-cta">
+      {% if is_current %}
+        <button type="button" class="ghost" disabled>Seu plano atual</button>
+      {% elif item.is_paid and p.is_active %}
+        <a class="btn-link" href="/planos/{{ p.code }}/upgrade">Fazer upgrade</a>
+      {% elif not item.is_paid %}
+        <span class="muted">Para voltar ao gratuito, fale com o suporte.</span>
+      {% else %}
+        <span class="muted">Indisponível no momento</span>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+
+{% if billing.has_profile %}
+<div class="card">
+  <div class="card-hd">
+    {{ icon('list', 16) }}
+    <h2>Dados de faturamento</h2>
+  </div>
+  <div class="card-bd">
+    <dl class="kv" style="margin-top:0">
+      <dt>CPF</dt><dd><code>{{ billing.cpf_masked }}</code></dd>
+      <dt>Estado</dt><dd>{{ billing.state_name or billing.state }}</dd>
+    </dl>
+    <p class="hint" style="margin-top:12px">Guardados criptografados e usados só para cobrança. O Attena nunca armazena dados de cartão.</p>
+  </div>
+  <div class="card-ft">
+    <span class="muted">Para editar, escolha um plano pago — o formulário vem preenchido.</span>
+    <form method="post" action="/planos/faturamento/remover" onsubmit="return confirm('Remover seus dados de faturamento? Solicitações de upgrade pendentes também serão canceladas.')">
+      <button type="submit" class="danger">Remover dados de faturamento</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

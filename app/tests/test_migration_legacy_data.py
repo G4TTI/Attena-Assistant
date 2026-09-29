@@ -7,11 +7,10 @@ from datetime import timedelta
 
 from sqlmodel import Session, col, select
 
-from whatsapp_scheduler import auth_service, crypto, whatsapp_service
+from whatsapp_scheduler import auth_service, crypto, privacy, whatsapp_service
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.config import settings
 from whatsapp_scheduler.models import (
-    CachedMessage,
     CalendarConnection,
     CalendarConnectionStatus,
     Event,
@@ -27,14 +26,11 @@ def _seed_orphan_data(db: Session) -> dict:
     now = utcnow()
     schedule = Schedule(
         session=settings.waha_session,  # sessão do .env, já pareada
-        recipient_input="+55 11 99999-8888", chat_id="5511999998888@c.us", text="lembrete antigo",
         timezone="America/Sao_Paulo", first_run_local=now,
     )
+    privacy.seal_schedule_message(schedule, "lembrete antigo")
+    privacy.seal_schedule_recipient(schedule, "5511999998888@c.us")
     db.add(schedule)
-    cached_message = CachedMessage(
-        message_id="MSGID1", chat_id="5511999998888@c.us", ts=int(now.timestamp()), from_me=True, body="oi",
-    )
-    db.add(cached_message)
     connection = CalendarConnection(
         provider="google", account_identifier="antigo@example.com",
         access_token_enc=crypto.encrypt("tok"), refresh_token_enc=crypto.encrypt("refresh"),
@@ -48,8 +44,7 @@ def _seed_orphan_data(db: Session) -> dict:
     db.add(event)
     db.commit()
     return {
-        "schedule_id": schedule.id, "message_id": cached_message.message_id,
-        "connection_id": connection.id, "event_id": event.id,
+        "schedule_id": schedule.id, "connection_id": connection.id, "event_id": event.id,
     }
 
 
@@ -65,8 +60,9 @@ def test_first_user_to_register_inherits_all_orphan_data_and_the_paired_session(
     assert schedule.user_id == user.id
     assert schedule.session == settings.waha_session  # preserva a sessão já pareada, não gera uma nova
 
-    message = db.get(CachedMessage, ids["message_id"])
-    assert message.user_id == user.id
+    # O hash do destinatário (por usuário) foi refeito para o novo dono; conteúdo intacto.
+    assert schedule.recipient_phone_hash == privacy.recipient_hash(user.id, "5511999998888@c.us")
+    assert privacy.schedule_message(schedule) == "lembrete antigo"
 
     connection = db.get(CalendarConnection, ids["connection_id"])
     assert connection.user_id == user.id

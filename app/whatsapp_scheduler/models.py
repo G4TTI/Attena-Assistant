@@ -70,11 +70,15 @@ class ScheduleGroup(SQLModel, table=True):
     source: ScheduleSource = Field(default=ScheduleSource.manual, index=True)
     # Nome interno da sessão WAHA (`WhatsAppSession.session_name`) — igual ao `Schedule.session` de cada mensagem.
     session: str
-    recipient_input: str
-    # Nome do contato como o usuário o viu ao escolher (só exibição); vazio =
-    # número digitado à mão ou agendamento antigo — aí vale `recipient_input`.
-    recipient_name: str | None = None
-    chat_id: str = Field(index=True)
+    # Destinatário CIFRADO (privacy.seal_group_recipient): JSON com chat_id, o
+    # que o usuário digitou e o nome do contato como ele o viu (só exibição).
+    # Existe enquanto alguma mensagem do agendamento ainda vai sair; depois é
+    # apagado (retention.py). Nunca há telefone/nome em texto puro no banco.
+    recipient_encrypted: str | None = None
+    # HMAC(usuário + chatId) — acha as mensagens de uma conversa sem guardar o
+    # número. Some `recipient_hash_retention_days` depois do fim do agendamento.
+    recipient_phone_hash: str | None = Field(default=None, index=True)
+    content_purged_at: datetime | None = None
     timezone: str
     start_local: datetime
     message_gap_seconds: int = 3
@@ -95,9 +99,17 @@ class Schedule(SQLModel, table=True):
     group_id: str | None = Field(default=None, foreign_key="schedule_groups.id", index=True)
     position: int = 0
     session: str = "default"
-    recipient_input: str
-    chat_id: str = Field(index=True)
-    text: str
+    # Conteúdo CIFRADO (AES-256-GCM, ver privacy.py) — nunca texto puro.
+    # Existe só enquanto a mensagem ainda pode ser enviada; ao chegar a um
+    # estado final (enviada, cancelada, falha definitiva, ignorada) as três
+    # colunas viram NULL e `content_purged_at` registra quando (retention.py).
+    message_ciphertext: str | None = None
+    encryption_nonce: str | None = None
+    encryption_key_version: int | None = None
+    # Destinatário (chatId) cifrado + HMAC para as consultas por conversa.
+    recipient_phone_encrypted: str | None = None
+    recipient_phone_hash: str | None = Field(default=None, index=True)
+    content_purged_at: datetime | None = None
     timezone: str
     # Horário informado pelo usuário, naive, interpretado em `timezone`.
     first_run_local: datetime
@@ -117,35 +129,17 @@ class Dispatch(SQLModel, table=True):
     scheduled_at_utc: datetime = Field(index=True)
     status: DispatchStatus = Field(default=DispatchStatus.pending, index=True)
     attempts: int = 0
+    # Erro técnico SANITIZADO (sem corpo de resposta, telefone ou token) e um
+    # código estável (`failure_codes`) — é o que o admin vê.
     last_error: str | None = None
-    waha_message_id: str | None = None
+    failure_code: str | None = None
+    # HMAC do id da mensagem no WAHA (o id embute o telefone). Serve só para
+    # marcar, na conversa do próprio usuário, as mensagens que saíram de um
+    # agendamento.
+    waha_message_hash: str | None = None
     sent_at_utc: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
-
-
-class CachedMessage(SQLModel, table=True):
-    """Cache local do histórico de conversas (o WEBJS é lento para buscar)."""
-
-    __tablename__ = "cached_messages"
-
-    # message_id continua sendo a PK (evita reconstruir a tabela toda num banco
-    # já com dados — SQLite não faz ALTER de chave primária). Uma colisão de
-    # message_id entre sessões WAHA de dois usuários diferentes é extremamente
-    # improvável (o WAHA já compõe o id a partir do chat); no pior caso uma
-    # linha de cache é sobrescrita, não um vazamento de dado entre contas —
-    # `user_id` é o que decide o que cada usuário VÊ nas consultas.
-    message_id: str = Field(primary_key=True)
-    # Nullable pelo mesmo motivo de Schedule.user_id (ver bloco de usuários acima).
-    user_id: str | None = Field(default=None, foreign_key="users.id", index=True)
-    chat_id: str = Field(index=True)
-    ts: int = Field(default=0, index=True)  # epoch em segundos
-    from_me: bool = False
-    body: str = ""
-    msg_type: str = "chat"
-    has_media: bool = False
-    ack_name: str | None = None
-    synced_at: datetime = Field(default_factory=utcnow)
 
 
 # --------------------------------------------------------------------------- #
@@ -338,16 +332,21 @@ class AutomationMessage(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     automation_id: str = Field(foreign_key="automations.id", index=True)
     position: int
-    text: str
+    # Mesmo esquema de `Schedule`: cifrado, e apagado quando nenhuma mensagem
+    # desta automação ainda vai sair (retention.py).
+    message_ciphertext: str | None = None
+    encryption_nonce: str | None = None
+    encryption_key_version: int | None = None
+    content_purged_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
 
 class AutomationSchedule(SQLModel, table=True):
     """Liga uma (`AutomationMessage`, destinatário) a um `Schedule` real —
-    uma linha por mensagem x destinatário. `recipient_chat_id` é uma cópia
-    imutável de `Schedule.chat_id` capturada na criação, só para permitir
-    agrupar/consultar sem precisar juntar com `schedules` toda vez."""
+    uma linha por mensagem x destinatário. `recipient_phone_hash` é o mesmo
+    HMAC de `Schedule.recipient_phone_hash`, só para agrupar os destinatários
+    de uma automação sem guardar o número."""
 
     __tablename__ = "automation_schedules"
 
@@ -355,7 +354,7 @@ class AutomationSchedule(SQLModel, table=True):
     automation_id: str = Field(foreign_key="automations.id", index=True)
     message_id: str = Field(foreign_key="automation_messages.id", index=True)
     schedule_id: str = Field(foreign_key="schedules.id", unique=True, index=True)
-    recipient_chat_id: str = Field(index=True)
+    recipient_phone_hash: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -409,8 +408,8 @@ class AppSetting(SQLModel, table=True):
 # Tabelas 100% novas, mesmo raciocínio do bloco de calendários acima: sem
 # Alembic, `create_all()` só cria o que ainda não existe, então um banco já
 # rodando ganha estas tabelas sozinho no próximo boot. As colunas `user_id`
-# adicionadas às tabelas pré-existentes (Schedule, CalendarConnection, Event,
-# CachedMessage) entram via ALTER TABLE em db.py — nullable, porque dados
+# adicionadas às tabelas pré-existentes (Schedule, CalendarConnection, Event)
+# entram via ALTER TABLE em db.py — nullable, porque dados
 # criados antes da autenticação existir não têm dono até alguém reivindicar
 # (ver `db.claim_orphan_data`).
 # --------------------------------------------------------------------------- #
@@ -436,7 +435,15 @@ class User(SQLModel, table=True):
     waha_session: str = Field(default_factory=_waha_session_default, unique=True, index=True)
     timezone: str | None = None  # fuso pessoal do usuário; None = usa settings.default_timezone (só p/ conta nova)
     email_verified: bool = False
+    # False = conta suspensa pelo admin (não entra; mensagens não saem).
     is_active: bool = True
+    # "user" | "admin". Só muda pelo CLI no servidor (nunca por tela/API):
+    # uma sessão de admin roubada não consegue criar outro admin.
+    role: str = Field(default="user", index=True)
+    last_login_at: datetime | None = None
+    # Última requisição autenticada (atualizada no máximo a cada 5 min).
+    last_activity_at: datetime | None = None
+    login_count: int = 0
     # None = ainda não terminou (nem pulou até o fim) o onboarding de primeiros
     # passos — ver `onboarding_service.py`. Coluna aditiva (ALTER TABLE em
     # db.py); contas que já existiam antes desta versão são retroativamente
@@ -465,26 +472,36 @@ class WhatsAppSession(SQLModel, table=True):
     session_name: str = Field(default_factory=_waha_session_default, unique=True, index=True)
     engine: str | None = None
     disconnected_at: datetime | None = None
+    # Quando a sessão foi deslogada e apagada no WAHA depois de desconectada
+    # (credenciais + dados locais do WhatsApp). NULL com `disconnected_at`
+    # preenchido = a limpeza ainda vai ser tentada (privacy_cleanup).
+    waha_purged_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
 
 class BillingProfile(SQLModel, table=True):
-    """Dados de cobrança — 1:1 com User, sempre opcional (nunca bloqueia o uso do app)."""
+    """Dados de faturamento — pedidos SÓ quando o usuário tenta contratar um
+    plano pago (nunca no cadastro). 1:1 com User. Tudo cifrado com a chave de
+    dados (privacy.seal_field), exceto a UF (usada em relatório) e os 2
+    últimos dígitos do CPF — o suficiente pro admin ver "***.***.***-12" sem
+    decifrar nada."""
 
     __tablename__ = "billing_profiles"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     user_id: str = Field(foreign_key="users.id", unique=True, index=True)
-    legal_name: str = ""
-    postal_code: str = ""
-    address: str = ""
-    number: str = ""
-    complement: str = ""
-    neighborhood: str = ""
-    city: str = ""
+    full_name_encrypted: str | None = None
+    cpf_encrypted: str | None = None
+    cpf_last2: str | None = None
+    phone_encrypted: str | None = None
+    postal_code_encrypted: str | None = None
+    address_encrypted: str | None = None
+    address_number_encrypted: str | None = None
+    address_complement_encrypted: str | None = None
+    city_encrypted: str | None = None
     state: str = ""
-    country: str = ""
+    country: str = "BR"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -544,14 +561,17 @@ class AuditEventType(str, enum.Enum):
     google_connected = "google_connected"
     google_disconnected = "google_disconnected"
     whatsapp_reconnected = "whatsapp_reconnected"
+    admin_reauth_required = "admin_reauth_required"
 
     def __str__(self) -> str:
         return self.value
 
 
 class LoginAuditEvent(SQLModel, table=True):
-    """Trilha de auditoria de segurança da conta — nunca guarda senha ou
-    token, só o suficiente para investigar um incidente (Parte 38)."""
+    """Trilha de auditoria de segurança da conta — nunca guarda senha, token
+    nem o e-mail digitado num login que falhou. IP e user-agent são apagados
+    depois de `login_ip_retention_days`; a linha inteira, depois de
+    `login_audit_retention_days` (privacy_cleanup)."""
 
     __tablename__ = "login_audit_events"
 
@@ -563,3 +583,179 @@ class LoginAuditEvent(SQLModel, table=True):
     ip_address: str | None = None
     user_agent: str | None = None
     created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+# --------------------------------------------------------------------------- #
+# Planos, assinaturas e pagamentos (v1.4).
+#
+# Faturamento só existe a partir de `Payment` com status "paid" vindo de um
+# gateway real — nada aqui é estimado a partir de "usuários x preço". O
+# Attena nunca guarda dado de cartão (número, CVV, validade): isso é do
+# gateway, quando existir.
+# --------------------------------------------------------------------------- #
+class BillingPeriod(str, enum.Enum):
+    monthly = "monthly"
+    yearly = "yearly"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class Plan(SQLModel, table=True):
+    """Um plano do catálogo — editável em Admin > Planos. Recursos e limites
+    são dados (JSON), não `if plano == ...` espalhado pelo código: ver
+    `plans.py`, a camada central que lê isto."""
+
+    __tablename__ = "plans"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    code: str = Field(unique=True, index=True)
+    name: str
+    description: str = ""
+    price_cents: int = 0
+    currency: str = "BRL"
+    billing_period: BillingPeriod = BillingPeriod.monthly
+    features_json: str = "[]"
+    limits_json: str = "{}"
+    is_active: bool = True  # pode ser contratado
+    is_public: bool = True  # aparece na página "Planos"
+    is_default: bool = False  # o plano de quem não tem assinatura (gratuito)
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class SubscriptionStatus(str, enum.Enum):
+    incomplete = "incomplete"  # upgrade pedido, aguardando o 1º pagamento
+    trialing = "trialing"
+    active = "active"
+    past_due = "past_due"
+    cancelled = "cancelled"
+    expired = "expired"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+# Estados em que a assinatura dá direito ao plano.
+ENTITLED_SUBSCRIPTION_STATUSES = (SubscriptionStatus.trialing, SubscriptionStatus.active, SubscriptionStatus.past_due)
+
+
+class Subscription(SQLModel, table=True):
+    __tablename__ = "subscriptions"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    plan_id: str = Field(foreign_key="plans.id", index=True)
+    status: SubscriptionStatus = Field(default=SubscriptionStatus.incomplete, index=True)
+    billing_cycle: BillingPeriod = BillingPeriod.monthly
+    amount_cents: int = 0
+    currency: str = "BRL"
+    started_at: datetime | None = None
+    current_period_start: datetime | None = None
+    current_period_end: datetime | None = None
+    cancelled_at: datetime | None = None
+    # "none" (sem gateway), "manual" (concedido pelo admin, nunca conta como
+    # receita) ou o nome do gateway.
+    provider: str = "none"
+    provider_subscription_id: str | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PaymentStatus(str, enum.Enum):
+    pending = "pending"
+    paid = "paid"  # confirmado pelo gateway — o único que conta como faturamento
+    failed = "failed"
+    refunded = "refunded"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class Payment(SQLModel, table=True):
+    __tablename__ = "payments"
+    __table_args__ = (UniqueConstraint("provider", "provider_payment_id", name="uq_payment_provider_id"),)
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    subscription_id: str | None = Field(default=None, foreign_key="subscriptions.id", index=True)
+    amount_cents: int
+    currency: str = "BRL"
+    status: PaymentStatus = Field(default=PaymentStatus.pending, index=True)
+    provider: str
+    provider_payment_id: str | None = None
+    paid_at: datetime | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------- #
+# CRM administrativo e auditoria (v1.4). Só METADADOS da relação comercial com
+# o cliente do Attena — nunca conteúdo de conversa/mensagem dele.
+# --------------------------------------------------------------------------- #
+class CrmProfile(SQLModel, table=True):
+    __tablename__ = "crm_profiles"
+
+    user_id: str = Field(foreign_key="users.id", primary_key=True)
+    status: str = "lead"  # ver admin/crm.py: CRM_STATUSES
+    updated_at: datetime = Field(default_factory=utcnow)
+    updated_by: str | None = Field(default=None, foreign_key="users.id")
+
+
+class CrmTag(SQLModel, table=True):
+    __tablename__ = "crm_tags"
+    __table_args__ = (UniqueConstraint("name", name="uq_crm_tag_name"),)
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    name: str
+    color: str = "accent"
+    created_at: datetime = Field(default_factory=utcnow)
+    created_by: str | None = Field(default=None, foreign_key="users.id")
+
+
+class CrmUserTag(SQLModel, table=True):
+    __tablename__ = "crm_user_tags"
+
+    user_id: str = Field(foreign_key="users.id", primary_key=True)
+    tag_id: str = Field(foreign_key="crm_tags.id", primary_key=True, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    created_by: str | None = Field(default=None, foreign_key="users.id")
+
+
+class CrmNote(SQLModel, table=True):
+    """Nota interna sobre o relacionamento comercial. Cifrada em repouso."""
+
+    __tablename__ = "crm_notes"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    body_encrypted: str
+    created_at: datetime = Field(default_factory=utcnow)
+    created_by: str | None = Field(default=None, foreign_key="users.id")
+    updated_at: datetime | None = None
+    updated_by: str | None = Field(default=None, foreign_key="users.id")
+
+
+class AdminAuditLog(SQLModel, table=True):
+    """Toda ação administrativa. `detail` é um resumo curto e NÃO sensível
+    (ex. {"from": "lead", "to": "ativo"}) — nunca o texto de uma nota, CPF etc."""
+
+    __tablename__ = "admin_audit_log"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    admin_id: str | None = Field(default=None, foreign_key="users.id", index=True)
+    action: str = Field(index=True)
+    target_type: str
+    target_id: str | None = Field(default=None, index=True)
+    detail: str | None = None
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class SchemaMigration(SQLModel, table=True):
+    """Migrações de dados já aplicadas (ver migrations.py)."""
+
+    __tablename__ = "schema_migrations"
+
+    version: str = Field(primary_key=True)
+    applied_at: datetime = Field(default_factory=utcnow)

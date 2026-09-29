@@ -99,13 +99,22 @@ def create_user_session(db: Session, user: User, request: Request) -> tuple[User
     return session, raw_token
 
 
+def cookie_secure() -> bool:
+    """Secure por padrão em produção; `SESSION_COOKIE_SECURE` força (ex.: teste servido por HTTPS)."""
+    if settings.session_cookie_secure is not None:
+        return settings.session_cookie_secure
+    return settings.app_env == "production"
+
+
 def set_session_cookie(response: Response, raw_token: str) -> None:
+    # HttpOnly (JS não lê), SameSite=Lax (não vai em POST de outro site — base
+    # da proteção CSRF junto com a checagem de Origin em main.py) e Secure em HTTPS.
     response.set_cookie(
         settings.session_cookie_name,
         raw_token,
         max_age=settings.session_ttl_days * 86400,
         httponly=True,
-        secure=settings.app_env == "production",
+        secure=cookie_secure(),
         samesite="lax",
         path="/",
     )
@@ -115,12 +124,17 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(settings.session_cookie_name, path="/")
 
 
-def _touch_session(db: Session, session: UserSession) -> None:
+def _touch_session(db: Session, session: UserSession, user: User | None = None) -> None:
+    """Atualiza "visto por último" da sessão e a última atividade do usuário
+    (base de "usuários ativos" no admin) — no máximo 1x a cada 5 min."""
     now = utcnow()
     if now - session.last_seen_at < _TOUCH_MIN_INTERVAL:
         return
     session.last_seen_at = now
     db.add(session)
+    if user is not None:
+        user.last_activity_at = now
+        db.add(user)
     db.commit()
 
 
@@ -181,7 +195,7 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_sessio
     user = db.get(User, session.user_id)
     if user is None or not user.is_active:
         return None
-    _touch_session(db, session)
+    _touch_session(db, session, user)
     return user
 
 

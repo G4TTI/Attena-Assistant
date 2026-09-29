@@ -1,5 +1,6 @@
 """API REST de conversas do WhatsApp — sempre de uma conexão (`WhatsAppSession`)
-do usuário autenticado, nunca a de outro."""
+do usuário autenticado, nunca a de outro. Só leitura ao vivo: nada do que passa
+por aqui é gravado pelo Attena (ver chatsvc.py)."""
 
 from __future__ import annotations
 
@@ -54,7 +55,7 @@ async def messages(
 ) -> dict:
     wa_session = _owned(db, session_id, current_user)
     hist = await get_history(
-        db, _waha(request), current_user.id, wa_session.session_name, chat,
+        _waha(request), current_user.id, wa_session.session_name, chat,
         app_settings.user_timezone(current_user), force=refresh,
     )
     return {
@@ -80,6 +81,7 @@ async def send(
     if not text:
         raise HTTPException(status_code=422, detail="Mensagem vazia.")
     try:
-        return await send_now(db, _waha(request), current_user.id, wa_session.session_name, chat, text)
+        message_id = await send_now(_waha(request), current_user.id, wa_session.session_name, chat, text)
+        return {"status": "sent", "id": message_id}
     except WahaError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

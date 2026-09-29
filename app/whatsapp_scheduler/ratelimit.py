@@ -45,3 +45,13 @@ def check_rate_limit(
 
 def record_attempt(key: str) -> None:
     _attempts.setdefault(key, []).append(time.monotonic())
+
+
+def prune() -> int:
+    """Esquece chaves sem tentativa recente (a chave de login tem IP + e-mail —
+    não fica na memória além da janela). Retorna quantas saíram."""
+    cutoff = time.monotonic() - max(settings.rate_limit_window_seconds, settings.admin_rate_limit_window_seconds)
+    stale = [key for key, stamps in _attempts.items() if not stamps or stamps[-1] < cutoff]
+    for key in stale:
+        _attempts.pop(key, None)
+    return len(stale)

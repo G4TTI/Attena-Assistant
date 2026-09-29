@@ -9,7 +9,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from .. import auth, whatsapp_service
+from .. import auth, plans, whatsapp_service
 from ..db import get_session
 from ..models import User, WhatsAppSession
 from ..waha import WahaClient, WahaError
@@ -52,6 +52,10 @@ def create_session(
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_api),
 ) -> dict:
+    try:
+        plans.check_limit(db, current_user, "whatsapp_connections")
+    except plans.PlanLimitReached as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     session = whatsapp_service.create_session(db, current_user.id, payload.name)
     return {"id": session.id, "name": session.name, "session_name": session.session_name}
 
@@ -65,9 +69,17 @@ async def session_status(
 ) -> dict:
     session = _owned(db, session_id, current_user)
     try:
-        return await _waha(request).get_session_status(session.session_name)
+        info = await _waha(request).get_session_status(session.session_name)
     except WahaError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Só o que a tela precisa — nunca a `config` da sessão (webhooks, proxy, chaves).
+    me = info.get("me") if isinstance(info.get("me"), dict) else None
+    return {
+        "id": session.id,
+        "name": session.name,
+        "status": info.get("status"),
+        "me": {"id": me.get("id"), "pushName": me.get("pushName")} if me else None,
+    }
 
 
 @router.get("/{session_id}/qr")
@@ -116,9 +128,12 @@ def rename_session(
 
 
 @router.delete("/{session_id}")
-def disconnect_session(
-    session_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_api)
+async def disconnect_session(
+    session_id: str,
+    request: Request,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_api),
 ) -> dict:
-    if not whatsapp_service.disconnect_session(db, session_id, current_user.id):
+    if not await whatsapp_service.disconnect_and_purge(db, _waha(request), session_id, current_user.id):
         raise HTTPException(status_code=404, detail="WhatsApp não encontrado.")
     return {"status": "disconnected", "id": session_id}

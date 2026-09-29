@@ -6,11 +6,15 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+from urllib.parse import urlparse
+
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlmodel import Session
 
-from . import app_settings, auth, calendar_service, onboarding_service, service, whatsapp_service
+from . import app_settings, auth, calendar_service, log_sanitizer, onboarding_service, plans, privacy, service, whatsapp_service
+from .admin import crm as admin_crm
+from .admin.security import AdminReauthRequired
 from .api import calendar as calendar_api
 from .api import chats as chats_api
 from .api import schedules as schedules_api
@@ -19,21 +23,38 @@ from .auth import NotAuthenticated
 from .calendar_sync import CalendarSyncService
 from .config import settings
 from .db import get_engine, init_db
+from .retention import PrivacyCleanupService
 from .scheduler import SchedulerService
 from .time_sync import ClockSyncService
 from .waha import WahaClient
 from .web import routes as web_routes
-from .web import auth_routes, calendar_routes, dashboard_routes, onboarding_routes, settings_routes, whatsapp_routes
+from .web import (
+    admin_routes,
+    auth_routes,
+    billing_routes,
+    calendar_routes,
+    dashboard_routes,
+    onboarding_routes,
+    settings_routes,
+    whatsapp_routes,
+)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
 )
+# Todo handler (raiz + uvicorn) passa pelo sanitizador: nenhum telefone, token,
+# cookie, QR ou corpo de mensagem chega ao log mesmo que alguém o passe por engano.
+log_sanitizer.install()
 logger = logging.getLogger("whatsapp_scheduler")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_sanitizer.install()  # de novo: o uvicorn pode ter trocado os handlers depois do import
+    # Sem as chaves de dados o app NÃO sobe (falha segura): não há como gravar
+    # mensagem programada sem cifrá-la, nem ler as já cifradas.
+    privacy.check_configuration()
     init_db()
     clock_sync = ClockSyncService()
     # Sincroniza o relógio com a internet ANTES de tudo o mais — o relógio do
@@ -50,26 +71,32 @@ async def lifespan(app: FastAPI):
         service.backfill_groups(db)
         onboarding_service.migrate_legacy_users(db)
         app_settings.load_from_db(db)
+        plans.seed_default_plans(db)
+        admin_crm.seed_default_tags(db)
     waha = WahaClient(settings.waha_base_url, settings.waha_api_key, settings.request_timeout)
     scheduler = SchedulerService(waha)
     calendar_sync = CalendarSyncService()
+    privacy_cleanup = PrivacyCleanupService(waha)
     app.state.waha = waha
     app.state.scheduler = scheduler
     app.state.calendar_sync = calendar_sync
     app.state.clock_sync = clock_sync
+    app.state.privacy_cleanup = privacy_cleanup
     await scheduler.start()
     await calendar_sync.start()
+    await privacy_cleanup.start()
     logger.info("app pronto — WAHA em %s, sessão '%s'", settings.waha_base_url, settings.waha_session)
     try:
         yield
     finally:
+        await privacy_cleanup.stop()
         await calendar_sync.stop()
         await scheduler.stop()
         await clock_sync.stop()
         await waha.aclose()
 
 
-app = FastAPI(title="Attena Assistant", version="1.3.4", lifespan=lifespan)
+app = FastAPI(title="Attena Assistant", version="1.4.0", lifespan=lifespan)
 app.include_router(auth_routes.router)
 app.include_router(schedules_api.router)
 app.include_router(session_api.router)
@@ -81,6 +108,8 @@ app.include_router(settings_routes.router)
 app.include_router(dashboard_routes.router)
 app.include_router(whatsapp_routes.router)
 app.include_router(onboarding_routes.router)
+app.include_router(billing_routes.router)
+app.include_router(admin_routes.router)
 
 
 @app.exception_handler(NotAuthenticated)
@@ -88,6 +117,18 @@ async def _not_authenticated_handler(request: Request, exc: NotAuthenticated):
     from urllib.parse import quote
 
     return RedirectResponse(url="/login?next=" + quote(exc.next_path), status_code=303)
+
+
+@app.exception_handler(AdminReauthRequired)
+async def _admin_reauth_handler(request: Request, exc: AdminReauthRequired):
+    from urllib.parse import quote
+
+    resp = RedirectResponse(
+        url="/login?next=" + quote(exc.next_path) + "&ok=" + quote("Por segurança, entre de novo para acessar a administração."),
+        status_code=303,
+    )
+    auth.clear_session_cookie(resp)
+    return resp
 
 
 # CSP liberada só para o que a app de fato usa hoje: htmx via CDN, estilo/script
@@ -113,6 +154,35 @@ _CSP = (
 )
 
 
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _allowed_hosts(request: Request) -> set[str]:
+    hosts = {h.strip().lower() for h in (request.headers.get("host"), request.headers.get("x-forwarded-host")) if h}
+    for origin in settings.allowed_origins.split(","):
+        netloc = urlparse(origin.strip()).netloc
+        if netloc:
+            hosts.add(netloc.lower())
+    return hosts
+
+
+@app.middleware("http")
+async def _origin_check(request: Request, call_next):
+    """CSRF (defesa em profundidade, além do cookie SameSite=Lax e do token do
+    /admin): um POST vindo de OUTRO site traz `Origin` (ou `Referer`) de outro
+    host — recusado. Clientes sem esses headers (API, curl) não são navegador e
+    não carregam o cookie de outro site, então passam."""
+    if request.method in _UNSAFE_METHODS and not request.url.path.startswith("/billing/webhook/"):
+        source = request.headers.get("origin") or request.headers.get("referer")
+        if source and source != "null":
+            netloc = urlparse(source).netloc.lower()
+            if netloc and netloc not in _allowed_hosts(request):
+                return PlainTextResponse("Origem da requisição não permitida.", status_code=403)
+        elif source == "null":
+            return PlainTextResponse("Origem da requisição não permitida.", status_code=403)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -120,6 +190,10 @@ async def _security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = _CSP
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path.startswith(("/admin", "/planos", "/configuracoes", "/ui/", "/api/")):
+        # Telas com dado pessoal: não ficam em cache de navegador/proxy.
+        response.headers["Cache-Control"] = "no-store"
     if settings.app_env == "production":
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
@@ -137,7 +211,7 @@ def healthz() -> dict:
 # onboarding orienta, nunca bloqueia o uso do app).
 _ONBOARDING_EXEMPT_PREFIXES = (
     "/login", "/cadastro", "/esqueci-senha", "/redefinir-senha", "/verificar-email",
-    "/logout", "/onboarding", "/healthz", "/api/", "/ui/",
+    "/logout", "/onboarding", "/healthz", "/api/", "/ui/", "/admin", "/billing/",
 )
 
 

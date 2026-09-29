@@ -222,5 +222,6 @@ def reenviar_verificacao(
 ) -> RedirectResponse:
     auth_service.resend_email_verification(db, current_user)
     return RedirectResponse(
-        url="/configuracoes?ok=" + quote("Link de verificação reenviado (veja o log do servidor)."), status_code=303
+        url="/configuracoes?ok=" + quote("O envio de e-mails ainda não está configurado. Peça o link de verificação ao suporte."),
+        status_code=303,
     )

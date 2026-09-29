@@ -82,6 +82,11 @@ class CalendarProvider(ABC):
     async def refresh(self, tokens: OAuthTokens) -> OAuthTokens:
         """Renova o access token usando o refresh token salvo."""
 
+    async def revoke(self, refresh_token: str) -> None:
+        """Revoga o acesso no provedor quando o usuário desconecta a conta.
+        Opcional (padrão: nada) — os tokens locais já são apagados de qualquer forma."""
+        return None
+
     async def get_account_identifier(self, tokens: OAuthTokens) -> str | None:
         """E-mail/identificador da conta conectada, só para exibição na UI.
 

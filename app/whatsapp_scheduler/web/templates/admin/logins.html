@@ -1,0 +1,44 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import dt, pager with context %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Logins</h1>
+    <p class="sub">Entradas na plataforma. IP e navegador ficam só pelo prazo curto de segurança e não aparecem aqui.</p>
+  </div>
+</div>
+
+<form class="card card-pad filters-bar" method="get" action="/admin/logins" role="search">
+  <div class="field">
+    <label for="f_result">Resultado</label>
+    <select id="f_result" name="result">
+      <option value="">Todos</option>
+      <option value="success" {{ 'selected' if filters.result == 'success' }}>Sucesso</option>
+      <option value="failed" {{ 'selected' if filters.result == 'failed' }}>Falhou</option>
+    </select>
+  </div>
+  <div class="field grow"><label for="f_q">Usuário</label><input id="f_q" name="q" type="search" value="{{ filters.q }}" placeholder="Nome ou e-mail"></div>
+  <div class="filters-actions"><button type="submit">Filtrar</button><a class="ghost-link" href="/admin/logins">Limpar</a></div>
+</form>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Nome</th><th>E-mail</th><th>Horário</th><th>Resultado</th></tr></thead>
+      <tbody>
+        {% for l in rows %}
+        <tr>
+          <td>{% if l.user_id %}<a href="/admin/usuarios/{{ l.user_id }}">{{ l.user_name }}</a>{% else %}<span class="muted">conta inexistente</span>{% endif %}</td>
+          <td>{{ l.user_email or '—' }}</td>
+          <td>{{ dt(l.at) }}</td>
+          <td>{% if l.result == 'success' %}<span class="pill sent">sucesso</span>{% else %}<span class="pill failed">falhou</span>{% endif %}</td>
+        </tr>
+        {% else %}<tr><td colspan="4"><div class="empty-state"><strong>Nenhum login encontrado</strong></div></td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-ft">{{ pager(filters.page, pages, total, '/admin/logins', filters.as_params(page=None)) }}</div>
+</div>
+
+{% endblock %}

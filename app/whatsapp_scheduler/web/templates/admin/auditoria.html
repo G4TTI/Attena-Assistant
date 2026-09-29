@@ -1,0 +1,43 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import dt, pager with context %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Auditoria</h1>
+    <p class="sub">Toda ação administrativa: quem, o quê, sobre quem e quando. Sem conteúdo sensível.</p>
+  </div>
+</div>
+
+<form class="card card-pad filters-bar" method="get" action="/admin/auditoria">
+  <div class="field grow">
+    <label for="f_action">Ação</label>
+    <select id="f_action" name="action">
+      <option value="">Todas</option>
+      {% for key, label in actions.items() %}<option value="{{ key }}" {{ 'selected' if filters.action == key }}>{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="filters-actions"><button type="submit">Filtrar</button><a class="ghost-link" href="/admin/auditoria">Limpar</a></div>
+</form>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Quando</th><th>Admin</th><th>Ação</th><th>Alvo</th><th>Detalhe</th></tr></thead>
+      <tbody>
+        {% for a in rows %}
+        <tr>
+          <td>{{ dt(a.at) }}</td>
+          <td>{{ a.admin_name or '—' }}</td>
+          <td>{{ a.action_label }}</td>
+          <td>{% if a.target_type == 'user' and a.target_id %}<a href="/admin/usuarios/{{ a.target_id }}">{{ a.target_label or a.target_id[:8] }}</a>{% else %}{{ a.target_type }}{% if a.target_id %} <code>{{ a.target_id[:8] }}</code>{% endif %}{% endif %}</td>
+          <td>{% if a.detail %}{% for k, v in a.detail.items() %}<span class="cell-sub">{{ k }}: {{ v }}</span>{% endfor %}{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% else %}<tr><td colspan="5"><div class="empty-state"><strong>Nenhuma ação registrada</strong></div></td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-ft">{{ pager(filters.page, pages, total, '/admin/auditoria', filters.as_params(page=None)) }}</div>
+</div>
+
+{% endblock %}

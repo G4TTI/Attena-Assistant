@@ -25,7 +25,7 @@
         {% endif %}
         <div class="sc-main">
           <div class="sc-time">{{ icon('clock', 15) }} {{ g.when_local.strftime('%d/%m/%Y') }} · {{ g.when_local.strftime('%H:%M') }}</div>
-          <div class="sc-name">{{ g.recipient }}{% if g.group.chat_id.endswith('@g.us') %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}</div>
+          <div class="sc-name">{{ g.recipient }}{% if g.is_group_chat %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}</div>
           <div class="sc-lines">
             <span>{{ g.whatsapp_label }}</span>
             <span>{{ g.message_count }} mensage{{ 'm' if g.message_count == 1 else 'ns' }}{% if g.is_recurring %} · repete <code>{{ g.recurrence }}</code>{% endif %}</span>

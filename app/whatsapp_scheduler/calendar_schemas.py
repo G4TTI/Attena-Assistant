@@ -61,7 +61,8 @@ class AutomationRead(BaseModel):
     offset_direction: str
     custom_interval: str | None = None
     recipients: list[str]
-    messages: list[str]
+    # None = conteúdo já expurgado (a automação terminou — ver retention.py).
+    messages: list[str | None]
 
     @classmethod
     def of(cls, item: dict) -> "AutomationRead":
@@ -77,7 +78,7 @@ class AutomationRead(BaseModel):
             offset_direction=str(automation.offset_direction),
             custom_interval=automation.custom_interval,
             recipients=item["recipients"],
-            messages=[row["message"].text for row in item["messages"]],
+            messages=[row["message"]["text"] for row in item["messages"]],
         )
 
 

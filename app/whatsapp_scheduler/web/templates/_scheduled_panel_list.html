@@ -6,7 +6,7 @@
    Seleção em massa: as caixas (.bulk-item) pertencem ao formulário #smp-bulk do rodapé do painel
    (atributo form=), que fica fora desta lista; o JS de base.html guarda a seleção e a reaplica a
    cada troca da lista, e a atualização periódica pausa enquanto houver algo marcado. #}
-{% from "_components.html" import status_icon %}
+{% from "_components.html" import status_icon, message_text %}
 {% set state = panel.params() %}
 <div id="smp-list" class="smp-list"
      hx-get="/ui/chats/{{ session_id }}/scheduled/panel/list?{{ state | urlencode }}"
@@ -55,10 +55,10 @@
       {% for m in g.messages %}
       <li class="smp-msg {{ m.status }}" data-status="{{ m.status }}">
         {% if panel.selectable %}
-        <span class="smp-check">{% if m.can_cancel %}<label class="bulk-check"><input type="checkbox" class="bulk-item" name="ids" value="{{ m.schedule.id }}" form="smp-bulk" data-hold-poll{% if g.can_cancel_all %} data-bulk-group="{{ g.id }}"{% endif %} aria-label="Selecionar a mensagem {{ m.position + 1 }}: {{ m.text | truncate(60) }}"></label>{% endif %}</span>
+        <span class="smp-check">{% if m.can_cancel %}<label class="bulk-check"><input type="checkbox" class="bulk-item" name="ids" value="{{ m.schedule.id }}" form="smp-bulk" data-hold-poll{% if g.can_cancel_all %} data-bulk-group="{{ g.id }}"{% endif %} aria-label="Selecionar a mensagem {{ m.position + 1 }}{% if m.text %}: {{ m.text | truncate(60) }}{% endif %}"></label>{% endif %}</span>
         {% endif %}
         <span class="msg-num" aria-label="Mensagem {{ m.position + 1 }}">{{ m.position + 1 }}</span>
-        <span class="msg-text">{{ m.text }}</span>
+        <span class="msg-text">{{ message_text(m.text, m.status) }}</span>
         <div class="msg-meta">
           <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
           <span class="when" title="{{ m.when_local.strftime('%d/%m/%Y %H:%M:%S') }}">{{ m.when_local.strftime('%d/%m/%Y · ' ~ g.time_format) }}</span>

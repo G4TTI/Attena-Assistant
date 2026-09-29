@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from sqlmodel import Session, col, select
 
+from tests.conftest import chat_of, recipient_hash_for, text_of
 from whatsapp_scheduler import app_settings as app_settings_module
 from whatsapp_scheduler import calendar_service
 from whatsapp_scheduler.calendar_providers.base import CalendarProviderError
@@ -173,7 +174,7 @@ def test_create_event_automation_multiple_recipients_creates_one_schedule_each(t
         automation_id = automation.id
     schedules = schedules_of_automation(automation_id)
     assert len(schedules) == 2
-    assert {s.chat_id for s in schedules} == {"5511999998888@c.us", "5511988887777@c.us"}
+    assert {chat_of(s) for s in schedules} == {"5511999998888@c.us", "5511988887777@c.us"}
 
 
 def test_create_event_automation_rejects_unknown_event(test_user):
@@ -286,7 +287,7 @@ def test_multi_message_automation_chains_schedules_by_recipient_with_dependency(
         by_recipient: dict[str, list[tuple[int, str]]] = {}
         for link in links:
             message = db.get(AutomationMessage, link.message_id)
-            by_recipient.setdefault(link.recipient_chat_id, []).append((message.position, link.schedule_id))
+            by_recipient.setdefault(link.recipient_phone_hash, []).append((message.position, link.schedule_id))
 
         for chat_id, entries in by_recipient.items():
             entries.sort(key=lambda t: t[0])
@@ -786,11 +787,12 @@ def test_update_event_automation_does_not_leave_ghost_row_and_keeps_old_schedule
 
         old_sched = db.get(Schedule, old_schedule_id)
         assert old_sched.enabled is False
-        assert old_sched.text == "mensagem antiga"  # nunca mutado
+        # v1.4: a mensagem cancelada pela edição não é reescrita — seu conteúdo é expurgado.
+        assert text_of(old_sched) is None and old_sched.content_purged_at is not None
 
         new_sched = db.get(Schedule, new_schedule_id)
         assert new_sched.enabled is True
-        assert new_sched.text == "mensagem nova"
+        assert text_of(new_sched) == "mensagem nova"
 
 
 # --------------------------------------------------------------------------- #
@@ -814,7 +816,9 @@ def test_create_event_automation_is_idempotent_for_identical_immediate_resubmit(
     with Session(get_engine()) as db:
         automations = db.exec(select(Automation).where(col(Automation.event_id) == event.id)).all()
         assert len(automations) == 1
-        schedules = db.exec(select(Schedule).where(col(Schedule.chat_id) == "5511999998888@c.us")).all()
+        schedules = db.exec(
+            select(Schedule).where(col(Schedule.recipient_phone_hash) == recipient_hash_for(test_user.id, "5511999998888@c.us"))
+        ).all()
         assert len(schedules) == 1
 
 
@@ -904,11 +908,11 @@ def test_migrate_legacy_automations_is_idempotent_and_preserves_schedule(test_us
         messages = db.exec(
             select(AutomationMessage).where(col(AutomationMessage.automation_id) == automations[0].id)
         ).all()
-        assert [m.text for m in messages] == ["legado"]
+        assert [text_of(m) for m in messages] == ["legado"]
 
         # o Schedule original nunca é tocado pela migração
         original_schedule = db.get(Schedule, schedule_id)
-        assert original_schedule.text == "legado"
+        assert text_of(original_schedule) == "legado"
 
 
 # --------------------------------------------------------------------------- #

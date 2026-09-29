@@ -1,0 +1,92 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import privacy_note with context %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Visão geral</h1>
+    <p class="sub">Operação da plataforma Attena — usuários, conexões, envios e faturamento real.</p>
+  </div>
+  <div class="meta-live"><span>Atualizado {{ now | localtime(admin_tz) }}</span></div>
+</div>
+
+{{ privacy_note() }}
+
+<h2 class="section-label admin-section-title">Usuários</h2>
+<div class="admin-cards">
+  <a class="stat-card stat-link" href="/admin/usuarios">
+    <span class="stat-label">Total de usuários</span>
+    <span class="stat-value">{{ m.total_users }}</span>
+    <span class="stat-sub">{{ m.active_accounts }} ativos · {{ m.suspended_accounts }} suspensos</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/usuarios?activity=24h">
+    <span class="stat-label">Usuários ativos</span>
+    <span class="stat-value">{{ m.active_24h }}</span>
+    <span class="stat-sub">24h · {{ m.active_7d }} em 7 dias · {{ m.active_30d }} em 30 dias</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/usuarios?activity=online">
+    <span class="stat-label">Online / recentes</span>
+    <span class="stat-value">{{ m.online }}</span>
+    <span class="stat-sub">Atividade nos últimos 15 min</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/usuarios?signup=7d">
+    <span class="stat-label">Novos usuários</span>
+    <span class="stat-value">{{ m.new_users_7d }}</span>
+    <span class="stat-sub">7 dias · {{ m.new_users_30d }} em 30 dias</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/logins">
+    <span class="stat-label">Logins recentes</span>
+    <span class="stat-value">{{ m.logins_24h }}</span>
+    <span class="stat-sub">Últimas 24h{% if m.failed_logins_24h %} · {{ m.failed_logins_24h }} falharam{% endif %}</span>
+  </a>
+  <div class="stat-card">
+    <span class="stat-label">WhatsApps conectados</span>
+    <span class="stat-value">{% if live.available %}{{ live.working }}{% else %}—{% endif %}</span>
+    <span class="stat-sub">{{ m.whatsapps_configured }} configurados{% if not live.available %} · WAHA indisponível{% endif %}</span>
+  </div>
+</div>
+
+<h2 class="section-label admin-section-title">Envios</h2>
+<div class="admin-cards">
+  <a class="stat-card stat-link" href="/admin/agendamentos?status=pending">
+    <span class="stat-label">Mensagens agendadas</span>
+    <span class="stat-value">{{ m.scheduled_pending }}</span>
+    <span class="stat-sub">Ativas (ainda vão sair)</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/agendamentos?status=sent">
+    <span class="stat-label">Mensagens enviadas</span>
+    <span class="stat-value">{{ m.sent_total }}</span>
+    <span class="stat-sub">{{ m.sent_24h }} nas últimas 24h</span>
+  </a>
+  <a class="stat-card stat-link {{ 'stat-warn' if m.errors_24h }}" href="/admin/agendamentos?status=failed">
+    <span class="stat-label">Mensagens com erro</span>
+    <span class="stat-value">{{ m.errors_total }}</span>
+    <span class="stat-sub">{{ m.errors_24h }} nas últimas 24h</span>
+  </a>
+</div>
+
+<h2 class="section-label admin-section-title">Faturamento</h2>
+<div class="admin-cards">
+  <a class="stat-card stat-link" href="/admin/faturamento">
+    <span class="stat-label">Assinaturas ativas</span>
+    <span class="stat-value">{{ m.finance.active_subscriptions }}</span>
+    <span class="stat-sub">Pagas{% if m.finance.manual_subscriptions %} · {{ m.finance.manual_subscriptions }} cortesia{% endif %}</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/faturamento">
+    <span class="stat-label">MRR</span>
+    <span class="stat-value">{{ m.finance.mrr_cents | brl }}</span>
+    <span class="stat-sub">Só assinaturas pagas</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/faturamento">
+    <span class="stat-label">Faturamento total</span>
+    <span class="stat-value">{{ m.finance.revenue_total_cents | brl }}</span>
+    <span class="stat-sub">{% if m.finance.has_payments %}Pagamentos confirmados{% else %}Nenhum pagamento registrado{% endif %}</span>
+  </a>
+  <a class="stat-card stat-link" href="/admin/faturamento">
+    <span class="stat-label">Faturamento no mês</span>
+    <span class="stat-value">{{ m.finance.revenue_month_cents | brl }}</span>
+    <span class="stat-sub">{% if not m.finance.gateway_configured %}Pagamento ainda não configurado{% else %}Mês corrente{% endif %}</span>
+  </a>
+</div>
+
+{% endblock %}

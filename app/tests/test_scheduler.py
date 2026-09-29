@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 
 import pytest
+
+from tests.conftest import make_schedule as seal
 from sqlmodel import Session, select
 
 from whatsapp_scheduler.db import get_engine
@@ -23,9 +25,8 @@ def frozen_clock(monkeypatch):
 def make_schedule(*, minutes_from_now: float, recurrence=None, max_attempts=3) -> str:
     first_run_local = utc_to_local(FROZEN + timedelta(minutes=minutes_from_now), TZ)
     with Session(get_engine()) as db:
-        s = Schedule(
+        s = seal(
             session="default",
-            recipient_input="+55 11 99999-8888",
             chat_id="5511999998888@c.us",
             text="olá",
             timezone=TZ,
@@ -60,7 +61,7 @@ async def test_due_dispatch_is_sent(fake_waha, frozen_clock):
     (d,) = dispatches_of(sid)
     assert d.status == DispatchStatus.sent
     assert d.sent_at_utc == FROZEN
-    assert d.waha_message_id
+    assert d.waha_message_hash  # só o HMAC do id do WAHA (que embute o telefone)
 
 
 async def test_future_dispatch_not_sent(fake_waha, frozen_clock):
@@ -84,7 +85,7 @@ async def test_session_not_working_defers_without_consuming_attempt(fake_waha, f
     (d,) = dispatches_of(sid)
     assert d.status == DispatchStatus.pending
     assert d.attempts == 0
-    assert "não está pronta" in d.last_error
+    assert "não está conectado" in d.last_error and d.failure_code == "session_not_ready"
     assert d.scheduled_at_utc == FROZEN + timedelta(seconds=60)
 
 
@@ -98,7 +99,8 @@ async def test_send_error_retries_with_backoff(fake_waha, frozen_clock):
     assert d.status == DispatchStatus.pending
     assert d.attempts == 1
     assert d.scheduled_at_utc == FROZEN + timedelta(seconds=60)
-    assert "boom" in d.last_error
+    # Erro guardado é um código + texto genérico: nunca o corpo da resposta do WAHA.
+    assert d.failure_code == "waha_unreachable" and "boom" not in d.last_error
 
 
 async def test_send_error_exhausts_to_failed(fake_waha, frozen_clock):

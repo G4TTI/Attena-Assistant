@@ -1,0 +1,68 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import dt, pager, dispatch_pill, privacy_note with context %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Agendamentos</h1>
+    <p class="sub">Saúde operacional dos envios. Só metadados: sem telefone, conteúdo ou nome de conversa.</p>
+  </div>
+</div>
+
+<div class="admin-cards">
+  <a class="stat-card stat-link" href="/admin/agendamentos?status=pending"><span class="stat-label">Pendentes</span><span class="stat-value">{{ summary.pending }}</span><span class="stat-sub">Aguardando horário/envio</span></a>
+  <a class="stat-card stat-link" href="/admin/agendamentos?status=sent"><span class="stat-label">Executados</span><span class="stat-value">{{ summary.sent }}</span><span class="stat-sub">Confirmados pelo WhatsApp</span></a>
+  <a class="stat-card stat-link {{ 'stat-warn' if summary.failed }}" href="/admin/agendamentos?status=failed"><span class="stat-label">Falhos</span><span class="stat-value">{{ summary.failed }}</span><span class="stat-sub">Falha definitiva ou ignorados</span></a>
+  <a class="stat-card stat-link" href="/admin/agendamentos?status=canceled"><span class="stat-label">Cancelados</span><span class="stat-value">{{ summary.canceled }}</span><span class="stat-sub">Pelo usuário ou por desconexão</span></a>
+</div>
+
+<form class="card card-pad filters-bar" method="get" action="/admin/agendamentos" role="search">
+  <div class="field">
+    <label for="f_status">Status</label>
+    <select id="f_status" name="status">
+      <option value="">Todos</option>
+      <option value="pending" {{ 'selected' if filters.status == 'pending' }}>Pendentes</option>
+      <option value="sent" {{ 'selected' if filters.status == 'sent' }}>Executados</option>
+      <option value="failed" {{ 'selected' if filters.status == 'failed' }}>Falhos</option>
+      <option value="canceled" {{ 'selected' if filters.status == 'canceled' }}>Cancelados</option>
+    </select>
+  </div>
+  <div class="field grow">
+    <label for="f_q">Usuário</label>
+    <input id="f_q" name="q" type="search" value="{{ filters.q }}" placeholder="Nome ou e-mail do cliente">
+  </div>
+  <div class="field"><label for="f_de">De</label><input id="f_de" name="de" type="date" value="{{ filters.date_from }}"></div>
+  <div class="field"><label for="f_ate">Até</label><input id="f_ate" name="ate" type="date" value="{{ filters.date_to }}"></div>
+  <div class="filters-actions">
+    <button type="submit">Filtrar</button>
+    <a class="ghost-link" href="/admin/agendamentos">Limpar</a>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>ID</th><th>Usuário</th><th>Data programada</th><th>Status</th><th>WhatsApp</th><th class="num">Tentativas</th><th>Erro técnico</th></tr></thead>
+      <tbody>
+        {% for d in rows %}
+        <tr>
+          <td><code>{{ d.id[:8] }}</code></td>
+          <td>{% if d.user_id %}<a href="/admin/usuarios/{{ d.user_id }}">{{ d.user_name }}</a><span class="cell-sub">{{ d.user_email }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{{ dt(d.scheduled_at) }}{% if d.sent_at %}<span class="cell-sub">enviado {{ dt(d.sent_at) }}</span>{% endif %}</td>
+          <td>{{ dispatch_pill(d.status) }}</td>
+          <td>{% if d.whatsapp_id %}{{ d.whatsapp_label }}<span class="cell-sub"><code>{{ d.whatsapp_id[:8] }}</code></span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="num">{{ d.attempts }}</td>
+          <td>{% if d.failure_code %}<strong>{{ d.failure_label }}</strong><span class="cell-sub"><code>{{ d.failure_code }}</code>{% if d.error %} · {{ d.error }}{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7"><div class="empty-state"><strong>Nenhum envio encontrado</strong><p>Ajuste os filtros.</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-ft">{{ pager(filters.page, pages, total, '/admin/agendamentos', filters.as_params(page=None)) }}</div>
+</div>
+
+{{ privacy_note() }}
+
+{% endblock %}

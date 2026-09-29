@@ -12,7 +12,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
-from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
+from tests.conftest import (
+    FakeWaha,
+    make_automation_message,
+    make_schedule,
+    recipient_hash_for,
+    register_and_login,
+    text_of,
+    whatsapp_session_id,
+)
 from whatsapp_scheduler import schedule_views, timing
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.db import get_engine
@@ -235,7 +243,9 @@ def test_10_only_canceled_and_no_filter(client):
     _seq(client, 5)
     _cancel(client, _seq(client, 2, prefix="cancelada"))
     html = _panel_list(client, canceled=1)
-    assert _items(html) == ["canceled"] * 2 and _texts(html) == ["cancelada 1", "cancelada 2"]
+    # v1.4: cancelada = conteúdo expurgado. O painel mostra que ela existiu, nunca o texto.
+    assert _items(html) == ["canceled"] * 2 and _texts(html) == []
+    assert html.count("Conteúdo apagado no cancelamento") == 2 and "cancelada 1" not in html
     assert "Cancelada" in html
     assert 'class="sched-cancel"' not in html and "Cancelar todas" not in html  # cancelada não cancela de novo
     empty = _panel_list(client)
@@ -296,6 +306,8 @@ def test_12_sent_message_leaves_the_count_and_appears_in_history(client):
     assert "(5)" in _summary_button(after) and _bubbles(after) == []
     assert int(re.search(r'data-last-sent="(\d+)"', after).group(1)) > 0  # a tela recarrega o histórico
     assert "agora 1" not in _panel_list(client, scheduled=1, canceled=1)  # enviada não vai pro painel
+    # O histórico vem do WhatsApp (nada é guardado): a mensagem enviada aparece lá, marcada como agendada.
+    client.waha.messages = [{"id": client.waha.last_id, "timestamp": 1_760_000_000, "fromMe": True, "body": "agora 1"}]
     hist = client.get(f"/ui/chats/{client.sid}/messages", params={"chat": LEO}).text
     assert "agora 1" in hist and hist.count("agendada") == 1
 
@@ -338,7 +350,11 @@ def test_panel_orders_pending_first_then_canceled_most_recent_first(client):
     _seq(client, 1, start=FUTURE + timedelta(days=5), prefix="depois")
     _seq(client, 1, start=FUTURE, prefix="antes")
     html = _panel_list(client, scheduled=1, canceled=1)
-    assert _texts(html) == ["antes 1", "depois 1", "recente 1", "velha 1"]
+    assert _texts(html) == ["antes 1", "depois 1"]  # canceladas: sem texto (expurgado)
+    assert _items(html) == ["scheduled", "scheduled", "canceled", "canceled"]
+    recent = html.index((FUTURE - timedelta(days=1)).strftime("%d/%m/%Y"))
+    old = html.index((FUTURE - timedelta(days=30)).strftime("%d/%m/%Y"))
+    assert recent < old  # canceladas: a mais recente primeiro
 
 
 def test_panel_pages_whole_sequences_and_keeps_the_state_on_refresh(client):
@@ -372,11 +388,11 @@ def test_calendar_automation_messages_follow_the_same_rule(client):
             messages=[f"lembrete {i}" for i in range(1, 6)], start=FUTURE, timezone=TZ, source=ScheduleSource.calendar,
         )
         for s in schedules:
-            message = AutomationMessage(automation_id=automation.id, position=s.position, text=s.text)
+            message = make_automation_message(automation_id=automation.id, position=s.position, text=text_of(s))
             db.add(message)
             db.flush()
             db.add(AutomationSchedule(automation_id=automation.id, message_id=message.id, schedule_id=s.id,
-                                      recipient_chat_id=LEO))
+                                      recipient_phone_hash=recipient_hash_for(client.user.id, LEO)))
         db.commit()
     assert "(5)" in _summary_button(_conversation(client))
     panel = _panel(client)
@@ -408,8 +424,8 @@ def test_sql_status_clauses_match_message_status(db, test_user):
         (False, [D.failed, D.canceled]), (True, [D.canceled]),
     ]
     for i, (enabled, statuses) in enumerate(cases):
-        schedule = Schedule(user_id=test_user.id, session="s", recipient_input=LEO, chat_id=LEO, text=f"c{i}",
-                            timezone=TZ, first_run_local=FUTURE, enabled=enabled)
+        schedule = make_schedule(user_id=test_user.id, session="s", chat_id=LEO, text=f"c{i}",
+                                 timezone=TZ, first_run_local=FUTURE, enabled=enabled)
         db.add(schedule)
         db.flush()
         for j, status in enumerate(statuses):
@@ -423,8 +439,8 @@ def test_sql_status_clauses_match_message_status(db, test_user):
     for schedule in db.exec(select(Schedule)).all():
         dispatches = list(db.exec(select(Dispatch).where(col(Dispatch.schedule_id) == schedule.id)).all())
         status, _ = schedule_views.message_status(schedule, dispatches)
-        assert (schedule.id in open_ids) == (status in ("scheduled", "sending")), (schedule.text, status)
-        assert (schedule.id in canceled_ids) == (status == "canceled"), (schedule.text, status)
+        assert (schedule.id in open_ids) == (status in ("scheduled", "sending")), (text_of(schedule), status)
+        assert (schedule.id in canceled_ids) == (status == "canceled"), (text_of(schedule), status)
 
 
 # --------------------------------------------------------------------------- #
@@ -506,7 +522,7 @@ def test_panel_offers_selection_only_for_messages_that_can_still_be_canceled(cli
 
 def _seq_ids_of(client, prefix: str) -> str:
     with Session(get_engine()) as db:
-        return db.exec(select(Schedule.group_id).where(col(Schedule.text) == f"{prefix} 1")).one()
+        return next(s.group_id for s in db.exec(select(Schedule)).all() if text_of(s) == f"{prefix} 1")
 
 
 def test_bulk_cancel_from_the_panel_cancels_only_the_selected(client):

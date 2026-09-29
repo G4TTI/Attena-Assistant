@@ -16,7 +16,7 @@ from . import auth, whatsapp_service
 from .clock import utcnow
 from .config import settings
 from .db import claim_orphan_data
-from .models import AuditEventType, BillingProfile, EmailVerificationToken, LoginAuditEvent, PasswordResetToken, User
+from .models import AuditEventType, EmailVerificationToken, LoginAuditEvent, PasswordResetToken, User
 from .service import ValidationError
 
 logger = logging.getLogger("whatsapp_scheduler.auth")
@@ -76,19 +76,19 @@ def register_user(
         # que o e-mail já está em uso (senão o cadastro fica inutilizável).
         raise ValidationError("Já existe uma conta com este e-mail.")
 
+    # Cadastro mínimo (nome, e-mail, senha): dados de faturamento só existem se
+    # o usuário um dia contratar um plano pago (billing/).
     user = User(name=name, email=email_norm, password_hash=auth.hash_password(password))
     db.add(user)
     db.commit()
     db.refresh(user)
-    db.add(BillingProfile(user_id=user.id))
-    db.commit()
 
     # claim_orphan_data ANTES de criar a primeira WhatsAppSession: se este for
     # o primeiro usuário, ela troca user.waha_session pro nome da sessão WAHA
     # já pareada antes de existir autenticação — criar a sessão depois de
     # trocar (não antes) é o que preserva o pareamento sem exigir novo QR.
     if claim_orphan_data(db, user):
-        logger.info("dados anteriores à autenticação foram associados ao primeiro usuário cadastrado (%s)", user.email)
+        logger.info("dados anteriores à autenticação foram associados ao primeiro usuário cadastrado (user_id=%s)", user.id)
     whatsapp_service.ensure_first_session(db, user)
 
     request_email_verification(db, user)
@@ -100,10 +100,16 @@ def authenticate_user(db: Session, *, email: str, password: str, request: Reques
     email_norm = auth.normalize_email(email)
     user = _find_by_email(db, email_norm)
     if user is None or not user.is_active or not auth.verify_password(password, user.password_hash):
-        log_event(
-            db, AuditEventType.login_failed, user_id=user.id if user else None, request=request, detail=email_norm
-        )
+        # Nunca o e-mail digitado: pode ser de outra pessoa, ou até uma senha
+        # colada no campo errado. Só o usuário, quando ele existe.
+        log_event(db, AuditEventType.login_failed, user_id=user.id if user else None, request=request)
         raise AuthenticationError("E-mail ou senha inválidos.")
+    now = utcnow()
+    user.last_login_at = now
+    user.last_activity_at = now
+    user.login_count = (user.login_count or 0) + 1
+    db.add(user)
+    db.commit()
     log_event(db, AuditEventType.login_success, user_id=user.id, request=request)
     return user
 
@@ -125,15 +131,9 @@ def change_password(db: Session, user: User, *, current_password: str, new_passw
 # --------------------------------------------------------------------------- #
 # Recuperação de senha
 # --------------------------------------------------------------------------- #
-def request_password_reset(db: Session, *, email: str, request: Request | None = None) -> None:
-    """Sempre "silencioso" pro chamador: nunca revela se o e-mail existe. Sem
-    provedor de e-mail configurado ainda, o link é registrado em log de
-    servidor (nunca na resposta HTTP) — Parte 20: não fingir envio."""
-    email_norm = auth.normalize_email(email)
-    user = _find_by_email(db, email_norm)
-    if user is None:
-        return
-
+def create_password_reset_link(db: Session, user: User) -> str:
+    """Gera um token de redefinição e devolve o CAMINHO do link. Quem chama
+    decide como entregar — nunca por log (o token dá acesso à conta)."""
     raw_token = auth.generate_token()
     db.add(
         PasswordResetToken(
@@ -143,12 +143,24 @@ def request_password_reset(db: Session, *, email: str, request: Request | None =
         )
     )
     db.commit()
+    return f"/redefinir-senha/{raw_token}"
+
+
+def request_password_reset(db: Session, *, email: str, request: Request | None = None) -> None:
+    """Sempre "silencioso" pro chamador: nunca revela se o e-mail existe.
+
+    Sem provedor de e-mail configurado ainda, NÃO há como entregar o link — e
+    ele não vai para o log (token = acesso à conta). O operador do servidor gera
+    um link para o usuário com `python -m whatsapp_scheduler.cli reset-link <e-mail>`.
+    Quando houver provedor de e-mail, o envio entra aqui."""
+    email_norm = auth.normalize_email(email)
+    user = _find_by_email(db, email_norm)
+    if user is None:
+        return
     logger.warning(
-        "[sem provedor de e-mail configurado] link de redefinição de senha para %s: "
-        "/redefinir-senha/%s (expira em %d min)",
-        user.email,
-        raw_token,
-        settings.password_reset_ttl_minutes,
+        "redefinição de senha pedida (user_id=%s) — sem provedor de e-mail configurado: "
+        "o operador pode gerar o link com `python -m whatsapp_scheduler.cli reset-link`",
+        user.id,
     )
     log_event(db, AuditEventType.password_reset_requested, user_id=user.id, request=request)
 
@@ -186,7 +198,7 @@ def reset_password(
 # --------------------------------------------------------------------------- #
 # Verificação de e-mail
 # --------------------------------------------------------------------------- #
-def request_email_verification(db: Session, user: User) -> None:
+def create_email_verification_link(db: Session, user: User) -> str:
     raw_token = auth.generate_token()
     db.add(
         EmailVerificationToken(
@@ -196,13 +208,13 @@ def request_email_verification(db: Session, user: User) -> None:
         )
     )
     db.commit()
-    logger.warning(
-        "[sem provedor de e-mail configurado] link de verificação de e-mail para %s: "
-        "/verificar-email/%s (expira em %d h)",
-        user.email,
-        raw_token,
-        settings.email_verification_ttl_hours,
-    )
+    return f"/verificar-email/{raw_token}"
+
+
+def request_email_verification(db: Session, user: User) -> None:
+    """Sem provedor de e-mail ainda: nada a enviar (e o link NUNCA vai para o
+    log). O operador gera um com `python -m whatsapp_scheduler.cli verify-link <e-mail>`."""
+    logger.info("verificação de e-mail pendente (user_id=%s) — sem provedor de e-mail configurado", user.id)
 
 
 def resend_email_verification(db: Session, user: User) -> None:

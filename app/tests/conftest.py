@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import tempfile
 from datetime import timedelta
@@ -22,6 +23,10 @@ os.environ.setdefault("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8090/calend
 os.environ.setdefault("TOKEN_ENCRYPTION_KEY", "8bxweqvwKGVGSYYLOSnwiZWC6TbNYabjfPe-6QBio10=")
 os.environ.setdefault("CALENDAR_SYNC_SECONDS", "3600")  # idem: não dispara sozinho durante os testes
 os.environ.setdefault("CLOCK_SYNC_SECONDS", "3600")  # idem: não dispara sozinho durante os testes
+os.environ.setdefault("PRIVACY_CLEANUP_SECONDS", "3600")  # idem
+# Chaves de dados de TESTE, aleatórias a cada execução — nenhuma chave fica no código.
+os.environ.setdefault("DATA_ENCRYPTION_KEYS", "1:" + base64.b64encode(os.urandom(32)).decode())
+os.environ.setdefault("DATA_HASH_KEY", base64.b64encode(os.urandom(32)).decode())
 
 import pytest  # noqa: E402
 from sqlmodel import Session, SQLModel  # noqa: E402
@@ -85,8 +90,10 @@ def _reset_chat_cache():
     from whatsapp_scheduler import chatsvc
 
     chatsvc._chat_cache.clear()
+    chatsvc._history_cache.clear()
     yield
     chatsvc._chat_cache.clear()
+    chatsvc._history_cache.clear()
 
 
 @pytest.fixture
@@ -180,6 +187,10 @@ class FakeWaha:
         # False = comportamento de usuário novo: a sessão só existe no banco do app.
         self.session_exists = True
         self.created: list[str] = []
+        self.last_id: str | None = None
+        self.logged_out: list[str] = []
+        self.deleted: list[str] = []
+        self.listed: list[str] = []
 
     async def get_session_status(self, session: str) -> dict:
         if self.status_error:
@@ -210,7 +221,8 @@ class FakeWaha:
         if self.send_error:
             raise self.send_error
         self.sent.append({"session": session, "chatId": chat_id, "text": text})
-        return {"id": f"true_{chat_id}_{len(self.sent)}"}
+        self.last_id = f"true_{chat_id}_{len(self.sent)}"
+        return {"id": self.last_id}
 
     async def get_qr(self, session: str) -> tuple[bytes, str]:
         return b"PNGDATA", "image/png"
@@ -238,6 +250,15 @@ class FakeWaha:
         if self.messages_error:
             raise self.messages_error
         return self.messages
+
+    async def logout_session(self, session: str) -> None:
+        self.logged_out.append(session)
+
+    async def delete_session(self, session: str) -> None:
+        self.deleted.append(session)
+
+    async def list_sessions(self) -> list[dict]:
+        return [{"name": name, "status": self.status, "me": {"id": "5511999990000@c.us", "pushName": "Dono"}} for name in self.listed]
 
     async def aclose(self) -> None:  # pragma: no cover
         pass
@@ -354,3 +375,78 @@ class FakeGoogleCalendarProvider:
 @pytest.fixture
 def fake_google() -> FakeGoogleCalendarProvider:
     return FakeGoogleCalendarProvider()
+
+
+def db_locations_containing(needle: str) -> list[str]:
+    """Varre TODAS as colunas de texto de TODAS as tabelas (SQL cru, sem ORM) e
+    devolve "tabela.coluna" onde `needle` aparece — base dos testes de
+    privacidade ("o banco sozinho não revela X")."""
+    from sqlalchemy import text
+
+    found: list[str] = []
+    with get_engine().connect() as conn:
+        tables = [r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))]
+        for table in tables:
+            for column in [r[1] for r in conn.execute(text(f'PRAGMA table_info("{table}")'))]:
+                hit = conn.execute(
+                    text(f'SELECT 1 FROM "{table}" WHERE CAST("{column}" AS TEXT) LIKE :n LIMIT 1'), {"n": f"%{needle}%"}
+                ).first()
+                if hit:
+                    found.append(f"{table}.{column}")
+    return found
+
+
+# --------------------------------------------------------------------------- #
+# v1.4: conteúdo e destinatário ficam cifrados no banco. Nos testes, ler/criar
+# sempre por estes atalhos (o mesmo caminho da aplicação: privacy.py).
+# --------------------------------------------------------------------------- #
+def text_of(obj) -> str | None:
+    from whatsapp_scheduler import privacy
+    from whatsapp_scheduler.models import AutomationMessage
+
+    if isinstance(obj, AutomationMessage):
+        return privacy.automation_message(obj)
+    return privacy.schedule_message(obj)
+
+
+def chat_of(obj) -> str | None:
+    from whatsapp_scheduler import privacy
+    from whatsapp_scheduler.models import ScheduleGroup
+
+    if isinstance(obj, ScheduleGroup):
+        info = privacy.group_recipient(obj)
+        return info.chat_id if info else None
+    return privacy.schedule_recipient(obj)
+
+
+def name_of(group) -> str | None:
+    from whatsapp_scheduler import privacy
+
+    info = privacy.group_recipient(group)
+    return info.name if info else None
+
+
+def make_schedule(*, text: str, chat_id: str, recipient_input: str | None = None, **kwargs):
+    """`Schedule` como o app grava (cifrado). `recipient_input` é aceito só por compatibilidade."""
+    from whatsapp_scheduler import privacy
+    from whatsapp_scheduler.models import Schedule
+
+    schedule = Schedule(**kwargs)
+    privacy.seal_schedule_message(schedule, text)
+    privacy.seal_schedule_recipient(schedule, chat_id)
+    return schedule
+
+
+def make_automation_message(*, text: str, **kwargs):
+    from whatsapp_scheduler import privacy
+    from whatsapp_scheduler.models import AutomationMessage
+
+    message = AutomationMessage(**kwargs)
+    privacy.seal_automation_message(message, text)
+    return message
+
+
+def recipient_hash_for(user_id: str, chat_id: str) -> str:
+    from whatsapp_scheduler import privacy
+
+    return privacy.recipient_hash(user_id, chat_id)

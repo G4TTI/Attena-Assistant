@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "_components.html" import icon %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Upgrade para {{ plan.name }}</h1>
+    <p class="sub">Só precisamos destes dados agora, para emitir a cobrança do plano.</p>
+  </div>
+  <a class="ghost-link" href="/planos">Voltar aos planos</a>
+</div>
+
+<ol class="steps-bar" aria-label="Etapas">
+  <li class="done"><span>1</span> Plano</li>
+  <li class="active" aria-current="step"><span>2</span> Dados para faturamento</li>
+  <li><span>3</span> Pagamento</li>
+</ol>
+
+<div class="upgrade-layout">
+  <div class="card">
+    <div class="card-hd">
+      {{ icon('edit', 16) }}
+      <h2>Dados para faturamento</h2>
+    </div>
+    <form method="post" action="/planos/{{ plan.code }}/upgrade" class="card-bd" novalidate>
+      {% if error %}<div class="alert err" style="margin-bottom:16px" role="alert">{{ error }}</div>{% endif %}
+      <div class="form-grid">
+        <div class="field full">
+          <label for="bf_full_name">Nome completo</label>
+          <input id="bf_full_name" name="full_name" type="text" autocomplete="name" maxlength="160" required value="{{ values.full_name }}">
+        </div>
+        <div class="field">
+          <label for="bf_email">E-mail</label>
+          <input id="bf_email" type="email" value="{{ current_user.email }}" disabled>
+        </div>
+        <div class="field">
+          <label for="bf_phone">Telefone</label>
+          <input id="bf_phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="(11) 99999-8888" required value="{{ values.phone }}">
+        </div>
+        <div class="field">
+          <label for="bf_cpf">CPF {% if values.cpf_masked %}<b>(atual: {{ values.cpf_masked }} — deixe em branco para manter)</b>{% endif %}</label>
+          <input id="bf_cpf" name="cpf" type="text" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" maxlength="14"
+                 {% if not values.cpf_masked %}required{% endif %} value="{{ values.cpf }}" oninput="maskCpf(this)">
+        </div>
+        <div class="field">
+          <label for="bf_cep">CEP</label>
+          <input id="bf_cep" name="postal_code" type="text" inputmode="numeric" autocomplete="postal-code" placeholder="00000-000" maxlength="9" required value="{{ values.postal_code }}" oninput="maskCep(this)">
+        </div>
+        <div class="field full">
+          <label for="bf_address">Endereço</label>
+          <input id="bf_address" name="address" type="text" autocomplete="address-line1" maxlength="160" placeholder="Rua, avenida…" required value="{{ values.address }}">
+        </div>
+        <div class="field">
+          <label for="bf_number">Número</label>
+          <input id="bf_number" name="address_number" type="text" maxlength="20" required value="{{ values.address_number }}">
+        </div>
+        <div class="field">
+          <label for="bf_complement">Complemento <b>(opcional)</b></label>
+          <input id="bf_complement" name="address_complement" type="text" autocomplete="address-line2" maxlength="80" value="{{ values.address_complement }}">
+        </div>
+        <div class="field">
+          <label for="bf_city">Cidade</label>
+          <input id="bf_city" name="city" type="text" autocomplete="address-level2" maxlength="80" required value="{{ values.city }}">
+        </div>
+        <div class="field">
+          <label for="bf_state">Estado</label>
+          <select id="bf_state" name="state" autocomplete="address-level1" required>
+            <option value="">Selecione…</option>
+            {% for uf, name in uf_names.items() %}<option value="{{ uf }}" {{ 'selected' if values.state == uf }}>{{ uf }} — {{ name }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:16px">
+        Guardamos estes dados criptografados e só os usamos para cobrança. O pagamento acontece no ambiente do meio de
+        pagamento: o Attena nunca recebe nem armazena número de cartão, CVV ou senha.
+      </p>
+      <div class="form-actions" style="margin-top:18px">
+        <a class="ghost-link" href="/planos">Cancelar</a>
+        <button type="submit">Continuar para pagamento</button>
+      </div>
+    </form>
+  </div>
+
+  <aside class="card plan-summary">
+    <div class="card-hd"><h2>Resumo</h2></div>
+    <div class="card-bd">
+      <div class="plan-name">{{ plan.name }}</div>
+      <div class="plan-price"><span class="plan-price-value">{{ plan.price_cents | brl(plan.currency) }}</span><span class="plan-price-period">/{{ period_label }}</span></div>
+      <ul class="plan-features">
+        {% for feature in features %}<li>{{ icon('check', 14) }} {{ feature }}</li>{% endfor %}
+      </ul>
+      <dl class="plan-limits">
+        {% for key, label in limit_labels.items() %}
+        <dt>{{ label }}</dt><dd>{{ limits.get(key) if limits.get(key) is not none else 'Ilimitado' }}</dd>
+        {% endfor %}
+      </dl>
+    </div>
+  </aside>
+</div>
+
+<script>
+  function maskCpf(el){
+    var d = el.value.replace(/\D/g, '').slice(0, 11), out = d;
+    if (d.length > 9) out = d.slice(0,3) + '.' + d.slice(3,6) + '.' + d.slice(6,9) + '-' + d.slice(9);
+    else if (d.length > 6) out = d.slice(0,3) + '.' + d.slice(3,6) + '.' + d.slice(6);
+    else if (d.length > 3) out = d.slice(0,3) + '.' + d.slice(3);
+    el.value = out;
+  }
+  function maskCep(el){
+    var d = el.value.replace(/\D/g, '').slice(0, 8);
+    el.value = d.length > 5 ? d.slice(0,5) + '-' + d.slice(5) : d;
+  }
+</script>
+
+{% endblock %}

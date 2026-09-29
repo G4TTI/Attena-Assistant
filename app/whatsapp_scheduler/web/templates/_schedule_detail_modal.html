@@ -1,5 +1,5 @@
-{% from "_components.html" import icon, status_icon %}
-{% set phone = g.group.chat_id.split('@')[0] %}
+{% from "_components.html" import icon, status_icon, message_text %}
+{% set phone = g.recipient_phone %}
 <div class="modal-backdrop">
   <div class="modal">
     <div class="modal-hd">
@@ -15,7 +15,7 @@
 
       <div class="detail-block">
         <h3 class="section-label">Destinatário</h3>
-        <div><strong>{{ g.recipient }}</strong>{% if g.group.chat_id.endswith('@g.us') %} <span class="muted">· grupo</span>{% elif phone.isdigit() and g.recipient != '+' ~ phone %} <span class="muted">· +{{ phone }}</span>{% endif %}</div>
+        <div><strong>{{ g.recipient }}</strong>{% if g.is_group_chat %} <span class="muted">· grupo</span>{% elif phone and g.recipient != phone %} <span class="muted">· {{ phone }}</span>{% endif %}</div>
       </div>
 
       <div class="detail-block">
@@ -29,7 +29,7 @@
           {% for m in g.messages %}
           <li>
             <span class="msg-num">{{ loop.index }}</span>
-            <span class="msg-text">{{ m.text }}</span>
+            <span class="msg-text">{{ message_text(m.text, m.status) }}</span>
             <div class="msg-meta">
               <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
               <span>{{ m.when_local.strftime('%d/%m/%Y · %H:%M:%S') }}</span>

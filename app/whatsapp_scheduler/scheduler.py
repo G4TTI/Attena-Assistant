@@ -14,14 +14,14 @@ import asyncio
 import logging
 import random
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlmodel import Session, col, select
 
-from . import clock
+from . import chatsvc, clock, failures, privacy, retention
 from .config import settings
 from .db import get_engine
-from .models import OPEN_STATUSES, CachedMessage, Dispatch, DispatchStatus, Schedule, ScheduleDependency
+from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule, ScheduleDependency, User
 from .recurrence import local_to_utc, next_run_utc, normalize_recurrence
 from .waha import WahaClient, WahaError, extract_message_id
 
@@ -112,6 +112,7 @@ def _materialize_schedule(
         sch.enabled = False
         sch.updated_at = now
         db.add(sch)
+        retention.finalize_schedules(db, [sch], now)  # a cadeia abortou: o conteúdo não vai mais sair
         return None
 
     last = db.exec(
@@ -126,6 +127,7 @@ def _materialize_schedule(
             sch.enabled = False
             sch.updated_at = now
             db.add(sch)
+            retention.finalize_schedules(db, [sch], now)
         return None
 
     dispatch = Dispatch(schedule_id=sch.id, scheduled_at_utc=next_utc, status=DispatchStatus.pending)
@@ -144,6 +146,7 @@ def _recover_stuck(db: Session, now: datetime) -> None:
     for d in stuck:
         d.status = DispatchStatus.pending
         d.last_error = "Recuperada: presa em 'processing' (provável reinício abrupto)."
+        d.failure_code = failures.STUCK_RECOVERED
         d.updated_at = now
         db.add(d)
     if stuck:
@@ -226,8 +229,10 @@ async def dispatch_due(waha: WahaClient) -> int:
             if overdue_min > settings.max_overdue_minutes:
                 d.status = DispatchStatus.skipped
                 d.last_error = f"Atrasada {int(overdue_min)} min (limite {settings.max_overdue_minutes})."
+                d.failure_code = failures.OVERDUE
                 d.updated_at = now
                 db.add(d)
+                _end_if_one_shot(db, d.schedule_id, now)
                 logger.warning("dispatch %s pulada (atraso de %d min)", d.id, int(overdue_min))
                 continue
             d.status = DispatchStatus.processing
@@ -247,8 +252,38 @@ async def dispatch_due(waha: WahaClient) -> int:
     return sent
 
 
+def _end_if_one_shot(db: Session, schedule_id: str, now: datetime) -> None:
+    """Uma mensagem de disparo único chegou a um estado final: a regra termina
+    agora (não no próximo tick) e o conteúdo cifrado é expurgado no mesmo
+    commit. Recorrência ativa mantém o conteúdo para as próximas ocorrências."""
+    sch = db.get(Schedule, schedule_id)
+    if sch is None or sch.recurrence:
+        return
+    if sch.enabled:
+        sch.enabled = False
+        sch.updated_at = now
+        db.add(sch)
+    db.flush()
+    retention.finalize_schedules(db, [sch], now)
+
+
+def _finish_without_sending(dispatch_id: str, status: DispatchStatus, code: str, message: str) -> None:
+    with Session(get_engine()) as db:
+        d = db.get(Dispatch, dispatch_id)
+        if d is None or d.status != DispatchStatus.processing:
+            return
+        now = clock.utcnow()
+        d.status = status
+        d.failure_code = code
+        d.last_error = message
+        d.updated_at = now
+        db.add(d)
+        _end_if_one_shot(db, d.schedule_id, now)
+        db.commit()
+
+
 async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
-    # 1. lê o necessário e fecha a sessão antes de qualquer await de rede
+    # 1. lê o necessário (ainda CIFRADO) e fecha a sessão antes de qualquer await de rede
     with Session(get_engine()) as db:
         d = db.get(Dispatch, dispatch_id)
         if d is None or d.status != DispatchStatus.processing:
@@ -256,25 +291,46 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         sch = db.get(Schedule, d.schedule_id)
         if sch is None:
             d.status = DispatchStatus.canceled
-            d.last_error = "Schedule removido antes do envio."
+            d.last_error = "Agendamento removido antes do envio."
+            d.failure_code = failures.SCHEDULE_REMOVED
             d.updated_at = clock.utcnow()
             db.add(d)
             db.commit()
             return False
+        owner = db.get(User, sch.user_id) if sch.user_id else None
+        suspended = owner is not None and not owner.is_active
+        # Cópia desanexada só com o que o envio precisa — o texto continua cifrado até o passo 3.
+        sealed = Schedule(
+            id=sch.id,
+            user_id=sch.user_id,
+            timezone=sch.timezone,
+            first_run_local=sch.first_run_local,
+            message_ciphertext=sch.message_ciphertext,
+            encryption_nonce=sch.encryption_nonce,
+            encryption_key_version=sch.encryption_key_version,
+            recipient_phone_encrypted=sch.recipient_phone_encrypted,
+        )
         session_name = sch.session
-        chat_id = sch.chat_id
-        text = sch.text
         max_attempts = sch.max_attempts
         owner_id = sch.user_id
         attempts = d.attempts
+
+    if suspended:
+        _finish_without_sending(dispatch_id, DispatchStatus.skipped, failures.ACCOUNT_SUSPENDED, "Conta suspensa: mensagem não enviada.")
+        logger.warning("dispatch %s não enviada: conta suspensa", dispatch_id)
+        return False
+    if not sealed.message_ciphertext or not sealed.recipient_phone_encrypted:
+        _finish_without_sending(dispatch_id, DispatchStatus.failed, failures.CONTENT_UNAVAILABLE, "Conteúdo indisponível (já expurgado).")
+        logger.error("dispatch %s sem conteúdo cifrado — não enviada", dispatch_id)
+        return False
 
     # 2. a sessão do WhatsApp está pronta?
     try:
         info = await waha.get_session_status(session_name)
         status = str(info.get("status") or "").upper()
-        session_err = None
-    except WahaError as exc:
-        status, session_err = "", str(exc)
+        session_unreachable = False
+    except WahaError:
+        status, session_unreachable = "", True
 
     if status != "WORKING":
         with Session(get_engine()) as db:
@@ -282,24 +338,40 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
             if d is not None and d.status == DispatchStatus.processing:
                 d.status = DispatchStatus.pending
                 d.scheduled_at_utc = clock.utcnow() + timedelta(seconds=60)
+                d.failure_code = failures.WAHA_UNREACHABLE if session_unreachable else failures.SESSION_NOT_READY
                 d.last_error = (
-                    f"Sessão '{session_name}' não está pronta (status={status or 'desconhecido'}). "
-                    f"{session_err or 'Pareie o WhatsApp para retomar.'}"
+                    "Não foi possível consultar o WAHA. Nova tentativa em 1 minuto."
+                    if session_unreachable
+                    else f"O WhatsApp desta mensagem não está conectado (status={status or 'desconhecido'}). "
+                    "Pareie o WhatsApp para retomar."
                 )
                 d.updated_at = clock.utcnow()
                 db.add(d)
                 db.commit()
-        logger.warning("dispatch %s adiada: sessão '%s' status=%s", dispatch_id, session_name, status)
+        logger.warning("dispatch %s adiada: sessão '%s' status=%s", dispatch_id, session_name, status or "?")
         return False
 
-    # 3. envia (sem sessão de banco aberta)
+    # 3. decifra EM MEMÓRIA só agora, envia e descarta o texto (sem sessão de banco aberta).
     try:
-        payload = await waha.send_text(session_name, chat_id, text)
-        ok, err, message_id = True, None, extract_message_id(payload)
+        chat_id = privacy.schedule_recipient(sealed)
+        text = privacy.schedule_message(sealed)
+    except privacy.DecryptionError:
+        _finish_without_sending(dispatch_id, DispatchStatus.failed, failures.DECRYPTION_FAILED, "Não foi possível decifrar a mensagem.")
+        logger.error("dispatch %s: falha ao decifrar (chave errada/ausente?) — não enviada", dispatch_id)
+        return False
+    try:
+        payload = await waha.send_text(session_name, chat_id or "", text or "")
+        ok, code, err, message_id = True, None, None, extract_message_id(payload)
     except WahaError as exc:
-        ok, err, message_id = False, str(exc), None
+        ok, message_id = False, None
+        code, err = failures.classify_waha_error(exc)
+    finally:
+        # Python não garante zerar a memória de uma str, mas nenhuma referência
+        # ao texto/destinatário sobrevive a esta função.
+        text = chat_id = None  # noqa: F841
+        payload = None  # noqa: F841
 
-    # 4. grava o resultado
+    # 4. grava só metadados do resultado
     with Session(get_engine()) as db:
         d = db.get(Dispatch, dispatch_id)
         if d is None:
@@ -312,54 +384,33 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         if ok:
             d.status = DispatchStatus.sent
             d.sent_at_utc = now
-            d.waha_message_id = message_id
+            d.waha_message_hash = privacy.waha_message_hash(owner_id, message_id) if message_id else None
             d.last_error = None
-            logger.info("dispatch %s enviada para %s", dispatch_id, chat_id)
-            _remember_sent_message(db, owner_id, chat_id, text, message_id, now)
+            d.failure_code = None
+            _end_if_one_shot(db, d.schedule_id, now)
+            logger.info("dispatch %s enviada (schedule %s)", dispatch_id, d.schedule_id)
         elif canceled_meanwhile:
             logger.info("dispatch %s cancelada durante o envio; falha não gera retry", dispatch_id)
         else:
             d.attempts = attempts + 1
-            d.last_error = (err or "erro desconhecido")[:1000]
+            d.last_error = err
+            d.failure_code = code
             if d.attempts < max_attempts:
                 delay = _backoff_seconds(d.attempts)
                 d.status = DispatchStatus.pending
                 d.scheduled_at_utc = now + timedelta(seconds=delay)
                 logger.warning(
-                    "dispatch %s falhou (tentativa %d/%d), retry em %ds: %s",
-                    dispatch_id, d.attempts, max_attempts, delay, err,
+                    "dispatch %s falhou (tentativa %d/%d, %s), retry em %ds",
+                    dispatch_id, d.attempts, max_attempts, code, delay,
                 )
             else:
                 d.status = DispatchStatus.failed
-                logger.error(
-                    "dispatch %s falhou definitivamente (%d tentativas): %s",
-                    dispatch_id, d.attempts, err,
-                )
+                _end_if_one_shot(db, d.schedule_id, now)
+                logger.error("dispatch %s falhou definitivamente (%d tentativas, %s)", dispatch_id, d.attempts, code)
         d.updated_at = now
         db.add(d)
         db.commit()
     return ok
-
-
-def _remember_sent_message(
-    db: Session, user_id: str | None, chat_id: str, text: str, message_id: str | None, now: datetime
-) -> None:
-    """Grava a mensagem agendada que acabou de sair no cache da conversa (mesma
-    coisa que `chatsvc.send_now` faz no envio imediato) — assim ela já aparece
-    no histórico da conversa sem esperar a próxima busca no WAHA."""
-    if not message_id or not user_id or db.get(CachedMessage, message_id) is not None:
-        return
-    db.add(
-        CachedMessage(
-            message_id=message_id,
-            user_id=user_id,
-            chat_id=chat_id,
-            ts=int(now.replace(tzinfo=timezone.utc).timestamp()),
-            from_me=True,
-            body=text,
-            msg_type="chat",
-        )
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -412,6 +463,7 @@ class SchedulerService:
                 await self.run_once()
             except Exception:
                 logger.exception("erro no tick do scheduler")
+            chatsvc.purge_expired()  # conversas em memória: TTL curto, nada sobra
             elapsed = time.monotonic() - started
             wait = max(1.0, settings.tick_seconds - elapsed)
             try:

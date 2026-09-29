@@ -14,7 +14,7 @@ from pathlib import Path
 from sqlalchemy import event, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.engine import Engine
-from sqlmodel import Session, SQLModel, col, create_engine
+from sqlmodel import Session, SQLModel, col, create_engine, select
 
 from .clock import utcnow
 from .config import settings
@@ -32,7 +32,6 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("schedules", "user_id", "ALTER TABLE schedules ADD COLUMN user_id TEXT"),
     ("calendar_connections", "user_id", "ALTER TABLE calendar_connections ADD COLUMN user_id TEXT"),
     ("events", "user_id", "ALTER TABLE events ADD COLUMN user_id TEXT"),
-    ("cached_messages", "user_id", "ALTER TABLE cached_messages ADD COLUMN user_id TEXT"),
     # Onboarding (v1.3) — NULL = ainda não terminou; `onboarding_service.
     # migrate_legacy_users` marca retroativamente quem já existia como
     # concluído, então só conta nova de verdade fica pendente.
@@ -43,6 +42,39 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("schedules", "group_id", "ALTER TABLE schedules ADD COLUMN group_id TEXT"),
     ("schedules", "position", "ALTER TABLE schedules ADD COLUMN position INTEGER NOT NULL DEFAULT 0"),
     ("automations", "custom_interval", "ALTER TABLE automations ADD COLUMN custom_interval TEXT"),
+    # v1.4 (privacidade): colunas cifradas + HMAC. A conversão dos dados antigos
+    # (texto puro -> cifrado/expurgado) e a remoção das colunas em texto puro
+    # ficam em migrations.py, que roda logo depois disto.
+    ("schedules", "message_ciphertext", "ALTER TABLE schedules ADD COLUMN message_ciphertext TEXT"),
+    ("schedules", "encryption_nonce", "ALTER TABLE schedules ADD COLUMN encryption_nonce TEXT"),
+    ("schedules", "encryption_key_version", "ALTER TABLE schedules ADD COLUMN encryption_key_version INTEGER"),
+    ("schedules", "recipient_phone_encrypted", "ALTER TABLE schedules ADD COLUMN recipient_phone_encrypted TEXT"),
+    ("schedules", "recipient_phone_hash", "ALTER TABLE schedules ADD COLUMN recipient_phone_hash TEXT"),
+    ("schedules", "content_purged_at", "ALTER TABLE schedules ADD COLUMN content_purged_at DATETIME"),
+    ("schedule_groups", "recipient_encrypted", "ALTER TABLE schedule_groups ADD COLUMN recipient_encrypted TEXT"),
+    ("schedule_groups", "recipient_phone_hash", "ALTER TABLE schedule_groups ADD COLUMN recipient_phone_hash TEXT"),
+    ("schedule_groups", "content_purged_at", "ALTER TABLE schedule_groups ADD COLUMN content_purged_at DATETIME"),
+    ("automation_messages", "message_ciphertext", "ALTER TABLE automation_messages ADD COLUMN message_ciphertext TEXT"),
+    ("automation_messages", "encryption_nonce", "ALTER TABLE automation_messages ADD COLUMN encryption_nonce TEXT"),
+    ("automation_messages", "encryption_key_version", "ALTER TABLE automation_messages ADD COLUMN encryption_key_version INTEGER"),
+    ("automation_messages", "content_purged_at", "ALTER TABLE automation_messages ADD COLUMN content_purged_at DATETIME"),
+    ("automation_schedules", "recipient_phone_hash", "ALTER TABLE automation_schedules ADD COLUMN recipient_phone_hash TEXT"),
+    ("dispatches", "failure_code", "ALTER TABLE dispatches ADD COLUMN failure_code TEXT"),
+    ("dispatches", "waha_message_hash", "ALTER TABLE dispatches ADD COLUMN waha_message_hash TEXT"),
+    ("users", "role", "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"),
+    ("users", "last_login_at", "ALTER TABLE users ADD COLUMN last_login_at DATETIME"),
+    ("users", "last_activity_at", "ALTER TABLE users ADD COLUMN last_activity_at DATETIME"),
+    ("users", "login_count", "ALTER TABLE users ADD COLUMN login_count INTEGER NOT NULL DEFAULT 0"),
+    ("whatsapp_sessions", "waha_purged_at", "ALTER TABLE whatsapp_sessions ADD COLUMN waha_purged_at DATETIME"),
+    ("billing_profiles", "full_name_encrypted", "ALTER TABLE billing_profiles ADD COLUMN full_name_encrypted TEXT"),
+    ("billing_profiles", "cpf_encrypted", "ALTER TABLE billing_profiles ADD COLUMN cpf_encrypted TEXT"),
+    ("billing_profiles", "cpf_last2", "ALTER TABLE billing_profiles ADD COLUMN cpf_last2 TEXT"),
+    ("billing_profiles", "phone_encrypted", "ALTER TABLE billing_profiles ADD COLUMN phone_encrypted TEXT"),
+    ("billing_profiles", "postal_code_encrypted", "ALTER TABLE billing_profiles ADD COLUMN postal_code_encrypted TEXT"),
+    ("billing_profiles", "address_encrypted", "ALTER TABLE billing_profiles ADD COLUMN address_encrypted TEXT"),
+    ("billing_profiles", "address_number_encrypted", "ALTER TABLE billing_profiles ADD COLUMN address_number_encrypted TEXT"),
+    ("billing_profiles", "address_complement_encrypted", "ALTER TABLE billing_profiles ADD COLUMN address_complement_encrypted TEXT"),
+    ("billing_profiles", "city_encrypted", "ALTER TABLE billing_profiles ADD COLUMN city_encrypted TEXT"),
 ]
 
 
@@ -71,6 +103,10 @@ def get_engine() -> Engine:
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.execute("PRAGMA foreign_keys=ON")
+        # Conteúdo apagado/sobrescrito (ex.: mensagem expurgada depois do
+        # envio) é zerado no arquivo, em vez de ficar recuperável nas páginas
+        # livres do SQLite.
+        cursor.execute("PRAGMA secure_delete=ON")
         cursor.close()
 
     return engine
@@ -80,7 +116,7 @@ def _apply_column_migrations(engine: Engine) -> None:
     with engine.begin() as conn:
         for table, column, ddl in _COLUMN_MIGRATIONS:
             existing = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
-            if column not in existing:
+            if existing and column not in existing:  # tabela inexistente: create_all já a criou nova (ou foi removida)
                 conn.execute(text(ddl))
 
 
@@ -94,7 +130,11 @@ _INDEX_MIGRATIONS: list[str] = [
     # Mesmo nome que o SQLAlchemy dá ao índice de `Schedule.group_id` (index=True):
     # banco novo já o cria; banco migrado (tabela pré-existente) só ganha aqui.
     "CREATE INDEX IF NOT EXISTS ix_schedules_group_id ON schedules (group_id)",
-    "CREATE INDEX IF NOT EXISTS ix_schedules_user_chat ON schedules (user_id, session, chat_id)",
+    "CREATE INDEX IF NOT EXISTS ix_schedules_user_recipient ON schedules (user_id, session, recipient_phone_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_schedules_recipient_phone_hash ON schedules (recipient_phone_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_schedule_groups_recipient_phone_hash ON schedule_groups (recipient_phone_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_automation_schedules_recipient_phone_hash ON automation_schedules (recipient_phone_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_users_role ON users (role)",
 ]
 
 
@@ -108,10 +148,13 @@ def init_db() -> None:
     # importa os modelos para registrar as tabelas no metadata
     from . import models  # noqa: F401
 
+    from .migrations import run_migrations
+
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
     _apply_column_migrations(engine)
     _apply_index_migrations(engine)
+    run_migrations(engine)
 
 
 def get_session() -> Iterator[Session]:
@@ -133,7 +176,8 @@ def claim_orphan_data(db: Session, user) -> bool:  # user: models.User (evita im
     apagada — só ganha `user_id` (e os schedules órfãos passam a usar a
     sessão WAHA do usuário que os reivindicou, preservando o disparo).
     """
-    from .models import AppSetting, CalendarConnection, CachedMessage, Event, Schedule
+    from . import privacy
+    from .models import AppSetting, CalendarConnection, Event, Schedule
 
     if db.get(AppSetting, _ORPHAN_CLAIM_SETTING_KEY) is not None:
         return False
@@ -147,14 +191,16 @@ def claim_orphan_data(db: Session, user) -> bool:  # user: models.User (evita im
     user.updated_at = utcnow()
     db.add(user)
 
-    db.exec(
-        sa_update(Schedule)
-        .where(col(Schedule.user_id).is_(None))
-        .values(user_id=user.id, session=user.waha_session)
-    )
+    # O hash do destinatário é por usuário: sem dono ele foi calculado com o
+    # escopo vazio e precisa ser refeito com o id de quem reivindicou.
+    for schedule in db.exec(select(Schedule).where(col(Schedule.user_id).is_(None))).all():
+        schedule.user_id = user.id
+        schedule.session = user.waha_session
+        chat_id = privacy.schedule_recipient(schedule, safe=True)
+        schedule.recipient_phone_hash = privacy.recipient_hash(user.id, chat_id) if chat_id else None
+        db.add(schedule)
     db.exec(sa_update(CalendarConnection).where(col(CalendarConnection.user_id).is_(None)).values(user_id=user.id))
     db.exec(sa_update(Event).where(col(Event.user_id).is_(None)).values(user_id=user.id))
-    db.exec(sa_update(CachedMessage).where(col(CachedMessage.user_id).is_(None)).values(user_id=user.id))
     db.add(AppSetting(key=_ORPHAN_CLAIM_SETTING_KEY, value=user.id, updated_at=utcnow()))
     db.commit()
     return True

@@ -1,0 +1,78 @@
+{% extends "admin/_base.html" %}
+{% from "admin/_macros.html" import dt, sub_pill with context %}
+{% from "_components.html" import icon %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Faturamento</h1>
+    <p class="sub">Somente pagamentos confirmados pelo gateway. Nada aqui é estimado a partir de usuários × preço.</p>
+  </div>
+</div>
+
+{% if not f.gateway_configured %}
+<div class="admin-note" role="note">
+  {{ icon('alert', 16) }}
+  <span><strong>Pagamento ainda não configurado.</strong> Sem gateway, nenhuma cobrança é feita e nenhuma assinatura vira "paga". Pedidos de upgrade ficam como "aguardando pagamento" ({{ f.upgrade_requests }} no momento).</span>
+</div>
+{% endif %}
+
+<div class="admin-cards">
+  <div class="stat-card"><span class="stat-label">MRR</span><span class="stat-value">{{ f.mrr_cents | brl }}</span><span class="stat-sub">Assinaturas pagas ativas</span></div>
+  <div class="stat-card"><span class="stat-label">Faturamento total</span><span class="stat-value">{{ f.revenue_total_cents | brl }}</span><span class="stat-sub">Pagamentos confirmados</span></div>
+  <div class="stat-card"><span class="stat-label">Faturamento este mês</span><span class="stat-value">{{ f.revenue_month_cents | brl }}</span><span class="stat-sub">Desde o dia 1º</span></div>
+  <div class="stat-card"><span class="stat-label">Assinaturas ativas</span><span class="stat-value">{{ f.active_subscriptions }}</span><span class="stat-sub">{{ f.manual_subscriptions }} cortesia (fora do MRR)</span></div>
+  <div class="stat-card"><span class="stat-label">Pagamentos pendentes</span><span class="stat-value">{{ f.pending_payments }}</span><span class="stat-sub">Aguardando confirmação</span></div>
+  <div class="stat-card {{ 'stat-warn' if f.failed_payments }}"><span class="stat-label">Pagamentos com erro</span><span class="stat-value">{{ f.failed_payments }}</span><span class="stat-sub">Recusados/falhos</span></div>
+  <div class="stat-card"><span class="stat-label">Cancelamentos</span><span class="stat-value">{{ f.cancellations_month }}</span><span class="stat-sub">Este mês</span></div>
+  <div class="stat-card"><span class="stat-label">Pedidos de upgrade</span><span class="stat-value">{{ f.upgrade_requests }}</span><span class="stat-sub">Aguardando pagamento</span></div>
+</div>
+
+<div class="card">
+  <div class="card-hd">{{ icon('list', 16) }}<h2>Faturamento mensal</h2></div>
+  <div class="card-bd">
+    {% if peak > 0 %}
+    <div class="bar-chart" role="img" aria-label="Faturamento pago por mês nos últimos 12 meses">
+      {% for m in series %}
+      <div class="bar" title="{{ m.month.strftime('%m/%Y') }}: {{ m.cents | brl }}">
+        <span class="fill" style="height:{{ (m.cents / peak * 100) | round(1) }}%"></span>
+        <small>{{ m.month.strftime('%m/%y') }}</small>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state"><strong>Nenhum pagamento registrado</strong><p>O gráfico aparece quando houver pagamentos confirmados.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="detail-grid">
+  <div class="card">
+    <div class="card-hd"><h2>Pagamentos recentes</h2></div>
+    <div class="card-bd">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Data</th><th>Cliente</th><th class="num">Valor</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for p in payments %}
+          <tr><td>{{ dt(p.paid_at or p.created_at) }}</td><td>{{ p.email or '—' }}</td><td class="num">{{ p.amount_cents | brl(p.currency) }}</td><td>{{ p.status | payment_status }}</td></tr>
+          {% else %}<tr><td colspan="4" class="muted">Nenhum pagamento registrado.</td></tr>{% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><h2>Assinaturas recentes</h2></div>
+    <div class="card-bd">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Data</th><th>Cliente</th><th>Plano</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for s in subscriptions %}
+          <tr><td>{{ dt(s.created_at) }}</td><td>{{ s.email or '—' }}</td><td>{{ s.plan or '—' }}{% if s.provider == 'manual' %} <span class="muted">(cortesia)</span>{% endif %}</td><td>{{ sub_pill(s.status) }}</td></tr>
+          {% else %}<tr><td colspan="4" class="muted">Nenhuma assinatura.</td></tr>{% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Attena Assistant</title>
+  <title>{% block title %}Attena Assistant{% endblock %}</title>
   <meta name="theme-color" content="#0E2B23">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230E2B23'/%3E%3Cpath d='M14 46 L32 14 L50 46' fill='none' stroke='%23F7F5F0' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M23 36 H41' fill='none' stroke='%23C8963E' stroke-width='7' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -531,6 +531,7 @@
     .st { display:inline-flex; align-items:center; gap:4px; }
     .st.scheduled { color:var(--warn); } .st.sending { color:#0a63c9; } .st.sent { color:var(--sent); }
     .st.failed, .st.skipped { color:var(--err); } .st.canceled { color:var(--mut); }
+    .content-removed { color:var(--mut); font-style:italic; }
 
     /* ---------------- Conversas: mensagens agendadas dentro da conversa ---------------- */
     #chat-history, #chat-scheduled { display:flex; flex-direction:column; gap:4px; }
@@ -646,6 +647,93 @@
       .smp-body { padding:14px 16px 20px; }
       .smp-group-hd { flex-wrap:wrap; }
     }
+    /* ---------------- Planos e upgrade ---------------- */
+    a.btn-link { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 20px; border-radius:9px; background:var(--accent); color:#fff; font-weight:600; font-size:14px; text-decoration:none; }
+    a.btn-link:hover { background:var(--accent-d); color:#fff; }
+    .plan-current { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr); gap:24px; align-items:start; }
+    .plan-current-name { font-family:var(--font-display); font-size:26px; font-weight:500; line-height:1.2; }
+    .plan-usage { display:flex; flex-direction:column; gap:12px; }
+    .plan-usage-head { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
+    .plan-usage-n { font-variant-numeric:tabular-nums; color:var(--mut); }
+    .meter { height:6px; border-radius:999px; background:var(--bg); border:1px solid var(--bd); overflow:hidden; margin-top:5px; }
+    .meter span { display:block; height:100%; background:var(--accent); border-radius:999px; }
+    .meter span.full { background:var(--warn); }
+    .plan-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+    .plan-card { background:var(--card); border:1px solid var(--bd); border-radius:14px; box-shadow:var(--sh); padding:22px; display:flex; flex-direction:column; gap:14px; min-width:0; }
+    .plan-card.featured { border-color:var(--accent); box-shadow:0 0 0 3px var(--soft); }
+    .plan-card.current { border-color:var(--sent); }
+    .plan-card-hd { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .plan-name { font-family:var(--font-display); font-size:22px; font-weight:500; margin:0; }
+    .plan-price { display:flex; align-items:baseline; gap:4px; }
+    .plan-price-value { font-family:var(--font-display); font-size:30px; font-weight:500; line-height:1.1; }
+    .plan-price-period { color:var(--mut); font-size:13px; }
+    .plan-desc { margin:0; color:var(--mut); font-size:13.5px; }
+    .plan-features { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; font-size:13.5px; }
+    .plan-features li { display:flex; gap:8px; align-items:flex-start; }
+    .plan-features svg { color:var(--sent); flex-shrink:0; margin-top:3px; }
+    .plan-limits { margin:0; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px 12px; font-size:12.5px; padding-top:12px; border-top:1px solid var(--bd); }
+    .plan-limits dt { color:var(--mut); margin:0; }
+    .plan-limits dd { margin:0; font-weight:600; text-align:right; font-variant-numeric:tabular-nums; }
+    .plan-cta { margin-top:auto; display:flex; }
+    .plan-cta > * { flex:1; }
+    .steps-bar { list-style:none; margin:0; padding:0; display:flex; gap:8px; flex-wrap:wrap; }
+    .steps-bar li { display:flex; align-items:center; gap:8px; padding:6px 14px 6px 6px; border:1px solid var(--bd); border-radius:999px; background:var(--card); color:var(--mut); font-size:13px; font-weight:500; }
+    .steps-bar li span { width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--bg); font-size:12px; font-weight:700; }
+    .steps-bar li.active { border-color:var(--accent); color:var(--fg); }
+    .steps-bar li.active span { background:var(--accent); color:#fff; }
+    .steps-bar li.done span { background:var(--soft); color:var(--accent-d); }
+    .upgrade-layout { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:20px; align-items:start; }
+    .plan-summary .card-bd { display:flex; flex-direction:column; gap:14px; }
+    .payment-pending { text-align:center; display:flex; flex-direction:column; align-items:center; gap:4px; padding:40px 24px; }
+    .payment-pending h2 { font-family:var(--font-display); font-size:22px; font-weight:500; margin:8px 0 6px; }
+    .payment-pending p { max-width:560px; margin:4px 0; }
+    .payment-pending-icon { width:56px; height:56px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--warn); background:color-mix(in oklab, var(--warn) 14%, transparent); }
+    @media (max-width: 1100px) { .plan-grid { grid-template-columns:minmax(0,1fr); } .upgrade-layout { grid-template-columns:minmax(0,1fr); } }
+    @media (max-width: 720px) { .plan-current { grid-template-columns:minmax(0,1fr); } }
+
+    /* ---------------- Área administrativa ---------------- */
+    a.stat-card.stat-link { color:inherit; text-decoration:none; }
+    a.stat-card.stat-link:hover { border-color:var(--bd2); }
+    .rail-admin-badge { font-family:var(--font-mono); font-size:9px; letter-spacing:.2em; color:var(--warn); }
+    .admin-note { display:flex; gap:10px; align-items:flex-start; padding:12px 16px; border:1px solid color-mix(in oklab, var(--warn) 40%, transparent); border-radius:12px; background:color-mix(in oklab, var(--warn) 8%, transparent); font-size:13px; color:var(--fg); }
+    .admin-note svg { flex:none; color:var(--warn); margin-top:2px; }
+    .admin-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }
+    .admin-section-title { margin:8px 0 -8px; }
+    .filters-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+    .filters-bar .field { min-width:150px; flex:1 1 150px; }
+    .filters-bar .field.grow { flex:2 1 240px; }
+    .filters-bar input, .filters-bar select { padding:8px 10px; font-size:13.5px; }
+    .filters-bar .filters-actions { display:flex; gap:8px; align-items:center; }
+    .table-wrap { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    table.data { min-width:760px; }
+    table.data td, table.data th { padding:10px 8px; vertical-align:middle; }
+    table.data tbody tr:hover { background:var(--bg); }
+    table.data td.num, table.data th.num { text-align:right; font-variant-numeric:tabular-nums; }
+    table.data a { text-decoration:none; font-weight:600; }
+    table.data .cell-sub { display:block; color:var(--mut); font-size:12px; font-weight:400; }
+    th a.sort { color:inherit; text-decoration:none; display:inline-flex; gap:4px; }
+    th a.sort.on { color:var(--fg); }
+    .pager { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:13px; color:var(--mut); }
+    .pager-links { display:flex; gap:8px; }
+    .tag-chip { display:inline-flex; align-items:center; gap:6px; padding:3px 6px 3px 10px; border-radius:999px; background:var(--soft); color:var(--accent-d); font-size:12px; font-weight:600; }
+    .tag-chip.static { padding-right:10px; }
+    .tag-chip button { background:none; border:0; color:inherit; padding:0 4px; font-size:14px; line-height:1; cursor:pointer; }
+    .tag-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .note-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+    .note-list li { padding:12px 14px; border:1px solid var(--bd); border-radius:10px; background:var(--bg); }
+    .note-body { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13.5px; }
+    .note-meta { margin-top:6px; font-size:11.5px; color:var(--mut); }
+    .detail-grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:16px; align-items:start; }
+    .detail-col { display:flex; flex-direction:column; gap:16px; min-width:0; }
+    .bar-chart { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:8px; align-items:end; height:180px; padding-top:12px; }
+    .bar-chart .bar { display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:6px; height:100%; min-width:0; }
+    .bar-chart .bar span.fill { width:100%; max-width:34px; border-radius:6px 6px 2px 2px; background:var(--accent); min-height:2px; }
+    .bar-chart .bar small { font-family:var(--font-mono); font-size:10px; color:var(--mut); white-space:nowrap; }
+    .inline-form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .inline-form select, .inline-form input { width:auto; min-width:160px; padding:8px 10px; }
+    @media (max-width: 1100px) { .admin-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .detail-grid { grid-template-columns:minmax(0,1fr); } }
+    @media (max-width: 720px) { .admin-cards { grid-template-columns:minmax(0,1fr); } }
+
     /* ---------------- Seleção em massa (painel de programadas e Agendamentos) ---------------- */
     .bulk-check { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; margin:-6px; border-radius:8px; cursor:pointer; }
     .bulk-check:hover { background:var(--soft); }
@@ -689,6 +777,7 @@
           <span class="rail-brand-tag">ASSISTANT</span>
         </div>
       </div>
+      {% block rail_links %}
       <a class="rail-btn {{ 'active' if nav == 'dashboard' }}" href="/" title="Dashboard">
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7.5" height="9" rx="1.6"></rect><rect x="13" y="3.5" width="7.5" height="5.5" rx="1.6"></rect><rect x="13" y="11.5" width="7.5" height="9" rx="1.6"></rect><rect x="3.5" y="14.5" width="7.5" height="6" rx="1.6"></rect></svg></span>
         <span class="rail-label">Dashboard</span>
@@ -705,6 +794,18 @@
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.3 7.3L4 20.5l1.7-5.2A8 8 0 1 1 21 11.5z"></path></svg></span>
         <span class="rail-label">Conversas</span>
       </a>
+      <a class="rail-btn {{ 'active' if nav == 'planos' }}" href="/planos" title="Planos">
+        <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"></path></svg></span>
+        <span class="rail-label">Planos</span>
+      </a>
+      {% if current_user is defined and current_user and current_user.role == 'admin' %}
+      {# Só um atalho: o acesso é validado no servidor em toda rota /admin (admin/security.py). #}
+      <a class="rail-btn" href="/admin" title="Administração">
+        <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z"></path><path d="M9 12l2.2 2.2L15.5 10"></path></svg></span>
+        <span class="rail-label">Administração</span>
+      </a>
+      {% endif %}
+      {% endblock %}
       <div class="rail-spacer"></div>
       <button type="button" class="rail-btn" title="Alternar tema claro/escuro" onclick="toggleTheme()">
         <span class="rail-icon">
@@ -713,19 +814,23 @@
         </span>
         <span class="rail-label">Tema</span>
       </button>
+      {% block rail_settings %}
       <a class="rail-btn {{ 'active' if nav == 'configuracoes' }}" href="/configuracoes" title="Configurações">
         <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="10" y2="6"></line><circle cx="13" cy="6" r="2"></circle><line x1="16" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="7" y2="12"></line><circle cx="10" cy="12" r="2"></circle><line x1="13" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="13" y2="18"></line><circle cx="16" cy="18" r="2"></circle><line x1="19" y1="18" x2="20" y2="18"></line></svg></span>
         <span class="rail-label">Configurações</span>
       </a>
+      {% endblock %}
       <form method="post" action="/logout" style="display:contents;">
         <button type="submit" class="rail-btn" title="Sair">
           <span class="rail-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></span>
           <span class="rail-label">Sair</span>
         </button>
       </form>
+      {% block rail_status %}
       <div class="rail-status" hx-get="/ui/sidebar-status" hx-trigger="load, every 8s" hx-swap="innerHTML">
         <span class="dot"></span>
       </div>
+      {% endblock %}
     </nav>
     {% block body %}
     <main class="content {% block content_class %}{% endblock %}">

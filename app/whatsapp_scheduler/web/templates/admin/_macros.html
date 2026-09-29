@@ -1,0 +1,41 @@
+{% macro csrf() -%}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{%- endmacro %}
+
+{# Datas no fuso do admin (todas as datas do banco são UTC). #}
+{% macro dt(value) -%}
+{%- if value -%}{{ value | localtime(admin_tz) }}{%- else -%}<span class="muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro pager(page, pages, total, base, params) -%}
+<div class="pager">
+  <span>{{ total }} resultado{{ 's' if total != 1 }} · página {{ page }} de {{ pages }}</span>
+  <span class="pager-links">
+    {% if page > 1 %}<a class="ghost-link" href="{{ base }}?{{ params | qs }}&amp;page={{ page - 1 }}">Anterior</a>{% endif %}
+    {% if page < pages %}<a class="ghost-link" href="{{ base }}?{{ params | qs }}&amp;page={{ page + 1 }}">Próxima</a>{% endif %}
+  </span>
+</div>
+{%- endmacro %}
+
+{% macro sub_pill(status) -%}
+{%- if status == 'active' -%}<span class="pill sent">ativa</span>
+{%- elif status == 'trialing' -%}<span class="pill processing">em teste</span>
+{%- elif status == 'past_due' -%}<span class="pill failed">em atraso</span>
+{%- elif status == 'incomplete' -%}<span class="pill pending">aguardando pagamento</span>
+{%- elif status -%}<span class="pill canceled">{{ status | subscription_status }}</span>
+{%- else -%}<span class="muted">—</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro dispatch_pill(status) -%}
+{%- if status in ('pending', 'processing') -%}<span class="pill pending">{{ 'pendente' if status == 'pending' else 'enviando' }}</span>
+{%- elif status == 'sent' -%}<span class="pill sent">executado</span>
+{%- elif status in ('failed', 'skipped') -%}<span class="pill failed">{{ 'falhou' if status == 'failed' else 'ignorado' }}</span>
+{%- else -%}<span class="pill canceled">cancelado</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro privacy_note() -%}
+<div class="admin-note" role="note">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z"></path></svg>
+  <span>A administração trabalha só com <strong>metadados</strong> (contas, datas, contagens, status). Conversas, mensagens e conteúdo de mensagens programadas dos clientes não ficam disponíveis aqui — por design.</span>
+</div>
+{%- endmacro %}

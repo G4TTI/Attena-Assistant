@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlmodel import Session, col, select
 
+from tests.conftest import chat_of, make_automation_message, make_schedule, recipient_hash_for, text_of
 from whatsapp_scheduler import schedule_views, timing
 from whatsapp_scheduler.db import get_engine
 from whatsapp_scheduler.errors import ValidationError
@@ -13,7 +14,6 @@ from whatsapp_scheduler.models import (
     Automation,
     AutomationMessage,
     AutomationSchedule,
-    CachedMessage,
     Dispatch,
     DispatchStatus,
     Schedule,
@@ -82,9 +82,9 @@ def test_three_messages_are_three_individual_schedules_of_one_group(db, test_use
     assert len(schedules) == 3
     assert {s.group_id for s in schedules} == {group.id}
     assert [s.position for s in schedules] == [0, 1, 2]
-    assert [s.text for s in schedules] == ["Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
-    assert (group.chat_id, group.session, group.timezone, group.source) == (CHAT, test_user.waha_session, TZ, ScheduleSource.manual)
-    assert {s.chat_id for s in schedules} == {CHAT} and {s.session for s in schedules} == {test_user.waha_session}
+    assert [text_of(s) for s in schedules] == ["Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
+    assert (chat_of(group), group.session, group.timezone, group.source) == (CHAT, test_user.waha_session, TZ, ScheduleSource.manual)
+    assert {chat_of(s) for s in schedules} == {CHAT} and {s.session for s in schedules} == {test_user.waha_session}
     # O início é EXATAMENTE o digitado; as seguintes só somam o intervalo (3 s) que já existia nas automações.
     assert [s.first_run_local for s in schedules] == [
         datetime(2026, 9, 20, 18, 0, 0), datetime(2026, 9, 20, 18, 0, 3), datetime(2026, 9, 20, 18, 0, 6),
@@ -121,7 +121,7 @@ def test_editing_the_start_moves_every_message(db, test_user):
     """Teste 4: 18:00 -> 19:00, todas acompanham (e a dispatch pendente também)."""
     group, schedules = _sequence(db, test_user)
     update_sequence(db, group.id, user_id=test_user.id, session=test_user.waha_session,
-                    messages=[s.text for s in schedules], start=datetime(2026, 9, 20, 19, 0), allow_past=True)
+                    messages=[text_of(s) for s in schedules], start=datetime(2026, 9, 20, 19, 0), allow_past=True)
     db.refresh(group)
     rows = group_schedules(db, group.id)
     assert [s.first_run_local for s in rows] == [
@@ -137,7 +137,7 @@ def test_edit_can_reorder_and_remove_messages(db, test_user):
     update_sequence(db, group.id, user_id=test_user.id, session=test_user.waha_session,
                     messages=["Nos vemos às 20h.", "Olá Leonardo!"], start=datetime(2026, 9, 20, 18, 0), allow_past=True)
     rows = group_schedules(db, group.id)
-    assert [(s.position, s.text) for s in rows] == [(0, "Nos vemos às 20h."), (1, "Olá Leonardo!")]
+    assert [(s.position, text_of(s)) for s in rows] == [(0, "Nos vemos às 20h."), (1, "Olá Leonardo!")]
     assert len(db.exec(select(ScheduleDependency)).all()) == 1
 
 
@@ -208,17 +208,21 @@ async def test_message_goes_out_through_the_selected_whatsapp(db, test_user, fak
     assert fake_waha.sent == [{"session": wa_b.session_name, "chatId": CHAT, "text": "pelo B"}]
 
 
-async def test_sequence_is_sent_in_order_and_appears_in_the_conversation_cache(db, test_user, fake_waha, frozen_clock):
-    """Parte 19 (ponta a ponta do backend): agenda -> job -> sessão -> envio -> cache da conversa."""
+async def test_sequence_is_sent_in_order_and_content_is_purged(db, test_user, fake_waha, frozen_clock):
+    """Parte 19 (ponta a ponta do backend): agenda -> job -> sessão -> envio -> conteúdo expurgado."""
     _sequence(db, test_user, start=datetime(2026, 9, 1, 8, 50))  # 11:50 UTC, já vencido no relógio congelado (12:00)
     await SchedulerService(fake_waha).run_once()
     assert [m["text"] for m in fake_waha.sent] == [
         "Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."
     ]
     assert {m["session"] for m in fake_waha.sent} == {test_user.waha_session}
-    cached = db.exec(select(CachedMessage).where(CachedMessage.chat_id == CHAT)).all()
-    assert sorted(m.body for m in cached) == sorted(m["text"] for m in fake_waha.sent)
+    db.expire_all()
+    # v1.4: depois de enviada, a mensagem não guarda mais conteúdo nem destinatário.
+    for schedule in db.exec(select(Schedule)).all():
+        assert schedule.message_ciphertext is None and schedule.recipient_phone_encrypted is None
+        assert schedule.content_purged_at is not None
     group = db.exec(select(ScheduleGroup)).one()
+    assert group.recipient_encrypted is None
     view = schedule_views.get_group_view(db, group.id, test_user.id, TZ)
     assert view.status == "sent" and [m.status for m in view.messages] == ["sent"] * 3
 
@@ -353,8 +357,8 @@ def test_conversation_scheduled_only_this_chat_and_user(db, test_user):
 def test_backfill_groups_legacy_schedules_is_idempotent(db, test_user):
     now_local = datetime(2026, 9, 25, 18, 0)
     legacy = [
-        Schedule(user_id=test_user.id, session="s", recipient_input="x", chat_id=CHAT, text=t, timezone=TZ,
-                 first_run_local=now_local + timedelta(seconds=3 * i))
+        make_schedule(user_id=test_user.id, session="s", chat_id=CHAT, text=t, timezone=TZ,
+                      first_run_local=now_local + timedelta(seconds=3 * i))
         for i, t in enumerate(["um", "dois"])
     ]
     db.add_all(legacy)
@@ -381,15 +385,15 @@ def test_backfill_groups_automation_chain_by_recipient(db, test_user):
             message = db.exec(select(AutomationMessage).where(col(AutomationMessage.automation_id) == automation.id)
                               .where(col(AutomationMessage.position) == position)).first()
             if message is None:
-                message = AutomationMessage(automation_id=automation.id, position=position, text=f"m{position}")
+                message = make_automation_message(automation_id=automation.id, position=position, text=f"m{position}")
                 db.add(message)
                 db.commit()
-            schedule = Schedule(user_id=test_user.id, session="s", recipient_input=chat, chat_id=chat, text=message.text,
-                                timezone=TZ, first_run_local=datetime(2026, 9, 25, 19, 0, 3 * position))
+            schedule = make_schedule(user_id=test_user.id, session="s", chat_id=chat, text=text_of(message),
+                                     timezone=TZ, first_run_local=datetime(2026, 9, 25, 19, 0, 3 * position))
             db.add(schedule)
             db.commit()
             db.add(AutomationSchedule(automation_id=automation.id, message_id=message.id, schedule_id=schedule.id,
-                                      recipient_chat_id=chat))
+                                      recipient_phone_hash=recipient_hash_for(test_user.id, chat)))
             db.commit()
     assert backfill_groups(db, test_user.id) == 4
     groups = db.exec(select(ScheduleGroup)).all()
@@ -450,7 +454,7 @@ def test_waiting_chain_is_skipped_without_hitting_the_gate(db, test_user, monkey
     _sequence(db, test_user, messages=["a", "b", "c"], start=datetime(2026, 9, 1, 8, 59))  # ainda no futuro
     calls = []
     real = scheduler._dependency_gate
-    monkeypatch.setattr(scheduler, "_dependency_gate", lambda db_, sch: (calls.append(sch.text), real(db_, sch))[1])
+    monkeypatch.setattr(scheduler, "_dependency_gate", lambda db_, sch: (calls.append(text_of(sch)), real(db_, sch))[1])
     materialize_due()
     assert calls == []  # b e c esperam a cadeia aberta sem gastar consulta
     assert len(db.exec(select(Dispatch)).all()) == 1  # só a 1ª tem dispatch (como antes)
@@ -496,5 +500,6 @@ async def test_run_now_moves_the_whole_sequence_not_just_the_first_message(db, t
         frozen_clock["now"] = FROZEN + timedelta(seconds=offset)
         materialize_due()
         await dispatch_due(fake_waha)
-    assert [m["text"] for m in fake_waha.sent] == [s.text for s in schedules]
+    assert [m["text"] for m in fake_waha.sent] == [
+        "Olá Leonardo!", "Passando para lembrar da nossa avaliação.", "Nos vemos às 20h."]
     assert run_group_now(db, group.id, user_id="another-user") is False

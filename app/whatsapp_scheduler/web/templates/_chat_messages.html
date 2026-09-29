@@ -5,16 +5,16 @@
   <p class="muted">Nenhuma mensagem nesta conversa (ou o WhatsApp ainda não sincronizou o histórico).</p>
 {% else %}
   {% if hist.error %}
-    <div class="alert err">Mostrando o cache local — falha ao atualizar: {{ hist.error }}</div>
+    <div class="alert err">Mostrando a última leitura (em memória) — falha ao atualizar: {{ hist.error }}</div>
   {% endif %}
-  {% for m in hist.messages %}
+  {% for m in messages %}
     <div class="bubble {{ 'me' if m.from_me else 'them' }}">
       <div class="text">{{ m.text or '—' }}</div>
-      <div class="meta">{% if m.id in sent_ids %}<span class="from-schedule" title="Enviada por um agendamento">{{ status_icon('check', 11) }} agendada</span>{% endif %}{{ m.when }}</div>
+      <div class="meta">{% if m.from_schedule %}<span class="from-schedule" title="Enviada por um agendamento">{{ status_icon('check', 11) }} agendada</span>{% endif %}{{ m.when }}</div>
     </div>
   {% endfor %}
   <div class="muted" style="text-align:center;margin-top:6px">
-    {% if hist.from_cache %}cache local · {{ synced_local }}{% else %}atualizado · {{ synced_local }}{% endif %}
+    lido do WhatsApp às {{ synced_local }} · não fica salvo no Attena
   </div>
 {% endif %}
 <script>(function(){var c=document.getElementById('chat-scroll');if(c)c.scrollTop=c.scrollHeight;})();</script>

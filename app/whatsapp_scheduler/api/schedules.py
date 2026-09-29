@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, col, select
 
-from .. import auth, whatsapp_service
+from .. import auth, plans, whatsapp_service
 from ..db import get_session
 from ..models import Dispatch, Schedule, User
 from ..schemas import DispatchRead, ScheduleCreate, ScheduleRead
@@ -49,6 +49,7 @@ def create(
             raise HTTPException(status_code=422, detail="Conecte um WhatsApp antes de criar um agendamento.")
         session_name = primary.session_name
     try:
+        plans.check_limit(db, current_user, "pending_messages")
         schedule = create_schedule(
             db,
             user_id=current_user.id,

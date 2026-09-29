@@ -21,18 +21,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 
 from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
-from . import timing, whatsapp_service
+from . import privacy, timing, whatsapp_service
 from .clock import utcnow
 from .models import (
     OPEN_STATUSES,
     Automation,
     AutomationSchedule,
-    CachedMessage,
     Dispatch,
     DispatchStatus,
     Event,
@@ -95,9 +95,14 @@ class MessageView:
     def position(self) -> int:
         return self.schedule.position
 
+    @cached_property
+    def text(self) -> str | None:
+        """Decifrado em memória só para o dono ver; None = já expurgado (retenção)."""
+        return privacy.schedule_message(self.schedule, safe=True)
+
     @property
-    def text(self) -> str:
-        return self.schedule.text
+    def content_removed(self) -> bool:
+        return self.text is None
 
     @property
     def error(self) -> str | None:
@@ -137,14 +142,30 @@ class GroupView:
     def id(self) -> str:
         return self.group.id
 
+    @cached_property
+    def recipient_info(self) -> privacy.Recipient | None:
+        return privacy.group_recipient(self.group, safe=True)
+
     @property
     def recipient(self) -> str:
-        """Nome do contato; sem nome, o número formatado ("5511999998888@c.us" -> "+5511999998888")."""
-        if self.group.recipient_name:
-            return self.group.recipient_name
-        raw = self.group.recipient_input
-        head = raw.split("@", 1)[0]
-        return f"+{head}" if raw.endswith("@c.us") and head.isdigit() else raw
+        """Nome do contato; sem nome, o número formatado ("5511999998888@c.us" -> "+5511999998888").
+        Depois que o agendamento termina o destinatário é expurgado (retenção)."""
+        info = self.recipient_info
+        return info.display if info is not None else "Destinatário removido"
+
+    @property
+    def chat_id(self) -> str:
+        info = self.recipient_info
+        return info.chat_id if info is not None else ""
+
+    @property
+    def is_group_chat(self) -> bool:
+        return self.chat_id.endswith("@g.us")
+
+    @property
+    def recipient_phone(self) -> str | None:
+        info = self.recipient_info
+        return info.phone if info is not None else None
 
     @property
     def label(self) -> str:
@@ -375,11 +396,12 @@ def get_group_view(db: Session, group_id: str, user_id: str, tz_name: str) -> Gr
 # Conversas: o que aparece DENTRO da conversa e o painel "Mensagens programadas"
 # --------------------------------------------------------------------------- #
 def _chat_scope(user_id: str, session_name: str, chat_id: str) -> tuple:
-    """Uma conversa = (usuário, WhatsApp, chat). Toda consulta daqui passa por isso."""
+    """Uma conversa = (usuário, WhatsApp, chat). Toda consulta daqui passa por
+    isso — pelo HASH do destinatário, o número não está no banco."""
     return (
         col(Schedule.user_id) == user_id,
         col(Schedule.session) == session_name,
-        col(Schedule.chat_id) == chat_id,
+        col(Schedule.recipient_phone_hash) == privacy.recipient_hash(user_id, chat_id),
     )
 
 
@@ -399,8 +421,8 @@ class ConversationScheduled:
     - acima disso: um botão só ("Ver mensagens programadas"), que abre o painel;
     - canceladas nunca viram bolha — ficam no painel; enquanto houver
       cancelamento recente aparece só um link discreto;
-    - falhas e enviadas que ainda não estão no histórico continuam como bolhas
-      (são o histórico real da conversa)."""
+    - enviadas não viram bolha: aparecem no histórico real (buscado no WhatsApp);
+    - falhas recentes continuam como bolha, sem o texto (expurgado ao falhar)."""
 
     open_items: list[MessageView] = field(default_factory=list)
     recent_items: list[MessageView] = field(default_factory=list)
@@ -408,7 +430,9 @@ class ConversationScheduled:
     # Todas as canceladas da conversa (o mesmo número do painel) — só é contado
     # quando há cancelamento recente, o único caso em que a conversa o mostra.
     canceled_count: int = 0
-    sent_ids: set[str] = field(default_factory=set)
+    # HMAC dos ids (no WAHA) das mensagens que saíram de agendamentos — marca a
+    # bolha "agendada" no histórico sem guardar o id (que embute o telefone).
+    sent_hashes: set[str] = field(default_factory=set)
     # Epoch do último envio confirmado: quando aumenta, a tela recarrega o histórico
     # pra a bolha real da mensagem aparecer.
     last_sent_ts: int = 0
@@ -462,33 +486,18 @@ def conversation_scheduled(
     dispatches = _load_dispatches(db, [s.id for s in schedules])
 
     sent = [d for ds in dispatches.values() for d in ds if d.status == DispatchStatus.sent]
-    view.sent_ids = {d.waha_message_id for d in sent if d.waha_message_id}
+    view.sent_hashes = {d.waha_message_hash for d in sent if d.waha_message_hash}
     view.last_sent_ts = max(
         (int(d.sent_at_utc.replace(tzinfo=timezone.utc).timestamp()) for d in sent if d.sent_at_utc is not None),
         default=0,
     )
-    cached_ids: set[str] = set()
-    for chunk in _chunks(list(view.sent_ids)):
-        cached_ids.update(
-            db.exec(
-                select(CachedMessage.message_id)
-                .where(col(CachedMessage.user_id) == user_id)
-                .where(col(CachedMessage.message_id).in_(chunk))
-            ).all()
-        )
 
     for schedule in schedules:
         item = _message_view(schedule, dispatches.get(schedule.id, []), tz_name)
         if item.status in OPEN_MESSAGE_STATUSES:
             view.open_items.append(item)
-        elif item.status == "canceled":
-            continue  # não deveria chegar aqui (a consulta já as exclui): cancelada nunca vira bolha
-        elif item.status == "sent":
-            mid = item.dispatch.waha_message_id if item.dispatch else None
-            if mid and mid in cached_ids:
-                continue  # já é uma bolha normal do histórico
-            if item.when_utc >= window_start:
-                view.recent_items.append(item)
+        elif item.status in ("canceled", "sent"):
+            continue  # cancelada fica no painel; enviada já está no histórico real
         elif item.when_utc >= window_start:
             view.recent_items.append(item)
     view.open_items.sort(key=_by_time)
@@ -496,15 +505,21 @@ def conversation_scheduled(
 
 
 def chat_recipient_name(db: Session, user_id: str, session_name: str, chat_id: str) -> str | None:
-    """Nome do contato como ficou no agendamento mais recente desta conversa (sem ir ao WhatsApp)."""
-    return db.exec(
-        select(ScheduleGroup.recipient_name)
+    """Nome do contato como ficou num agendamento ainda ativo desta conversa (sem ir ao WhatsApp)."""
+    groups = db.exec(
+        select(ScheduleGroup)
         .where(col(ScheduleGroup.user_id) == user_id)
         .where(col(ScheduleGroup.session) == session_name)
-        .where(col(ScheduleGroup.chat_id) == chat_id)
-        .where(col(ScheduleGroup.recipient_name).is_not(None))
+        .where(col(ScheduleGroup.recipient_phone_hash) == privacy.recipient_hash(user_id, chat_id))
+        .where(col(ScheduleGroup.recipient_encrypted).is_not(None))
         .order_by(col(ScheduleGroup.created_at).desc())
-    ).first()
+        .limit(5)
+    ).all()
+    for group in groups:
+        info = privacy.group_recipient(group, safe=True)
+        if info is not None and info.name:
+            return info.name
+    return None
 
 
 @dataclass

@@ -164,11 +164,18 @@ async def test_ensure_session_concurrent_calls_create_only_once(waha):
 
 
 @respx.mock
-async def test_create_session_enables_noweb_store_so_chats_work_on_that_engine(waha):
+async def test_create_session_keeps_noweb_store_off_by_default(waha, monkeypatch):
+    """Privacidade por padrão: sem WAHA_NOWEB_STORE_ENABLED o WAHA não grava histórico (NOWEB)."""
     import json
+
+    from whatsapp_scheduler.config import settings
 
     create = respx.post(f"{BASE}/api/sessions").mock(return_value=httpx.Response(201, json={"name": "u_n"}))
     await waha.create_session("u_n")
     body = json.loads(create.calls.last.request.content)
     assert body["name"] == "u_n" and body["start"] is True
-    assert body["config"]["noweb"]["store"]["enabled"] is True
+    assert body["config"]["noweb"]["store"]["enabled"] is False
+
+    monkeypatch.setattr(settings, "waha_noweb_store_enabled", True)  # opt-in explícito
+    await waha.create_session("u_n")
+    assert json.loads(create.calls.last.request.content)["config"]["noweb"]["store"]["enabled"] is True

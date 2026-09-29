@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, col, select
 
-from .. import app_settings, auth, schedule_views, timing, whatsapp_service
+from .. import app_settings, auth, plans, privacy, schedule_views, timing, whatsapp_service
 from ..chatsvc import cached_chat_name, get_history, list_chats, send_now
 from ..clock import utcnow
 from ..db import get_session
@@ -310,6 +310,7 @@ async def ui_create(
             raise ValidationError("Conecte um WhatsApp antes de criar um agendamento.")
         chats = unique_chats(picked)
         start = _start_from_form(send_date, send_time, send_at)
+        plans.check_limit(db, current_user, "pending_messages", adding=len(chats) * max(1, len([t for t in texts if t.strip()])))
         await whatsapp_service.require_session_ready(request.app.state.waha, wa_session)
 
         def _create_all() -> None:
@@ -381,7 +382,7 @@ def _edit_form_ctx(db: Session, current_user: User, view: schedule_views.GroupVi
         target="#modal-root",
         swap="innerHTML",
         recipient_label=view.recipient,
-        messages=[m.text for m in view.messages],
+        messages=[m.text or "" for m in view.messages],
         send_date=group.start_local.strftime("%Y-%m-%d"),
         send_time=group.start_local.strftime("%H:%M"),
         whatsapp_session_id=wa.id if wa else "",
@@ -503,7 +504,8 @@ def _owned_wa_session(db: Session, session_id: str, user_id: str):
 def _owned_chat_schedule(db: Session, schedule_id: str, user_id: str, wa_session, chat: str) -> None:
     """404 se a mensagem não for desta conversa (usuário + WhatsApp + chat)."""
     schedule = db.get(Schedule, schedule_id)
-    if schedule is None or (schedule.user_id, schedule.session, schedule.chat_id) != (user_id, wa_session.session_name, chat):
+    expected = (user_id, wa_session.session_name, privacy.recipient_hash(user_id, chat))
+    if schedule is None or (schedule.user_id, schedule.session, schedule.recipient_phone_hash) != expected:
         raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
 
 
@@ -601,14 +603,19 @@ async def ui_chat_messages(
 ) -> HTMLResponse:
     wa_session = _owned_wa_session(db, session_id, current_user.id)
     tz_name = app_settings.user_timezone(current_user)
+    # Direto do WhatsApp (ou do cache em memória de poucos segundos) — nada é gravado.
     hist = await get_history(
-        db, request.app.state.waha, current_user.id, wa_session.session_name, chat, tz_name, force=refresh,
+        request.app.state.waha, current_user.id, wa_session.session_name, chat, tz_name, force=refresh,
     )
     conv = schedule_views.conversation_scheduled(db, current_user.id, wa_session.session_name, chat, tz_name)
+    messages = [
+        {**m, "from_schedule": privacy.waha_message_hash(current_user.id, m["id"]) in conv.sent_hashes}
+        for m in hist.messages
+    ]
     return templates.TemplateResponse(
         "_chat_messages.html",
         {
-            "request": request, "chat_id": chat, "hist": hist, "sent_ids": conv.sent_ids,
+            "request": request, "chat_id": chat, "hist": hist, "messages": messages,
             "synced_local": _sync_label(hist.synced_at, tz_name),
         },
     )
@@ -773,7 +780,7 @@ async def ui_chat_panel_cancel_selected(
             .where(col(Schedule.id).in_(wanted))
             .where(col(Schedule.user_id) == current_user.id)
             .where(col(Schedule.session) == wa_session.session_name)
-            .where(col(Schedule.chat_id) == chat)
+            .where(col(Schedule.recipient_phone_hash) == privacy.recipient_hash(current_user.id, chat))
         ).all()
     ) if wanted else []
     count = cancel_messages(db, own_ids, user_id=current_user.id)
@@ -801,7 +808,9 @@ async def ui_chat_panel_cancel_group(
     """"Cancelar todas" de uma sequência — o mesmo `service.cancel_group` da tela Agendamentos."""
     wa_session = _owned_wa_session(db, session_id, current_user.id)
     group = get_group(db, group_id, current_user.id)
-    if group is None or (group.session, group.chat_id) != (wa_session.session_name, chat):
+    if group is None or (group.session, group.recipient_phone_hash) != (
+        wa_session.session_name, privacy.recipient_hash(current_user.id, chat)
+    ):
         raise HTTPException(status_code=404, detail="Agendamento não encontrado.")
     cancel_group(db, group_id, user_id=current_user.id)
     return templates.TemplateResponse(
@@ -827,7 +836,7 @@ async def ui_chat_send(
         ok = "erro:Mensagem vazia."
     else:
         try:
-            await send_now(db, request.app.state.waha, current_user.id, wa_session.session_name, chat, text)
+            await send_now(request.app.state.waha, current_user.id, wa_session.session_name, chat, text)
             ok = "Mensagem enviada."
         except WahaError as exc:
             ok = f"erro:{exc}"
@@ -845,6 +854,7 @@ async def ui_chat_schedule(
     send_time: str = Form(""),
     send_at: str = Form(""),
     recurrence: str = Form(""),
+    recipient_name: str = Form(""),
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_web),
 ) -> HTMLResponse:
@@ -856,8 +866,10 @@ async def ui_chat_schedule(
     texts = messages if messages else ([text] if text.strip() else [])
     try:
         start = _start_from_form(send_date, send_time, send_at)
+        plans.check_limit(db, current_user, "pending_messages", adding=max(1, len([t for t in texts if t.strip()])))
         await whatsapp_service.require_session_ready(request.app.state.waha, wa_session)
-        name = cached_chat_name(wa_session.session_name, chat)
+        # Nome do contato como a tela o mostrou (só exibição; vai cifrado junto com o destinatário).
+        name = recipient_name.strip()[:120] or cached_chat_name(wa_session.session_name, chat)
         await asyncio.to_thread(
             create_sequence,
             db,

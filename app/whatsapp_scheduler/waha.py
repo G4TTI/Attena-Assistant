@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from .config import settings
+
 
 class WahaError(RuntimeError):
     """Falha ao falar com o WAHA. `status_code` só vem preenchido quando o
@@ -55,9 +57,12 @@ class WahaClient:
         except httpx.HTTPError as exc:
             raise WahaError(f"Falha de conexão com o WAHA: {exc}") from exc
         if resp.status_code >= 400:
-            body = resp.text[:500]
+            # Só para a tela do próprio usuário: nunca é gravado (o scheduler
+            # guarda só um código + texto genérico, ver failures.py) e o log
+            # passa pelo log_sanitizer.
+            body = resp.text[:200]
             raise WahaError(
-                f"WAHA respondeu {resp.status_code} em {method} {url}: {body}",
+                f"WAHA respondeu {resp.status_code} em {method} {url.split('?')[0]}: {body}",
                 status_code=resp.status_code,
             )
         return resp
@@ -75,16 +80,17 @@ class WahaClient:
     async def create_session(self, session: str) -> dict[str, Any]:
         """Cria (e já inicia) uma sessão que ainda não existe no WAHA.
 
-        `config.noweb.store` liga o armazenamento de conversas/mensagens do
-        engine NOWEB — sem ele, a lista de conversas e o histórico (endpoints
-        `chats/overview` e `messages`) não funcionam nesse engine. É ignorado
-        pelo WEBJS, então vale para os dois sem o app precisar saber qual está
-        em uso (trocar o engine é só `WHATSAPP_DEFAULT_ENGINE` no compose).
+        `config.noweb.store` controla se o engine NOWEB grava chats, contatos e
+        mensagens num banco próprio (`.sessions/noweb/<sessão>/store.sqlite3`).
+        Privacidade por padrão: DESLIGADO (`WAHA_NOWEB_STORE_ENABLED=false`) —
+        com NOWEB isso deixa a tela Conversas sem lista/histórico, mas o envio
+        de mensagens continua funcionando. O WEBJS ignora esta opção (ver
+        docs/SECURITY_AND_PRIVACY.md → WAHA).
         """
         payload = {
             "name": session,
             "start": True,
-            "config": {"noweb": {"store": {"enabled": True, "fullSync": False}}},
+            "config": {"noweb": {"store": {"enabled": settings.waha_noweb_store_enabled, "fullSync": False}}},
         }
         resp = await self._request("POST", "/api/sessions", json=payload)
         data = resp.json()
@@ -142,6 +148,21 @@ class WahaClient:
             pass  # já parada, ou nunca existiu — segue para o start mesmo assim
 
         return await self.start_session(session)
+
+    async def logout_session(self, session: str) -> None:
+        """Desvincula o aparelho (o WhatsApp do usuário deixa de listar esta sessão)."""
+        await self._request("POST", f"/api/sessions/{session}/logout")
+
+    async def delete_session(self, session: str) -> None:
+        """Apaga a sessão no WAHA, incluindo credenciais e os dados locais do engine."""
+        await self._request("DELETE", f"/api/sessions/{session}")
+
+    async def list_sessions(self) -> list[dict[str, Any]]:
+        """Todas as sessões do WAHA (nome + status). Quem chama NÃO deve repassar
+        o campo `me` (número/nome do perfil) para telas administrativas."""
+        resp = await self._request("GET", "/api/sessions", params={"all": "true"})
+        data = resp.json()
+        return data if isinstance(data, list) else []
 
     async def send_text(self, session: str, chat_id: str, text: str) -> dict[str, Any]:
         resp = await self._request(
