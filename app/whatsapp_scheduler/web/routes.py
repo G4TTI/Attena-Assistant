@@ -208,7 +208,10 @@ async def page_chats_session(
 ) -> HTMLResponse:
     session = whatsapp_service.get_session(db, session_id, current_user.id)
     if session is None:
-        raise HTTPException(status_code=404, detail="WhatsApp não encontrado.")
+        # Link velho/favorito de um WhatsApp que não é (mais) desta conta, ou de outra
+        # instância: em vez de um JSON de erro, abre as conversas do WhatsApp principal.
+        # Mesma resposta pra id inexistente e id de outro usuário — não revela nada.
+        return RedirectResponse(url="/conversas", status_code=303)
     return templates.TemplateResponse(
         "conversas.html",
         {

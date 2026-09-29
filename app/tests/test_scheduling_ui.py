@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, col, select
 
 from tests.conftest import FakeWaha, register_and_login, whatsapp_session_id
-from whatsapp_scheduler import calendar_service, calendar_sync, crypto, timing
+from whatsapp_scheduler import calendar_service, calendar_sync, clock, crypto, timing
 from whatsapp_scheduler.calendar_providers.base import OAuthTokens, RemoteEvent
 from whatsapp_scheduler.clock import utcnow
 from whatsapp_scheduler.config import settings
@@ -398,6 +398,9 @@ def test_end_to_end_conversation_sequence_is_sent_and_shown(client):
         "chat": LEO, "messages": ["um", "dois", "três"], "send_date": now_local.strftime("%Y-%m-%d"),
         "send_time": now_local.strftime("%H:%M")})
     assert "Agendamento criado" in r.text
+    # O formulário só tem minuto (HH:MM:00) e a sequência sai com 3s entre as mensagens: rodando
+    # nos primeiros segundos de um minuto a 3ª (HH:MM:06) ainda não venceu. O job roda 10s adiante.
+    clock.set_offset(timedelta(seconds=10))
     asyncio.run(SchedulerService(client.waha).run_once())
     assert [m["text"] for m in client.waha.sent] == ["um", "dois", "três"]
     assert {m["session"] for m in client.waha.sent} == {wa_b.session_name}   # o WhatsApp escolhido, não o principal

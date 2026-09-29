@@ -140,6 +140,20 @@ def test_conversas_page_and_partials(client):
     assert "5511999998888@c.us" in view.text
 
 
+def test_stale_or_foreign_whatsapp_link_opens_own_conversations(client):
+    """Link velho (id que não existe nesta base) ou de outra conta: volta pras conversas do
+    WhatsApp principal em vez de um JSON "WhatsApp não encontrado." — sem revelar nada."""
+    own = whatsapp_session_id(client)
+    r = client.get("/conversas/4a7c04e7-41c7-478f-8677-660ea32d3e0f", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/conversas"
+    assert client.get("/conversas/4a7c04e7-41c7-478f-8677-660ea32d3e0f").url.path == f"/conversas/{own}"
+    client.cookies.clear()
+    register_and_login(client, name="B", email="b-link@example.com")
+    other = client.get(f"/conversas/{own}")
+    assert other.status_code == 200 and other.url.path == f"/conversas/{whatsapp_session_id(client)}"
+    assert other.url.path != f"/conversas/{own}"
+
+
 def test_schedule_from_chat_view(client):
     sid = whatsapp_session_id(client)
     r = client.post(
