@@ -36,5 +36,16 @@
     <div class="smp-body">
       {% include "_scheduled_panel_list.html" %}
     </div>
+    {# Seleção em massa: as caixas ficam na lista (form="smp-bulk"); o JS (bulkSync) mostra esta
+       barra quando há algo selecionável e mantém o contador e a confirmação em dia. #}
+    <form id="smp-bulk" class="bulk-bar smp-bulk" data-bulk hidden
+          hx-post="/ui/chats/{{ session_id }}/scheduled/panel/cancel-selected" hx-target="#smp-list" hx-swap="outerHTML"
+          hx-disabled-elt="find button[type=submit]"
+          data-all="Selecionar todas" data-one="mensagem selecionada" data-many="mensagens selecionadas"
+          data-confirm-one="Deseja cancelar a mensagem selecionada? Ela não será enviada."
+          data-confirm-many="Deseja cancelar as {n} mensagens selecionadas? Elas não serão enviadas.">
+      <input type="hidden" name="chat" value="{{ chat_id }}">
+      {% include "_bulk_bar.html" %}
+    </form>
   </div>
 </div>

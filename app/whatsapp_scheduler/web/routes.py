@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from .. import app_settings, auth, schedule_views, timing, whatsapp_service
 from ..chatsvc import cached_chat_name, get_history, list_chats, send_now
@@ -19,7 +19,16 @@ from ..errors import ValidationError
 from ..models import Schedule, ScheduleSource, User
 from ..recipients import RecipientError, normalize_recipient
 from ..recurrence import utc_to_local
-from ..service import cancel_group, cancel_schedule, create_sequence, get_group, run_group_now, update_sequence
+from ..service import (
+    cancel_group,
+    cancel_groups,
+    cancel_messages,
+    cancel_schedule,
+    create_sequence,
+    get_group,
+    run_group_now,
+    update_sequence,
+)
 from ..waha import WahaError
 
 # Teto de destinatários por envio do formulário (cada um vira um agendamento).
@@ -162,13 +171,23 @@ def _schedule_form_ctx(db: Session, current_user: User, **overrides: object) -> 
     return form
 
 
-def _table_ctx(request: Request, db: Session, user_id: str, tz_name: str, *, oob: bool = False) -> dict:
+def _table_ctx(
+    request: Request, db: Session, user_id: str, tz_name: str, *, oob: bool = False, notice: dict | None = None
+) -> dict:
     return {
         "request": request,
         "groups": schedule_views.list_group_views(db, user_id, tz_name),
         "oob": oob,
         "tz_label": timing.tz_label(tz_name),
+        "notice": notice,
     }
+
+
+def _bulk_notice(count: int, one: str, many: str, none: str) -> dict:
+    """Aviso depois de um cancelamento em massa ("3 mensagens canceladas.")."""
+    if not count:
+        return {"ok": False, "text": none}
+    return {"ok": True, "text": f"1 {one}." if count == 1 else f"{count} {many}."}
 
 
 # --------------------------------------------------------------------------- #
@@ -440,6 +459,26 @@ async def ui_cancel(
     return _table_response(request, db, current_user)
 
 
+@router.post("/ui/schedules/cancel-selected", response_class=HTMLResponse)
+async def ui_cancel_selected(
+    request: Request,
+    group_ids: list[str] = Form([]),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """"Cancelar selecionados" (seleção em massa): cada agendamento marcado inteiro, numa
+    transação só (`service.cancel_groups`). Ids de outro usuário são ignorados."""
+    count = cancel_groups(db, group_ids, user_id=current_user.id)
+    notice = _bulk_notice(
+        count, "agendamento cancelado", "agendamentos cancelados",
+        "Nenhum agendamento foi cancelado: os selecionados já tinham saído ou sido cancelados.",
+    )
+    return templates.TemplateResponse(
+        "_table.html",
+        _table_ctx(request, db, current_user.id, app_settings.user_timezone(current_user), notice=notice),
+    )
+
+
 @router.post("/ui/schedules/{group_id}/run-now", response_class=HTMLResponse)
 async def ui_run_now(
     request: Request,
@@ -709,6 +748,42 @@ async def ui_chat_panel_cancel_message(
         _panel_ctx(request, db, current_user, wa_session, session_id, chat, show_scheduled=scheduled,
                    show_canceled=canceled, limit=limit, refresh_conversation=True),
     )
+
+
+@router.post("/ui/chats/{session_id}/scheduled/panel/cancel-selected", response_class=HTMLResponse)
+async def ui_chat_panel_cancel_selected(
+    request: Request,
+    session_id: str,
+    chat: str = Form(...),
+    ids: list[str] = Form([]),
+    scheduled: bool = Form(False),
+    canceled: bool = Form(False),
+    limit: int = Form(schedule_views.PANEL_PAGE_SIZE),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(auth.require_user_web),
+) -> HTMLResponse:
+    """"Cancelar selecionadas" do painel: as mensagens marcadas, numa transação só
+    (`service.cancel_messages` — as não marcadas da mesma sequência continuam valendo).
+    Só conta o que é desta conversa; ids de fora são ignorados."""
+    wa_session = _owned_wa_session(db, session_id, current_user.id)
+    wanted = list(dict.fromkeys(ids))[: schedule_views.PANEL_MAX_LIMIT]
+    own_ids = list(
+        db.exec(
+            select(Schedule.id)
+            .where(col(Schedule.id).in_(wanted))
+            .where(col(Schedule.user_id) == current_user.id)
+            .where(col(Schedule.session) == wa_session.session_name)
+            .where(col(Schedule.chat_id) == chat)
+        ).all()
+    ) if wanted else []
+    count = cancel_messages(db, own_ids, user_id=current_user.id)
+    ctx = _panel_ctx(request, db, current_user, wa_session, session_id, chat, show_scheduled=scheduled,
+                     show_canceled=canceled, limit=limit, refresh_conversation=True)
+    ctx["notice"] = _bulk_notice(
+        count, "mensagem cancelada", "mensagens canceladas",
+        "Nenhuma mensagem foi cancelada: as selecionadas já tinham saído ou sido canceladas.",
+    )
+    return templates.TemplateResponse("_scheduled_panel_list.html", ctx)
 
 
 @router.post("/ui/chats/{session_id}/scheduled/panel/groups/{group_id}/cancel", response_class=HTMLResponse)

@@ -1,0 +1,17 @@
+{# Barra de seleção em massa (painel "Mensagens programadas" e tela Agendamentos). Vai dentro de
+   um <form data-bulk> cujas caixas (.bulk-item, com form="<id do form>") ficam na lista ao lado;
+   textos vêm dos data-* do form. Comportamento em base.html (bulkSync / bulkConfirm). #}
+<div class="bulk-main">
+  <label class="bulk-all-label">
+    <input type="checkbox" class="bulk-all" aria-label="{{ bulk_all | default('Selecionar todas') }}">
+    <span data-bulk-label>{{ bulk_all | default('Selecionar todas') }}</span>
+  </label>
+  <button type="button" class="danger bulk-cancel" data-bulk-needs-selection disabled onclick="bulkConfirm(this, true)">{{ bulk_action | default('Cancelar selecionadas') }}</button>
+</div>
+<div class="bulk-confirm" role="alertdialog" aria-label="Confirmar cancelamento" data-hold-poll hidden>
+  <p data-bulk-question></p>
+  <div class="smp-confirm-actions">
+    <button type="button" class="ghost" onclick="bulkConfirm(this, false)">Cancelar</button>
+    <button type="submit" class="danger" data-confirm-default>Confirmar cancelamento</button>
+  </div>
+</div>

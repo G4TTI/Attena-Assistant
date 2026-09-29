@@ -472,3 +472,112 @@ def test_base_pauses_the_panel_refresh_while_a_confirmation_is_open():
     base = (Path(__file__).resolve().parent.parent / "whatsapp_scheduler" / "web" / "templates" / "base.html").read_text()
     assert "[data-hold-poll]:not([hidden])" in base and "function smpConfirm" in base
     assert "htmx:oobAfterSwap" in base and "__chatLastSent" in base
+
+
+# --------------------------------------------------------------------------- #
+# Cancelamento em massa (painel e Agendamentos)
+# --------------------------------------------------------------------------- #
+def _ids(group_id: str, positions=None) -> list[str]:
+    with Session(get_engine()) as db:
+        rows = db.exec(select(Schedule).where(col(Schedule.group_id) == group_id).order_by(col(Schedule.position))).all()
+        return [s.id for s in rows if positions is None or s.position in positions]
+
+
+def _enabled(group_id: str) -> list[bool]:
+    with Session(get_engine()) as db:
+        return [s.enabled for s in db.exec(
+            select(Schedule).where(col(Schedule.group_id) == group_id).order_by(col(Schedule.position))).all()]
+
+
+def test_panel_offers_selection_only_for_messages_that_can_still_be_canceled(client):
+    first = _seq(client, 3)
+    _seq(client, 1, start=FUTURE + timedelta(days=1), prefix="sozinha")
+    _cancel(client, _seq(client, 2, prefix="cancelada"))
+    html = _panel(client, scheduled=1, canceled=1)
+    items = re.findall(r'<input type="checkbox" class="bulk-item" name="ids" value="([^"]+)" form="smp-bulk"', html)
+    assert sorted(items) == sorted(_ids(first) + _ids(_seq_ids_of(client, "sozinha")))
+    assert html.count('class="bulk-group"') == 1  # só a sequência com mais de uma pendente
+    assert 'id="smp-bulk"' in html and "Cancelar selecionadas" in html and "Confirmar cancelamento" in html
+    for name, value in (("scheduled", "1"), ("canceled", "1"), ("limit", "30")):
+        assert f'name="{name}" value="{value}" form="smp-bulk"' in html
+    only_canceled = _panel(client, canceled=1)
+    assert 'class="bulk-item"' not in only_canceled and "smp-msgs selectable" not in only_canceled
+
+
+def _seq_ids_of(client, prefix: str) -> str:
+    with Session(get_engine()) as db:
+        return db.exec(select(Schedule.group_id).where(col(Schedule.text) == f"{prefix} 1")).one()
+
+
+def test_bulk_cancel_from_the_panel_cancels_only_the_selected(client):
+    first = _seq(client, 5)
+    second = _seq(client, 3, start=FUTURE + timedelta(days=1), prefix="outra")
+    chosen = _ids(first, {1, 3}) + _ids(second, {0})
+    r = client.post(f"/ui/chats/{client.sid}/scheduled/panel/cancel-selected",
+                    data={"chat": LEO, "ids": chosen, "scheduled": 1, "canceled": 0, "limit": 30})
+    assert r.status_code == 200 and "3 mensagens canceladas." in r.text
+    assert _enabled(first) == [True, False, True, False, True] and _enabled(second) == [False, True, True]
+    assert _texts(r.text) == ["msg 1", "msg 3", "msg 5", "outra 2", "outra 3"]
+    assert (_counter(r.text, "scheduled"), _counter(r.text, "canceled")) == (5, 3)
+    oob = r.text.split('<div id="chat-scheduled" hx-swap-oob="innerHTML">')[1]
+    assert "(5)" in _summary_button(oob)  # 8 -> 5: a conversa continua compacta
+
+
+def test_bulk_cancel_keeps_the_rest_of_each_sequence_sending_in_order(db, test_user, fake_waha):
+    """Cancelar 2 e 3 de 1→2→3→4 (qualquer ordem): a 4 passa a esperar a 1 e SAI — não aborta em
+    cadeia, como aconteceria com `cancel_schedules` (feito para cancelar o grupo inteiro)."""
+    from whatsapp_scheduler.service import cancel_messages
+
+    start = timing.to_local(utcnow(), TZ) - timedelta(seconds=30)
+    group, schedules = create_sequence(db, user_id=test_user.id, session=test_user.waha_session, recipient=LEO,
+                                       messages=["um", "dois", "três", "quatro"], start=start, timezone=TZ)
+    assert cancel_messages(db, [schedules[2].id, schedules[1].id], user_id=test_user.id) == 2
+    asyncio.run(SchedulerService(fake_waha).run_once())
+    assert [m["text"] for m in fake_waha.sent] == ["um", "quatro"]
+    statuses = [v.status for v in schedule_views.get_group_view(db, group.id, test_user.id, TZ).messages]
+    assert statuses == ["sent", "canceled", "canceled", "sent"]
+
+
+def test_bulk_cancel_ignores_other_conversations_and_other_users(client):
+    mine = _seq(client, 3)
+    other_chat = _seq(client, 3, chat=GUI)
+    sid_a, targets = client.sid, _ids(mine) + _ids(other_chat)
+    # Pela conversa do Leonardo, os ids da conversa do Guilherme não contam.
+    r = client.post(f"/ui/chats/{sid_a}/scheduled/panel/cancel-selected", data={"chat": LEO, "ids": _ids(other_chat)})
+    assert "Nenhuma mensagem foi cancelada" in r.text and _enabled(other_chat) == [True] * 3
+    client.cookies.clear()
+    register_and_login(client, name="B", email="b-bulk@example.com")
+    sid_b = whatsapp_session_id(client)
+    assert client.post(f"/ui/chats/{sid_a}/scheduled/panel/cancel-selected",
+                       data={"chat": LEO, "ids": targets}).status_code == 404
+    r = client.post(f"/ui/chats/{sid_b}/scheduled/panel/cancel-selected", data={"chat": LEO, "ids": targets})
+    assert "Nenhuma mensagem foi cancelada" in r.text
+    r = client.post("/ui/schedules/cancel-selected", data={"group_ids": [mine, other_chat]})
+    assert "Nenhum agendamento foi cancelado" in r.text
+    assert _enabled(mine) == [True] * 3 and _enabled(other_chat) == [True] * 3
+
+
+def test_agendamentos_bulk_cancel_selected_schedules(client):
+    a = _seq(client, 3, source=ScheduleSource.manual, prefix="a")
+    b = _seq(client, 1, start=FUTURE + timedelta(days=1), chat=GUI, source=ScheduleSource.manual, prefix="b")
+    c = _seq(client, 2, start=FUTURE + timedelta(days=2), source=ScheduleSource.manual, prefix="c")
+    done = _seq(client, 1, start=FUTURE + timedelta(days=3), prefix="d")
+    _cancel(client, done)
+    page = client.get("/agendamentos").text
+    assert 'id="sched-bulk"' in page and "Cancelar selecionados" in page and "Selecionar todos" in page
+    boxes = re.findall(r'class="bulk-item" name="group_ids" value="([^"]+)" form="sched-bulk"', page)
+    assert sorted(boxes) == sorted([a, b, c])  # o já cancelado não tem caixa
+    assert "event.target===this" in page  # espaço/enter na caixa não abre o detalhe
+    r = client.post("/ui/schedules/cancel-selected", data={"group_ids": [a, b, done]})
+    assert r.status_code == 200 and "2 agendamentos cancelados." in r.text and 'id="schedules-table"' in r.text
+    assert _enabled(a) == [False] * 3 and _enabled(b) == [False] and _enabled(c) == [True, True]
+    assert re.findall(r'class="bulk-item" name="group_ids" value="([^"]+)"', r.text) == [c]
+
+
+def test_base_keeps_the_selection_across_list_refreshes():
+    from pathlib import Path
+
+    templates = Path(__file__).resolve().parent.parent / "whatsapp_scheduler" / "web" / "templates"
+    base = (templates / "base.html").read_text()
+    assert "function bulkSync" in base and "input[data-hold-poll]:checked" in base
+    assert "data-pause-on-input" in (templates / "schedules.html").read_text()

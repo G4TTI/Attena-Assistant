@@ -17,7 +17,20 @@
   <div class="sched-col-form">
     {% include "_schedule_form.html" %}
   </div>
-  <div class="sched-col-list" hx-get="/ui/schedules" hx-trigger="every 15s" hx-target="#schedules-table" hx-swap="outerHTML" data-pause-when-hidden>
+  <div class="sched-col-list" hx-get="/ui/schedules" hx-trigger="every 15s" hx-target="#schedules-table" hx-swap="outerHTML"
+       data-pause-on-input data-pause-when-hidden>
+    {# Seleção em massa: fica FORA de #schedules-table (trocada a cada 15s e depois de cada ação);
+       as caixas dos cartões pertencem a este form (form="sched-bulk"). A atualização periódica
+       pausa enquanto houver algo marcado (data-hold-poll). #}
+    {% set bulk_all = 'Selecionar todos' %}{% set bulk_action = 'Cancelar selecionados' %}
+    <form id="sched-bulk" class="bulk-bar sched-bulk" data-bulk hidden
+          hx-post="/ui/schedules/cancel-selected" hx-target="#schedules-table" hx-swap="outerHTML"
+          hx-disabled-elt="find button[type=submit]"
+          data-all="Selecionar todos" data-one="agendamento selecionado" data-many="agendamentos selecionados"
+          data-confirm-one="Deseja cancelar o agendamento selecionado? As mensagens que ainda não foram enviadas não serão enviadas."
+          data-confirm-many="Deseja cancelar os {n} agendamentos selecionados? As mensagens que ainda não foram enviadas não serão enviadas.">
+      {% include "_bulk_bar.html" %}
+    </form>
     {% include "_table.html" %}
   </div>
 </div>

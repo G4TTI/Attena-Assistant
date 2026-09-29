@@ -2,12 +2,17 @@
    com as mensagens na ordem da sequência. Leva na própria URL de atualização o estado do painel
    (filtros + quanto já carregou): cada troca (filtro, "carregar mais", cancelamento, polling)
    substitui a lista inteira por outra já com o estado novo. O scroll fica em .smp-body (o pai),
-   então a atualização periódica não tira o usuário do lugar. #}
+   então a atualização periódica não tira o usuário do lugar.
+   Seleção em massa: as caixas (.bulk-item) pertencem ao formulário #smp-bulk do rodapé do painel
+   (atributo form=), que fica fora desta lista; o JS de base.html guarda a seleção e a reaplica a
+   cada troca da lista, e a atualização periódica pausa enquanto houver algo marcado. #}
 {% from "_components.html" import status_icon %}
 {% set state = panel.params() %}
 <div id="smp-list" class="smp-list"
      hx-get="/ui/chats/{{ session_id }}/scheduled/panel/list?{{ state | urlencode }}"
      hx-trigger="every 15s" hx-swap="outerHTML" data-pause-on-input data-pause-when-hidden>
+  {% for name, value in state.items() if name != 'chat' %}<input type="hidden" name="{{ name }}" value="{{ value }}" form="smp-bulk">{% endfor %}
+  {% if notice %}<div class="alert {{ 'ok' if notice.ok else 'err' }} smp-notice" role="status">{{ notice.text }}</div>{% endif %}
   {% if panel.no_filter %}
   <p class="smp-empty">Selecione pelo menos um filtro para visualizar as mensagens.</p>
   {% elif not panel.groups %}
@@ -20,6 +25,9 @@
   {% for g in panel.groups %}
   <section class="smp-group" aria-label="Agendamento{% if g.start_local %} de {{ g.start_local.strftime('%d/%m/%Y %H:%M') }}{% endif %}">
     <div class="smp-group-hd">
+      {% if panel.selectable %}
+      <span class="smp-check">{% if g.can_cancel_all %}<label class="bulk-check" title="Selecionar as programadas desta sequência"><input type="checkbox" class="bulk-group" data-bulk-form="smp-bulk" value="{{ g.id }}" aria-label="Selecionar as mensagens programadas desta sequência"></label>{% endif %}</span>
+      {% endif %}
       <div class="smp-group-info">
         <div class="smp-group-title">Agendamento{% if g.start_local %} · {{ g.start_local.strftime('%d/%m/%Y · %H:%M') }}{% endif %}</div>
         <div class="smp-group-sub">
@@ -43,9 +51,12 @@
       </div>
     </div>
     {% endif %}
-    <ol class="msg-detail-list smp-msgs">
+    <ol class="msg-detail-list smp-msgs{{ ' selectable' if panel.selectable }}">
       {% for m in g.messages %}
       <li class="smp-msg {{ m.status }}" data-status="{{ m.status }}">
+        {% if panel.selectable %}
+        <span class="smp-check">{% if m.can_cancel %}<label class="bulk-check"><input type="checkbox" class="bulk-item" name="ids" value="{{ m.schedule.id }}" form="smp-bulk" data-hold-poll{% if g.can_cancel_all %} data-bulk-group="{{ g.id }}"{% endif %} aria-label="Selecionar a mensagem {{ m.position + 1 }}: {{ m.text | truncate(60) }}"></label>{% endif %}</span>
+        {% endif %}
         <span class="msg-num" aria-label="Mensagem {{ m.position + 1 }}">{{ m.position + 1 }}</span>
         <span class="msg-text">{{ m.text }}</span>
         <div class="msg-meta">

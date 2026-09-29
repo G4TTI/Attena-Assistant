@@ -623,7 +623,7 @@
     .smp-group { display:flex; flex-direction:column; gap:10px; min-width:0; }
     .smp-group + .smp-group { padding-top:16px; border-top:1px solid var(--bd); }
     .smp-group-hd { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-    .smp-group-info { min-width:0; }
+    .smp-group-info { min-width:0; flex:1 1 auto; }
     .smp-group-title { font-size:13.5px; font-weight:600; font-variant-numeric:tabular-nums; }
     .smp-group-sub { font-size:12.5px; color:var(--mut); overflow-wrap:anywhere; }
     button.smp-cancel-all { flex:none; padding:5px 12px; font-size:12.5px; font-weight:500; }
@@ -645,6 +645,32 @@
       .smp-filter { flex:1 1 140px; min-height:44px; justify-content:center; }
       .smp-body { padding:14px 16px 20px; }
       .smp-group-hd { flex-wrap:wrap; }
+    }
+    /* ---------------- Seleção em massa (painel de programadas e Agendamentos) ---------------- */
+    .bulk-check { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; margin:-6px; border-radius:8px; cursor:pointer; }
+    .bulk-check:hover { background:var(--soft); }
+    .bulk-check input, .bulk-all-label input { width:18px; height:18px; margin:0; accent-color:var(--accent); cursor:pointer; }
+    .bulk-check:has(input:focus-visible), .bulk-all-label:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:1px; }
+    .bulk-bar { display:flex; flex-direction:column; gap:10px; }
+    .bulk-main { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .bulk-all-label { display:inline-flex; align-items:center; gap:10px; min-height:40px; margin:0; padding-left:1px; font-size:13.5px; font-weight:500; color:var(--fg); cursor:pointer; font-variant-numeric:tabular-nums; }
+    button.bulk-cancel { padding:8px 14px; font-size:13px; }
+    .bulk-confirm { padding:12px 14px; border-radius:10px; border:1px solid color-mix(in oklab, var(--err) 35%, transparent); background:color-mix(in oklab, var(--err) 7%, transparent); font-size:13.5px; }
+    .bulk-confirm p { margin:0 0 10px; }
+    .smp-bulk { flex:none; padding:10px 22px; border-top:1px solid var(--bd); background:var(--card); }
+    .sched-bulk { position:sticky; top:12px; z-index:5; margin-bottom:10px; padding:6px 14px; background:var(--card); border:1px solid var(--bd); border-radius:12px; box-shadow:var(--sh); }
+    .smp-check { display:flex; align-items:center; justify-content:center; width:20px; flex:none; }
+    .smp-group-hd .smp-check { margin:1px 0 0 12px; }
+    .smp-msgs.selectable li { grid-template-columns:20px auto minmax(0,1fr); }
+    .smp-msgs.selectable .msg-meta { grid-column:3; }
+    .sched-card.clickable.with-select { grid-template-columns:24px minmax(0,1fr) auto; }
+    .sc-select { display:flex; align-items:center; justify-content:center; }
+    @media (max-width: 720px) {
+      .sched-bulk { top:64px; }
+      .sched-card.clickable.with-select { grid-template-columns:24px minmax(0,1fr); }
+      .sched-card.clickable.with-select .sc-side { grid-column:2; }
+      .smp-bulk { padding:10px 16px; }
+      button.bulk-cancel, .bulk-confirm button { flex:1 1 auto; }
     }
   </style>
 </head>
@@ -809,7 +835,8 @@
       if(!el.hasAttribute('data-pause-on-input')) return;
       var a = document.activeElement;
       var typing = a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
-      var holding = !!el.querySelector('[data-hold-poll]:not([hidden])');
+      /* Confirmação aberta, ou caixa de seleção em massa marcada (a troca da lista a desmarcaria). */
+      var holding = !!el.querySelector('[data-hold-poll]:not([hidden]):not(input), input[data-hold-poll]:checked');
       if(typing || holding || el.offsetParent === null) e.preventDefault();
     });
 
@@ -1239,6 +1266,74 @@
       var focus = open ? (box && box.querySelector('[data-confirm-default]')) : trigger;
       if(focus) focus.focus();
     }
+    /* ---------------- Seleção em massa (painel de programadas e Agendamentos) ----------------
+       <form data-bulk id="X"> é a barra (_bulk_bar.html); as caixas (.bulk-item) ficam na lista, que o
+       htmx troca (polling, filtro, "carregar mais", ações). Por isso elas pertencem ao form pelo atributo
+       form="X" e a seleção fica guardada aqui, por id, e é reaplicada depois de cada troca — o que sumiu
+       da lista (enviada, cancelada, fora do filtro) sai da seleção. Form novo (painel reaberto) = seleção zerada. */
+    var bulkState = {};
+    function bulkSel(form){
+      if(!form.__bulkReady){ form.__bulkReady = true; bulkState[form.id] = new Set(); }
+      return bulkState[form.id];
+    }
+    function bulkItems(form){ return Array.prototype.slice.call(document.querySelectorAll('input.bulk-item[form="' + form.id + '"]')); }
+    function bulkSync(form){
+      var sel = bulkSel(form), items = bulkItems(form), present = {};
+      items.forEach(function(cb){ present[cb.value] = true; cb.checked = sel.has(cb.value); });
+      Array.from(sel).forEach(function(id){ if(!present[id]) sel.delete(id); });
+      document.querySelectorAll('input.bulk-group[data-bulk-form="' + form.id + '"]').forEach(function(g){
+        var members = items.filter(function(cb){ return cb.getAttribute('data-bulk-group') === g.value; });
+        var on = members.filter(function(cb){ return cb.checked; }).length;
+        g.checked = members.length > 0 && on === members.length;
+        g.indeterminate = on > 0 && on < members.length;
+      });
+      var n = sel.size;
+      form.hidden = items.length === 0;
+      var all = form.querySelector('.bulk-all');
+      if(all){ all.checked = items.length > 0 && n === items.length; all.indeterminate = n > 0 && n < items.length; }
+      var label = form.querySelector('[data-bulk-label]');
+      if(label) label.textContent = n === 0 ? form.dataset.all + ' (' + items.length + ')' : n + ' ' + (n === 1 ? form.dataset.one : form.dataset.many);
+      form.querySelectorAll('[data-bulk-needs-selection]').forEach(function(b){ b.disabled = n === 0; });
+      var q = form.querySelector('[data-bulk-question]');
+      if(q) q.textContent = n === 1 ? form.dataset.confirmOne : (form.dataset.confirmMany || '').replace('{n}', n);
+      if(n === 0) bulkConfirm(form, false);
+    }
+    function bulkSyncAll(){ document.querySelectorAll('form[data-bulk]').forEach(bulkSync); }
+    function bulkConfirm(el, open){
+      var form = el.tagName === 'FORM' ? el : el.closest('form[data-bulk]');
+      var box = form && form.querySelector('.bulk-confirm');
+      if(!box || (open && bulkSel(form).size === 0)) return;
+      var wasOpen = !box.hidden, main = form.querySelector('.bulk-main');
+      box.hidden = !open;
+      if(main) main.hidden = !!open;
+      var focus = open ? box.querySelector('[data-confirm-default]') : (wasOpen ? form.querySelector('.bulk-cancel') : null);
+      if(focus) focus.focus();
+    }
+    document.addEventListener('change', function(e){
+      var t = e.target;
+      if(!t || !t.classList) return;
+      var form, sel;
+      if(t.classList.contains('bulk-item') || t.classList.contains('bulk-group')){
+        form = document.getElementById(t.getAttribute('form') || t.getAttribute('data-bulk-form'));
+        if(!form) return;
+        sel = bulkSel(form);
+        var targets = t.classList.contains('bulk-group')
+          ? bulkItems(form).filter(function(cb){ return cb.getAttribute('data-bulk-group') === t.value; })
+          : [t];
+        targets.forEach(function(cb){ if(t.checked) sel.add(cb.value); else sel.delete(cb.value); });
+      } else if(t.classList.contains('bulk-all')){
+        form = t.closest('form[data-bulk]');
+        if(!form) return;
+        sel = bulkSel(form);
+        bulkItems(form).forEach(function(cb){ if(t.checked) sel.add(cb.value); else sel.delete(cb.value); });
+      } else {
+        return;
+      }
+      bulkSync(form);
+    });
+    document.addEventListener('DOMContentLoaded', bulkSyncAll);
+    document.body.addEventListener('htmx:afterSwap', bulkSyncAll);
+    document.body.addEventListener('htmx:oobAfterSwap', bulkSyncAll);
     function composerKeydown(e){
       if(e.key === 'Enter' && !e.shiftKey){
         e.preventDefault();

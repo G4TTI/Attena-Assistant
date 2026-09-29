@@ -49,6 +49,8 @@ __all__ = [
     "clean_messages",
     "backfill_groups",
     "cancel_group",
+    "cancel_groups",
+    "cancel_messages",
     "cancel_schedule",
     "cancel_schedules",
     "create_schedule",
@@ -370,6 +372,48 @@ def cancel_group(db: Session, group_id: str, *, user_id: str) -> bool:
         return False
     cancel_schedules(db, ids, user_id=user_id)
     return True
+
+
+def cancel_messages(db: Session, schedule_ids: list[str], *, user_id: str) -> int:
+    """Cancela VÁRIAS mensagens escolhidas uma a uma (seleção em massa), numa
+    transação só — o mesmo efeito de `cancel_schedule` em cada uma: as da
+    sequência que NÃO foram escolhidas continuam valendo (passam a esperar a
+    anterior à cancelada), em vez de abortarem em cadeia como aconteceria com
+    `cancel_schedules`. A ordem de processamento não importa: religar é
+    transitivo (cancelar 2 e 3 de 1→2→3→4 deixa 4 esperando a 1)."""
+    ids = list(dict.fromkeys(schedule_ids))
+    if not ids:
+        return 0
+    now = utcnow()
+    canceled = 0
+    for chunk in _chunks(ids):
+        for schedule in db.exec(select(Schedule).where(col(Schedule.id).in_(chunk))).all():
+            if not schedule.enabled or schedule.user_id != user_id:
+                continue
+            _rewire_dependents(db, schedule.id)
+            _apply_cancel(db, schedule, now)
+            canceled += 1
+    db.commit()
+    return canceled
+
+
+def cancel_groups(db: Session, group_ids: list[str], *, user_id: str) -> int:
+    """"Cancelar selecionados" da tela Agendamentos: cada agendamento inteiro
+    (o que ainda não saiu), numa transação só. Devolve quantos agendamentos
+    tinham algo a cancelar; ids de outro usuário são ignorados."""
+    rows: list = []
+    for chunk in _chunks(list(dict.fromkeys(group_ids))):
+        rows += db.exec(
+            select(Schedule.id, Schedule.group_id)
+            .join(ScheduleGroup, col(ScheduleGroup.id) == col(Schedule.group_id))
+            .where(col(ScheduleGroup.id).in_(chunk))
+            .where(col(ScheduleGroup.user_id) == user_id)
+            .where(col(Schedule.enabled).is_(True))
+        ).all()
+    if not rows:
+        return 0
+    cancel_schedules(db, [schedule_id for schedule_id, _ in rows], user_id=user_id)
+    return len({group_id for _, group_id in rows})
 
 
 # --------------------------------------------------------------------------- #

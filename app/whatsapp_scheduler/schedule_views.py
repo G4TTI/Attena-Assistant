@@ -553,6 +553,11 @@ class ScheduledPanel:
         return not (self.show_scheduled or self.show_canceled)
 
     @property
+    def selectable(self) -> bool:
+        """Alguma mensagem da página pode ser marcada pra cancelar em massa."""
+        return any(m.can_cancel for g in self.groups for m in g.messages)
+
+    @property
     def can_load_more(self) -> bool:
         return self.has_more and self.limit < PANEL_MAX_LIMIT
 

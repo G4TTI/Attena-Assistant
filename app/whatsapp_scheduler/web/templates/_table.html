@@ -8,15 +8,21 @@
     </button>
   </div>
 
+  {% if notice %}<div class="alert {{ 'ok' if notice.ok else 'err' }}" role="status">{{ notice.text }}</div>{% endif %}
   {% if not groups %}
     <p class="muted">Nenhum agendamento ainda.</p>
   {% else %}
+    {% set selectable = groups | selectattr('can_cancel') | list | length > 0 %}
     <div class="sched-list">
       {% for g in groups %}
       {# Cartão limpo: quando · quem · por qual WhatsApp · quantas mensagens · status. Detalhes ao abrir. #}
-      <article class="sched-card clickable" role="button" tabindex="0"
+      <article class="sched-card clickable{{ ' with-select' if selectable }}" role="button" tabindex="0"
                hx-get="/ui/schedules/{{ g.id }}" hx-target="#modal-root" hx-swap="innerHTML"
-               onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
+               onkeydown="if(event.target===this&&(event.key==='Enter'||event.key===' ')){event.preventDefault();this.click();}">
+        {% if selectable %}
+        {# A caixa não abre o detalhe (stopPropagation) e pertence ao form #sched-bulk (fora desta tabela). #}
+        <span class="sc-select" onclick="event.stopPropagation()">{% if g.can_cancel %}<label class="bulk-check"><input type="checkbox" class="bulk-item" name="group_ids" value="{{ g.id }}" form="sched-bulk" data-hold-poll aria-label="Selecionar o agendamento de {{ g.recipient }} ({{ g.when_local.strftime('%d/%m/%Y %H:%M') }})"></label>{% endif %}</span>
+        {% endif %}
         <div class="sc-main">
           <div class="sc-time">{{ icon('clock', 15) }} {{ g.when_local.strftime('%d/%m/%Y') }} · {{ g.when_local.strftime('%H:%M') }}</div>
           <div class="sc-name">{{ g.recipient }}{% if g.group.chat_id.endswith('@g.us') %} <span class="muted" style="font-weight:400">· grupo</span>{% endif %}</div>
