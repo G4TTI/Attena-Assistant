@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
         await waha.aclose()
 
 
-app = FastAPI(title="Attena Assistant", version="1.3.3", lifespan=lifespan)
+app = FastAPI(title="Attena Assistant", version="1.3.4", lifespan=lifespan)
 app.include_router(auth_routes.router)
 app.include_router(schedules_api.router)
 app.include_router(session_api.router)
