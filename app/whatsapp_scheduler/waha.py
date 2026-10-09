@@ -1,12 +1,14 @@
 """Cliente HTTP do WAHA (https://waha.devlike.pro).
 
 Só os endpoints que o agendador precisa: status da sessão, QR de pareamento e
-envio de texto. Todo erro de rede/HTTP vira `WahaError` com mensagem legível.
+envio de texto e de mídia. Todo erro de rede/HTTP vira `WahaError` com mensagem
+legível.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 import httpx
@@ -33,6 +35,12 @@ def extract_message_id(payload: Any) -> str | None:
     if isinstance(mid, dict):
         return mid.get("_serialized") or mid.get("id")
     return None
+
+
+def _video_unsupported(exc: WahaError) -> bool:
+    """O WAHA recusou o vídeo por limitação do engine/navegador (não por erro do pedido)."""
+    text = str(exc).lower()
+    return exc.status_code in (422, 501) and ("chrome" in text or "not implemented" in text)
 
 
 class WahaClient:
@@ -175,6 +183,54 @@ class WahaClient:
         except ValueError:
             data = {}
         return data if isinstance(data, dict) else {"raw": data}
+
+    async def send_media(
+        self,
+        session: str,
+        chat_id: str,
+        *,
+        kind: str,
+        mimetype: str,
+        filename: str,
+        data: bytes,
+        caption: str = "",
+    ) -> dict[str, Any]:
+        """Foto, vídeo, áudio (mensagem de voz) ou documento, com o arquivo em
+        base64 no corpo (nada de URL: o arquivo nunca fica exposto pra o WAHA
+        baixar). `kind` é um `models.MediaKind`.
+
+        - áudio vai como mensagem de voz, convertido pelo WAHA (ffmpeg) pra
+          OGG/Opus, o único formato que o WhatsApp toca como voz; não tem legenda;
+        - vídeo que não é MP4 também é convertido;
+        - o engine WEBJS só manda vídeo na imagem `devlikeapro/waha:chrome`
+          (o Chromium da imagem padrão não tem os codecs). Nesse caso o vídeo
+          sai como DOCUMENTO — a mensagem não se perde, o destinatário baixa e assiste.
+        """
+        body: dict[str, Any] = {
+            "session": session,
+            "chatId": chat_id,
+            "file": {"mimetype": mimetype, "filename": filename, "data": base64.b64encode(data).decode("ascii")},
+        }
+        if caption and kind != "audio":
+            body["caption"] = caption
+        path = {"image": "/api/sendImage", "video": "/api/sendVideo", "audio": "/api/sendVoice"}.get(kind, "/api/sendFile")
+        if kind == "audio":
+            body["convert"] = True
+        elif kind == "video":
+            body["convert"] = mimetype != "video/mp4"
+        timeout = settings.media_send_timeout
+        try:
+            resp = await self._request("POST", path, json=body, timeout=timeout)
+        except WahaError as exc:
+            if kind != "video" or not _video_unsupported(exc):
+                raise
+            body.pop("convert", None)
+            resp = await self._request("POST", "/api/sendFile", json=body, timeout=timeout)
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = {}
+        return payload if isinstance(payload, dict) else {"raw": payload}
 
     async def get_chats_overview(
         self, session: str, limit: int = 50, timeout: float | None = None

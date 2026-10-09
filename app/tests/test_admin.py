@@ -181,7 +181,10 @@ def test_admin_code_never_touches_decryption_of_user_content():
     forbidden = ["schedule_message", "schedule_recipient", "group_recipient", "automation_message",
                  "open_field", "decrypt_field", "unseal", "owner_form_values", "message_ciphertext",
                  "recipient_phone_encrypted", "recipient_encrypted", "cpf_encrypted", "password_hash",
-                 "access_token_enc", "refresh_token_enc"]
+                 "access_token_enc", "refresh_token_enc",
+                 # anexos (foto/vídeo/áudio/PDF): arquivo e nome
+                 "load_bytes", "open_media_file", "unseal_bytes", "media_filename", "filename_encrypted",
+                 "media.infos", "media.info("]
     for path in sources:
         text = path.read_text(encoding="utf-8")
         for name in forbidden:

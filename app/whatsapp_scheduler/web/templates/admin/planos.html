@@ -16,7 +16,7 @@
 <div class="card">
   <div class="table-wrap">
     <table class="data">
-      <thead><tr><th>Plano</th><th class="num">Preço</th><th class="num">Assinantes ativos</th><th class="num">Receita recorrente</th><th>Limites</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Plano</th><th class="num">Preço</th><th class="num">Assinantes ativos</th><th class="num">Receita recorrente</th><th>Limites</th><th>Recursos</th><th>Status</th><th></th></tr></thead>
       <tbody>
         {% for r in rows %}
         {% set p = r.plan %}
@@ -26,6 +26,7 @@
           <td class="num">{{ r.active }}{% if r.manual %}<span class="cell-sub">+{{ r.manual }} cortesia</span>{% endif %}</td>
           <td class="num">{{ r.mrr_cents | brl }}</td>
           <td>{% for key, label in limit_labels.items() %}<span class="cell-sub">{{ label }}: {{ r.limits.get(key) if r.limits.get(key) is not none else 'ilimitado' }}</span>{% endfor %}</td>
+          <td>{% for key, label in capability_labels.items() %}<span class="cell-sub">{{ '✓' if key in r.capabilities else '—' }} {{ label }}</span>{% endfor %}</td>
           <td>{% if p.is_active %}<span class="pill sent">ativo</span>{% else %}<span class="pill canceled">inativo</span>{% endif %}{% if not p.is_public %} <span class="pill canceled">oculto</span>{% endif %}</td>
           <td><a class="ghost-link" href="/admin/planos?edit={{ p.id }}">{{ icon('edit', 13) }} Editar</a></td>
         </tr>
@@ -52,6 +53,12 @@
       {% for key, label in limit_labels.items() %}
       <div class="field"><label for="pl_{{ key }}">{{ label }} <b>(vazio = ilimitado)</b></label><input id="pl_{{ key }}" name="limit_{{ key }}" inputmode="numeric" value="{{ editing.limits.get(key) if editing.limits.get(key) is not none else '' }}"></div>
       {% endfor %}
+      <div class="field full">
+        <label>Recursos liberados <b>(valem sempre, independente de ENFORCE_PLAN_LIMITS)</b></label>
+        {% for key, label in capability_labels.items() %}
+        <label style="display:flex;gap:8px;align-items:center;margin:0;font-weight:400"><input type="checkbox" name="cap_{{ key }}" style="width:auto" {{ 'checked' if key in editing.capabilities }}> {{ label }}</label>
+        {% endfor %}
+      </div>
       <div class="field full" style="flex-direction:row;gap:18px;flex-wrap:wrap">
         <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="is_active" style="width:auto" {{ 'checked' if p.is_active }}> Pode ser contratado</label>
         <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="is_public" style="width:auto" {{ 'checked' if p.is_public }}> Aparece na página Planos</label>

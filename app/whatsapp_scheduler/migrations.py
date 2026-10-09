@@ -19,10 +19,17 @@ v1.4 — privacidade (`2026.09.29-v1.4-privacy`):
   7. e-mail digitado em logins que falharam apagado da trilha de auditoria;
   8. fora da transação: VACUUM + checkpoint do WAL, pra o texto puro antigo não
      sobrar nas páginas livres do arquivo.
+
+Anexos de mídia (`2026.10.09-media-messages`): o recurso "agendar fotos,
+vídeos, áudios e PDFs" (`plans.MEDIA_MESSAGES`) passa a valer no plano MAIS
+CARO à venda (e no plano interno Administrador), com a linha correspondente na
+lista de recursos exibida em Planos. Banco novo (catálogo ainda vazio) não tem
+o que converter: `plans.seed_default_plans` já semeia o recurso no Pro.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -266,8 +273,36 @@ def _v14_privacy(conn: Connection) -> None:
     logger.info("migração v1.4 (privacidade) aplicada: %s", ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nada a converter")
 
 
+def _media_messages_capability(conn: Connection) -> None:
+    from .plans import ADMIN_PLAN_CODE, CAPABILITY_LABELS, MEDIA_MESSAGES
+
+    if "plans" not in _tables(conn) or "capabilities_json" not in _columns(conn, "plans"):
+        return
+    rows = conn.execute(
+        text("SELECT id, code, price_cents, sort_order, is_active, is_public, features_json, capabilities_json FROM plans")
+    ).mappings().all()
+    for_sale = [r for r in rows if r["is_active"] and r["is_public"] and r["code"] != ADMIN_PLAN_CODE]
+    targets = [r for r in rows if r["code"] == ADMIN_PLAN_CODE]
+    if for_sale:
+        targets.append(max(for_sale, key=lambda r: (r["price_cents"], r["sort_order"])))
+    for row in targets:
+        caps = json.loads(row["capabilities_json"] or "[]")
+        features = json.loads(row["features_json"] or "[]")
+        if MEDIA_MESSAGES not in caps:
+            caps.append(MEDIA_MESSAGES)
+        label = CAPABILITY_LABELS[MEDIA_MESSAGES]
+        if row["code"] != ADMIN_PLAN_CODE and label not in features:
+            features.insert(1 if features else 0, label)  # logo depois de "Tudo do Plus"
+        conn.execute(
+            text("UPDATE plans SET capabilities_json=:caps, features_json=:features WHERE id=:id"),
+            {"id": row["id"], "caps": json.dumps(caps), "features": json.dumps(features, ensure_ascii=False)},
+        )
+        logger.info("recurso %s liberado no plano %s", MEDIA_MESSAGES, row["code"])
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], None]]] = [
     ("2026.09.29-v1.4-privacy", _v14_privacy),
+    ("2026.10.09-media-messages", _media_messages_capability),
 ]
 
 

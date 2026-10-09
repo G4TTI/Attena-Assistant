@@ -75,6 +75,10 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("billing_profiles", "address_number_encrypted", "ALTER TABLE billing_profiles ADD COLUMN address_number_encrypted TEXT"),
     ("billing_profiles", "address_complement_encrypted", "ALTER TABLE billing_profiles ADD COLUMN address_complement_encrypted TEXT"),
     ("billing_profiles", "city_encrypted", "ALTER TABLE billing_profiles ADD COLUMN city_encrypted TEXT"),
+    # Anexos de mídia (recurso de plano): a mensagem aponta pro anexo cifrado
+    # (`media_attachments`, tabela nova) e o plano ganha a lista de recursos.
+    ("schedules", "media_id", "ALTER TABLE schedules ADD COLUMN media_id TEXT"),
+    ("plans", "capabilities_json", "ALTER TABLE plans ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 
@@ -135,6 +139,7 @@ _INDEX_MIGRATIONS: list[str] = [
     "CREATE INDEX IF NOT EXISTS ix_schedule_groups_recipient_phone_hash ON schedule_groups (recipient_phone_hash)",
     "CREATE INDEX IF NOT EXISTS ix_automation_schedules_recipient_phone_hash ON automation_schedules (recipient_phone_hash)",
     "CREATE INDEX IF NOT EXISTS ix_users_role ON users (role)",
+    "CREATE INDEX IF NOT EXISTS ix_schedules_media_id ON schedules (media_id)",
 ]
 
 

@@ -117,7 +117,51 @@ class Schedule(SQLModel, table=True):
     recurrence: str | None = None
     enabled: bool = Field(default=True, index=True)
     max_attempts: int = 3
+    # Anexo (foto/vídeo/áudio/PDF) enviado nesta mensagem; o texto vira a
+    # legenda. Vários `Schedule`s podem apontar pro mesmo anexo (um por
+    # destinatário). Coluna aditiva (ALTER TABLE em db.py).
+    media_id: str | None = Field(default=None, foreign_key="media_attachments.id", index=True)
     created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class MediaKind(str, enum.Enum):
+    """Como o anexo sai no WhatsApp (ver media.py / WahaClient.send_media)."""
+
+    image = "image"        # foto, com legenda
+    video = "video"        # vídeo, com legenda
+    audio = "audio"        # mensagem de voz (o WhatsApp não aceita legenda em áudio)
+    document = "document"  # PDF, como documento, com legenda
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class MediaAttachment(SQLModel, table=True):
+    """Arquivo anexado a mensagens programadas — recurso de plano (`media_messages`).
+
+    Mesmo modelo de privacidade do texto: o arquivo fica CIFRADO no disco
+    (AES-256-GCM, AAD com o id desta linha, ver privacy.seal_media_file) e o
+    nome original também é cifrado. Some assim que nenhuma mensagem que o usa
+    ainda vai sair (retention.py) — aí `storage_key`, `encryption_nonce`,
+    `encryption_key_version` e `filename_encrypted` viram NULL e o arquivo é
+    apagado. Upload que nunca virou agendamento expira em
+    `media_draft_ttl_minutes`. Sobram só metadados: tipo, tamanho e datas."""
+
+    __tablename__ = "media_attachments"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    kind: MediaKind
+    mimetype: str
+    size_bytes: int = 0
+    filename_encrypted: str | None = None
+    # Caminho do arquivo cifrado, relativo a `media.media_root()`.
+    storage_key: str | None = None
+    encryption_nonce: str | None = None
+    encryption_key_version: int | None = None
+    content_purged_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow, index=True)
     updated_at: datetime = Field(default_factory=utcnow)
 
 
@@ -627,6 +671,9 @@ class Plan(SQLModel, table=True):
     billing_period: BillingPeriod = BillingPeriod.monthly
     features_json: str = "[]"
     limits_json: str = "{}"
+    # Recursos liberados pelo plano (lista de códigos, ver plans.CAPABILITY_LABELS).
+    # Diferente de `features_json`, que é só o texto de venda.
+    capabilities_json: str = "[]"
     is_active: bool = True  # pode ser contratado
     is_public: bool = True  # aparece na página "Planos"
     is_default: bool = False  # o plano de quem não tem assinatura (gratuito)

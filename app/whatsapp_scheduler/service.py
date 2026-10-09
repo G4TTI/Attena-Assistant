@@ -15,13 +15,14 @@ mesmo sob falha/retry.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
-from . import clock, failures, privacy, retention, timing
+from . import clock, failures, media, plans, privacy, retention, timing
 from .clock import utcnow
 from .config import settings
 from .errors import ValidationError
@@ -32,10 +33,13 @@ from .models import (
     Automation,
     Dispatch,
     DispatchStatus,
+    MediaAttachment,
+    MediaKind,
     Schedule,
     ScheduleDependency,
     ScheduleGroup,
     ScheduleSource,
+    User,
 )
 from .recipients import RecipientError, normalize_recipient
 from .recurrence import RecurrenceError, normalize_recurrence
@@ -45,7 +49,9 @@ from .timing import DEFAULT_MAX_ATTEMPTS, DEFAULT_MESSAGE_GAP_SECONDS
 logger = logging.getLogger("whatsapp_scheduler.service")
 
 __all__ = [
+    "MessageItem",
     "ValidationError",
+    "clean_items",
     "clean_messages",
     "backfill_groups",
     "cancel_group",
@@ -81,6 +87,67 @@ def clean_messages(messages: list[str]) -> list[str]:
     if any(len(t) > timing.MAX_MESSAGE_LENGTH for t in texts):
         raise ValidationError(f"Cada mensagem pode ter no máximo {timing.MAX_MESSAGE_LENGTH} caracteres.")
     return texts
+
+
+@dataclass(frozen=True)
+class MessageItem:
+    """Uma mensagem da sequência: texto e/ou anexo (com anexo, o texto é a legenda)."""
+
+    text: str
+    media_id: str | None = None
+
+
+def clean_items(messages: list[str], media_ids: list[str] | None = None) -> list[MessageItem]:
+    """Como `clean_messages`, com o anexo de cada mensagem (`media_ids[i]` é o da
+    `messages[i]`; vazio = sem anexo). Mensagem só com anexo vale; vazia, não."""
+    ids = list(media_ids or [])
+    items: list[MessageItem] = []
+    for i, raw in enumerate(messages or []):
+        text = (raw or "").strip()
+        media_id = ((ids[i] if i < len(ids) else "") or "").strip() or None
+        if text or media_id:
+            items.append(MessageItem(text=text, media_id=media_id))
+    if not items:
+        raise ValidationError("A mensagem não pode ficar vazia.")
+    if len(items) > timing.MAX_MESSAGES_PER_SEQUENCE:
+        raise ValidationError(f"No máximo {timing.MAX_MESSAGES_PER_SEQUENCE} mensagens por agendamento.")
+    if any(len(item.text) > timing.MAX_MESSAGE_LENGTH for item in items):
+        raise ValidationError(f"Cada mensagem pode ter no máximo {timing.MAX_MESSAGE_LENGTH} caracteres.")
+    return items
+
+
+def _resolve_media(db: Session, user_id: str, items: list[MessageItem]) -> tuple[list[MessageItem], bool]:
+    """Confere os anexos (dono, ainda existem, plano libera) e devolve a sequência
+    final + se algum áudio com texto foi dividido em duas mensagens — o WhatsApp
+    não aceita legenda em mensagem de voz, então o texto sai logo depois."""
+    if not any(item.media_id for item in items):
+        return items, False
+    user = db.get(User, user_id)
+    if user is None:
+        raise ValidationError("Usuário não encontrado.")
+    plans.require_capability(db, user, plans.MEDIA_MESSAGES)
+    found = media.resolve_for_user(db, user_id, [item.media_id for item in items if item.media_id])
+    out: list[MessageItem] = []
+    for item in items:
+        if item.media_id and item.text and found[item.media_id].kind == MediaKind.audio:
+            out += [MessageItem(text="", media_id=item.media_id), MessageItem(text=item.text)]
+        else:
+            out.append(item)
+    if len(out) > timing.MAX_MESSAGES_PER_SEQUENCE:
+        raise ValidationError(f"No máximo {timing.MAX_MESSAGES_PER_SEQUENCE} mensagens por agendamento.")
+    return out, len(out) > len(items)
+
+
+def _prepare_items(
+    db: Session, user_id: str, messages: list[str], media_ids: list[str] | None, recurrence: str | None
+) -> tuple[list[MessageItem], str | None]:
+    items, split = _resolve_media(db, user_id, clean_items(messages, media_ids))
+    if split and recurrence and recurrence.strip() and len(items) > 1:
+        raise ValidationError(
+            "O WhatsApp não aceita legenda em áudio, então áudio com texto vira duas mensagens — e a recorrência "
+            "só vale para uma única mensagem. Tire o texto do áudio ou a recorrência."
+        )
+    return items, _normalize_cron(recurrence, len(items))
 
 
 def _normalize_cron(recurrence: str | None, message_count: int) -> str | None:
@@ -125,7 +192,8 @@ _DUPLICATE_WINDOW = timedelta(seconds=20)
 
 
 def _recent_identical_group(
-    db: Session, *, user_id: str, chat_id: str, session: str, start_local: datetime, texts: list[str], source: ScheduleSource
+    db: Session, *, user_id: str, chat_id: str, session: str, start_local: datetime, items: list[MessageItem],
+    source: ScheduleSource,
 ) -> tuple[ScheduleGroup, list[Schedule]] | None:
     candidates = db.exec(
         select(ScheduleGroup)
@@ -139,7 +207,8 @@ def _recent_identical_group(
     for group in candidates:
         schedules = group_schedules(db, group.id)
         # Compara o texto decifrado em memória (a janela é de segundos, e só do próprio usuário).
-        if schedules and all(s.enabled for s in schedules) and [privacy.schedule_message(s, safe=True) for s in schedules] == texts:
+        current = [MessageItem(text=privacy.schedule_message(s, safe=True) or "", media_id=s.media_id) for s in schedules]
+        if schedules and all(s.enabled for s in schedules) and current == items:
             return group, schedules
     return None
 
@@ -165,6 +234,7 @@ def create_sequence(
     allow_past: bool = True,
     recipient_name: str | None = None,
     dedupe: bool = False,
+    media_ids: list[str] | None = None,
 ) -> tuple[ScheduleGroup, list[Schedule]]:
     """Cria UM agendamento (grupo) com a sequência inteira, numa transação só.
 
@@ -174,11 +244,11 @@ def create_sequence(
     passam `allow_past=False` pra recusar um horário que já passou (a
     automação de um evento já passado continua permitida, como sempre foi) e
     `dedupe=True` pra que um envio duplicado do mesmo formulário não crie o
-    agendamento duas vezes."""
-    texts = clean_messages(messages)
+    agendamento duas vezes. `media_ids[i]` é o anexo (já enviado por
+    `media.store_upload`) da mensagem i — recurso de plano."""
     tz_name = timing.validate_timezone(timezone or settings.default_timezone)
     chat_id = _normalize_chat(recipient)
-    cron = _normalize_cron(recurrence, len(texts))
+    items, cron = _prepare_items(db, user_id, messages, media_ids, recurrence)
     _check_attempts(max_attempts)
     session = (session or "").strip()
     if not session:
@@ -187,11 +257,11 @@ def create_sequence(
     start_local, start_utc = _resolve_start(start, tz_name)
     if not allow_past and start_utc < clock.utcnow() - _PAST_TOLERANCE:
         raise ValidationError("O horário escolhido já passou. Escolha uma data e horário futuros.")
-    times_utc = timing.sequence_times_utc(start_utc, len(texts), gap_seconds)
+    times_utc = timing.sequence_times_utc(start_utc, len(items), gap_seconds)
 
     if dedupe:
         existing = _recent_identical_group(
-            db, user_id=user_id, chat_id=chat_id, session=session, start_local=start_local, texts=texts, source=ScheduleSource(source)
+            db, user_id=user_id, chat_id=chat_id, session=session, start_local=start_local, items=items, source=ScheduleSource(source)
         )
         if existing is not None:
             return existing
@@ -213,7 +283,7 @@ def create_sequence(
     db.flush()
 
     schedules: list[Schedule] = []
-    for position, (text, at_utc) in enumerate(zip(texts, times_utc)):
+    for position, (item, at_utc) in enumerate(zip(items, times_utc)):
         schedule = Schedule(
             user_id=user_id,
             group_id=group.id,
@@ -225,8 +295,9 @@ def create_sequence(
             first_run_local=start_local if position == 0 else timing.to_local(at_utc, tz_name),
             recurrence=cron,
             max_attempts=max_attempts,
+            media_id=item.media_id,
         )
-        privacy.seal_schedule_message(schedule, text)
+        privacy.seal_schedule_message(schedule, item.text)
         privacy.seal_schedule_recipient(schedule, chat_id)
         db.add(schedule)
         schedules.append(schedule)
@@ -497,6 +568,7 @@ def update_sequence(
     start: datetime,
     recurrence: str | None = None,
     allow_past: bool = False,
+    media_ids: list[str] | None = None,
 ) -> ScheduleGroup:
     """Edita um agendamento que AINDA NÃO começou a ser enviado (Conversas e
     Agendamentos). Muda horário, WhatsApp, textos, quantidade e ordem das
@@ -511,8 +583,7 @@ def update_sequence(
     if group.source == ScheduleSource.calendar:
         raise ValidationError("Este agendamento vem de uma automação do Calendário — edite a automação no evento.")
 
-    texts = clean_messages(messages)
-    cron = _normalize_cron(recurrence, len(texts))
+    items, cron = _prepare_items(db, user_id, messages, media_ids, recurrence)
     session = (session or "").strip()
     if not session:
         raise ValidationError("Escolha por qual WhatsApp enviar.")
@@ -522,6 +593,7 @@ def update_sequence(
 
     old = group_schedules(db, group.id)
     old_ids = [s.id for s in old]
+    old_media = {s.media_id for s in old if s.media_id}
     if not old or not all(s.enabled for s in old):
         raise ValidationError("Este agendamento já foi cancelado ou concluído e não pode mais ser editado.")
 
@@ -546,20 +618,20 @@ def update_sequence(
         raise ValidationError("O envio deste agendamento acabou de começar e ele não pode mais ser editado.")
 
     now = utcnow()
-    times_utc = timing.sequence_times_utc(start_utc, len(texts), group.message_gap_seconds)
+    times_utc = timing.sequence_times_utc(start_utc, len(items), group.message_gap_seconds)
     max_attempts = old[0].max_attempts
     recipient = privacy.group_recipient(group)
     if recipient is None:
         db.rollback()
         raise ValidationError("O destinatário deste agendamento não está mais disponível. Crie um novo agendamento.")
 
-    kept = old[: len(texts)]
-    _delete_schedule_rows(db, [s.id for s in old[len(texts):]])
+    kept = old[: len(items)]
+    _delete_schedule_rows(db, [s.id for s in old[len(items):]])
     # A chain antiga é refeita do zero (posições/quantidade podem ter mudado).
     db.exec(sa_delete(ScheduleDependency).where(col(ScheduleDependency.schedule_id).in_([s.id for s in kept])))
 
     schedules: list[Schedule] = []
-    for position, (text, at_utc) in enumerate(zip(texts, times_utc)):
+    for position, (item, at_utc) in enumerate(zip(items, times_utc)):
         schedule = kept[position] if position < len(kept) else Schedule(
             user_id=user_id,
             group_id=group.id,
@@ -569,7 +641,8 @@ def update_sequence(
         )
         schedule.position = position
         schedule.session = session
-        privacy.seal_schedule_message(schedule, text)
+        schedule.media_id = item.media_id
+        privacy.seal_schedule_message(schedule, item.text)
         if schedule.recipient_phone_encrypted is None:
             privacy.seal_schedule_recipient(schedule, recipient.chat_id)
         schedule.first_run_local = start_local if position == 0 else timing.to_local(at_utc, group.timezone)
@@ -584,6 +657,12 @@ def update_sequence(
     db.add(group)
     db.flush()
     _chain_dependencies(db, schedules)
+    # Anexo tirado (ou trocado) na edição: se nenhuma outra mensagem ativa o usa, some já.
+    for media_id in old_media - {item.media_id for item in items}:
+        row = db.get(MediaAttachment, media_id)
+        if row is not None and row.storage_key and not retention.media_in_use(db, media_id):
+            retention.purge_media(row, now)
+            db.add(row)
     db.commit()
 
     for schedule in schedules:

@@ -27,6 +27,7 @@ from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
+from . import media as media_files
 from . import privacy, timing, whatsapp_service
 from .clock import utcnow
 from .models import (
@@ -90,6 +91,8 @@ class MessageView:
     when_utc: datetime  # horário real do disparo (ou do envio, se já saiu)
     when_local: datetime  # o mesmo, no fuso do usuário
     dispatch: Dispatch | None = None
+    # Anexo (foto/vídeo/áudio/PDF), preenchido em lote por `_attach_media`.
+    media: media_files.MediaInfo | None = None
 
     @property
     def position(self) -> int:
@@ -103,6 +106,15 @@ class MessageView:
     @property
     def content_removed(self) -> bool:
         return self.text is None
+
+    @property
+    def summary(self) -> str:
+        """Uma linha pra rótulos/aria: o texto, ou "Foto: nome.jpg" sem texto."""
+        if self.text:
+            return self.text
+        if self.media is not None:
+            return f"{self.media.kind_label}{': ' + self.media.name if self.media.name else ''}"
+        return ""
 
     @property
     def error(self) -> str | None:
@@ -267,6 +279,14 @@ def group_status(message_statuses: list[str]) -> str:
     return "failed" if sts & {"failed", "skipped"} else "canceled"
 
 
+def _attach_media(db: Session, user_id: str, views: list[MessageView]) -> None:
+    """Uma consulta para os anexos de todas as mensagens listadas."""
+    found = media_files.infos(db, user_id, [m.schedule.media_id for m in views])
+    for view in views:
+        if view.schedule.media_id:
+            view.media = found.get(view.schedule.media_id)
+
+
 def _message_view(schedule: Schedule, dispatches: list[Dispatch], tz_name: str) -> MessageView:
     status, dispatch = message_status(schedule, dispatches)
     if dispatch is None:
@@ -346,6 +366,7 @@ def _build_group_views(db: Session, groups: list[ScheduleGroup], user_id: str, t
                 tz_name=tz_name,
             )
         )
+    _attach_media(db, user_id, [m for v in views for m in v.messages])
     return views
 
 
@@ -501,6 +522,7 @@ def conversation_scheduled(
         elif item.when_utc >= window_start:
             view.recent_items.append(item)
     view.open_items.sort(key=_by_time)
+    _attach_media(db, user_id, view.open_items + view.recent_items)
     return view
 
 
@@ -693,6 +715,7 @@ def scheduled_panel(
         )
     titles = _event_titles(db, user_id, [gid for gid, g in groups.items() if g.source == ScheduleSource.calendar])
 
+    _attach_media(db, user_id, [m for key in page for m in by_key[key]])
     for key in page:
         group = groups.get(key)
         panel.groups.append(

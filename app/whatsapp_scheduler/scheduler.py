@@ -18,10 +18,10 @@ from datetime import datetime, timedelta
 
 from sqlmodel import Session, col, select
 
-from . import chatsvc, clock, failures, privacy, retention
+from . import chatsvc, clock, failures, media, privacy, retention
 from .config import settings
 from .db import get_engine
-from .models import OPEN_STATUSES, Dispatch, DispatchStatus, Schedule, ScheduleDependency, User
+from .models import OPEN_STATUSES, Dispatch, DispatchStatus, MediaAttachment, Schedule, ScheduleDependency, User
 from .recurrence import local_to_utc, next_run_utc, normalize_recurrence
 from .waha import WahaClient, WahaError, extract_message_id
 
@@ -310,6 +310,23 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
             encryption_key_version=sch.encryption_key_version,
             recipient_phone_encrypted=sch.recipient_phone_encrypted,
         )
+        # Anexo: idem, só os metadados + onde está o arquivo cifrado.
+        attachment = db.get(MediaAttachment, sch.media_id) if sch.media_id else None
+        sealed_media = (
+            MediaAttachment(
+                id=attachment.id,
+                user_id=attachment.user_id,
+                kind=attachment.kind,
+                mimetype=attachment.mimetype,
+                filename_encrypted=attachment.filename_encrypted,
+                storage_key=attachment.storage_key,
+                encryption_nonce=attachment.encryption_nonce,
+                encryption_key_version=attachment.encryption_key_version,
+            )
+            if attachment is not None
+            else None
+        )
+        media_missing = bool(sch.media_id) and (sealed_media is None or not sealed_media.storage_key)
         session_name = sch.session
         max_attempts = sch.max_attempts
         owner_id = sch.user_id
@@ -319,7 +336,7 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         _finish_without_sending(dispatch_id, DispatchStatus.skipped, failures.ACCOUNT_SUSPENDED, "Conta suspensa: mensagem não enviada.")
         logger.warning("dispatch %s não enviada: conta suspensa", dispatch_id)
         return False
-    if not sealed.message_ciphertext or not sealed.recipient_phone_encrypted:
+    if not sealed.message_ciphertext or not sealed.recipient_phone_encrypted or media_missing:
         _finish_without_sending(dispatch_id, DispatchStatus.failed, failures.CONTENT_UNAVAILABLE, "Conteúdo indisponível (já expurgado).")
         logger.error("dispatch %s sem conteúdo cifrado — não enviada", dispatch_id)
         return False
@@ -352,23 +369,38 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
         return False
 
     # 3. decifra EM MEMÓRIA só agora, envia e descarta o texto (sem sessão de banco aberta).
+    file_data: bytes | None = None
+    filename = ""
     try:
         chat_id = privacy.schedule_recipient(sealed)
         text = privacy.schedule_message(sealed)
+        if sealed_media is not None:
+            file_data = await asyncio.to_thread(media.load_bytes, sealed_media)
+            filename = privacy.media_filename(sealed_media) or "arquivo"
     except privacy.DecryptionError:
         _finish_without_sending(dispatch_id, DispatchStatus.failed, failures.DECRYPTION_FAILED, "Não foi possível decifrar a mensagem.")
         logger.error("dispatch %s: falha ao decifrar (chave errada/ausente?) — não enviada", dispatch_id)
         return False
+    except media.MediaUnavailable:
+        _finish_without_sending(dispatch_id, DispatchStatus.failed, failures.CONTENT_UNAVAILABLE, "O arquivo anexado não está mais disponível.")
+        logger.error("dispatch %s: arquivo do anexo ausente — não enviada", dispatch_id)
+        return False
     try:
-        payload = await waha.send_text(session_name, chat_id or "", text or "")
+        if sealed_media is not None:
+            payload = await waha.send_media(
+                session_name, chat_id or "", kind=str(sealed_media.kind), mimetype=sealed_media.mimetype,
+                filename=filename, data=file_data or b"", caption=text or "",
+            )
+        else:
+            payload = await waha.send_text(session_name, chat_id or "", text or "")
         ok, code, err, message_id = True, None, None, extract_message_id(payload)
     except WahaError as exc:
         ok, message_id = False, None
         code, err = failures.classify_waha_error(exc)
     finally:
         # Python não garante zerar a memória de uma str, mas nenhuma referência
-        # ao texto/destinatário sobrevive a esta função.
-        text = chat_id = None  # noqa: F841
+        # ao texto/destinatário/arquivo sobrevive a esta função.
+        text = chat_id = file_data = filename = None  # noqa: F841
         payload = None  # noqa: F841
 
     # 4. grava só metadados do resultado

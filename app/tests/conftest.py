@@ -224,6 +224,18 @@ class FakeWaha:
         self.last_id = f"true_{chat_id}_{len(self.sent)}"
         return {"id": self.last_id}
 
+    async def send_media(
+        self, session: str, chat_id: str, *, kind: str, mimetype: str, filename: str, data: bytes, caption: str = ""
+    ) -> dict:
+        if self.send_error:
+            raise self.send_error
+        self.sent.append(
+            {"session": session, "chatId": chat_id, "kind": kind, "mimetype": mimetype, "filename": filename,
+             "data": data, "caption": caption}
+        )
+        self.last_id = f"true_{chat_id}_{len(self.sent)}"
+        return {"id": self.last_id}
+
     async def get_qr(self, session: str) -> tuple[bytes, str]:
         return b"PNGDATA", "image/png"
 

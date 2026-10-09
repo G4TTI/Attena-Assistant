@@ -11,6 +11,9 @@ Política (detalhada em docs/SECURITY_AND_PRIVACY.md):
 - Destinatário: cifrado enquanto algum agendamento dele está ativo; o HMAC
   (nunca o número) fica `recipient_hash_retention_days` e depois vira NULL.
 - Automação: mensagens cifradas enquanto alguma entrega dela está ativa.
+- Anexo (foto/vídeo/áudio/PDF): arquivo cifrado no disco enquanto alguma
+  mensagem que o usa ainda vai sair; apagado (arquivo + nome) quando a última
+  termina. Upload que nunca virou agendamento: `media_draft_ttl_minutes`.
 - Logs: só metadados (log_sanitizer.py).
 
 `run_cleanup` (job `privacy_cleanup`, a cada `privacy_cleanup_seconds` e no boot)
@@ -46,6 +49,7 @@ from .models import (
     Dispatch,
     EmailVerificationToken,
     LoginAuditEvent,
+    MediaAttachment,
     PasswordResetToken,
     Schedule,
     ScheduleGroup,
@@ -58,6 +62,10 @@ logger = logging.getLogger("whatsapp_scheduler.retention")
 # Uma mensagem de automação recém-criada ainda não tem as ligações com os
 # agendamentos (são commits separados) — não expurgar nessa janela.
 _AUTOMATION_GRACE = timedelta(minutes=10)
+# Mesma ideia para anexos: com vários destinatários, cada agendamento é um commit
+# e o anexo do 1º não pode sumir (se ele sair na hora) antes de o 2º ser criado.
+# Anexo mais novo que isto fica para o privacy_cleanup seguinte.
+_MEDIA_GRACE = timedelta(minutes=5)
 
 
 # --------------------------------------------------------------------------- #
@@ -89,6 +97,24 @@ def purge_automation_message(message: AutomationMessage, now: datetime | None = 
     message.encryption_nonce = None
     message.encryption_key_version = None
     message.content_purged_at = now or utcnow()
+    return True
+
+
+def purge_media(media: MediaAttachment, now: datetime | None = None) -> bool:
+    """Apaga o arquivo do disco e o que dá pra ler dele no banco (nome, nonce).
+    O arquivo some ANTES do commit de quem chamou: se o commit falhar, o pior
+    caso é uma mensagem sem anexo que não sai (nunca um reenvio)."""
+    from . import media as media_files
+
+    if not (media.storage_key or media.encryption_nonce or media.filename_encrypted):
+        return False
+    media_files.delete_file(media.storage_key)
+    media.storage_key = None
+    media.encryption_nonce = None
+    media.encryption_key_version = None
+    media.filename_encrypted = None
+    media.content_purged_at = now or utcnow()
+    media.updated_at = media.content_purged_at
     return True
 
 
@@ -133,6 +159,14 @@ def _automation_message_finished(db: Session, message_id: str) -> bool:
     return not active
 
 
+def media_in_use(db: Session, media_id: str) -> bool:
+    return bool(
+        db.exec(
+            select(func.count()).select_from(Schedule).where(col(Schedule.media_id) == media_id).where(schedule_active_clause())
+        ).one()
+    )
+
+
 def finalize_schedules(db: Session, schedules: Iterable[Schedule], now: datetime | None = None) -> int:
     """Chamada no MESMO ponto (e antes do mesmo commit) em que mensagens chegam a
     um estado final: expurga o conteúdo das que terminaram e, se o agendamento
@@ -164,6 +198,12 @@ def finalize_schedules(db: Session, schedules: Iterable[Schedule], now: datetime
         if message is not None and message.message_ciphertext and _automation_message_finished(db, message_id):
             purge_automation_message(message, now)
             db.add(message)
+            purged += 1
+    for media_id in {s.media_id for s in finished if s.media_id}:
+        media = db.get(MediaAttachment, media_id)
+        if media is not None and media.storage_key and media.created_at < now - _MEDIA_GRACE and not media_in_use(db, media_id):
+            purge_media(media, now)
+            db.add(media)
             purged += 1
     return purged
 
@@ -231,6 +271,25 @@ def run_cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
             .execution_options(synchronize_session=False)
         )
     )
+
+    # 3b. Anexos: sem nenhuma mensagem ativa — já usados (todas as mensagens
+    #     terminaram) ou rascunho abandonado há mais de `media_draft_ttl_minutes`.
+    media_active = exists().where(col(Schedule.media_id) == col(MediaAttachment.id), schedule_active_clause())
+    media_used = exists().where(col(Schedule.media_id) == col(MediaAttachment.id))
+    draft_cutoff = now - timedelta(minutes=settings.media_draft_ttl_minutes)
+    stale_media = db.exec(
+        select(MediaAttachment)
+        .where(col(MediaAttachment.storage_key).is_not(None))
+        .where(~media_active)
+        .where(col(MediaAttachment.created_at) < now - _MEDIA_GRACE)
+        .where(or_(media_used, col(MediaAttachment.created_at) < draft_cutoff))
+    ).all()
+    for media in stale_media:
+        purge_media(media, now)
+        db.add(media)
+    counts["media_files"] = len(stale_media)
+    db.flush()
+    counts["media_orphan_files"] = _sweep_orphan_media_files(db)
 
     # 4. Hash do destinatário depois do prazo.
     counts["recipient_hashes"] = _count(
@@ -348,6 +407,33 @@ def run_cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
 
     counts["memory_cache_entries"] = chatsvc.purge_expired() + ratelimit.prune()
     return counts
+
+
+# Arquivo recém-gravado cuja linha ainda não foi commitada não pode ser tratado como órfão.
+_ORPHAN_FILE_GRACE = timedelta(hours=1)
+
+
+def _sweep_orphan_media_files(db: Session) -> int:
+    """Arquivos na pasta de anexos que nenhuma linha viva aponta (ex.: o processo
+    caiu entre gravar o arquivo e commitar, ou o unlink falhou)."""
+    from . import media as media_files
+
+    root = media_files.media_root()
+    live = set(
+        db.exec(select(MediaAttachment.storage_key).where(col(MediaAttachment.storage_key).is_not(None))).all()
+    )
+    removed = 0
+    cutoff = time.time() - _ORPHAN_FILE_GRACE.total_seconds()  # mtime é do relógio do sistema
+    for path in root.iterdir():
+        if not path.is_file() or path.name in live:
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def pending_waha_purges(db: Session) -> list[WhatsAppSession]:

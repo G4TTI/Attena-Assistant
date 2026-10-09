@@ -387,7 +387,7 @@ def admin_plans(
         "admin/planos.html",
         _ctx(
             request, admin, "planos", page_title="Planos", rows=rows, editing=editing, ok=ok, error=error,
-            limit_labels=plans.LIMIT_LABELS, periods={p.value: plans.PERIOD_LABELS[p] for p in BillingPeriod},
+            limit_labels=plans.LIMIT_LABELS, capability_labels=plans.CAPABILITY_LABELS, periods={p.value: plans.PERIOD_LABELS[p] for p in BillingPeriod},
         ),
     )
 
@@ -424,17 +424,22 @@ async def admin_update_plan(
         else:
             return _back(back, error=f"Limite inválido em “{plans.LIMIT_LABELS[key]}”: use um número ou deixe vazio (ilimitado).")
     features = [line.strip()[:120] for line in str(form.get("features") or "").splitlines() if line.strip()][:20]
+    capabilities = [key for key in plans.CAPABILITY_LABELS if form.get(f"cap_{key}") == "on"]
     import json
 
     if plans.is_admin_plan(plan) and not access.is_owner(admin):
         return _back(back, error="Só a conta principal pode editar o plano Administrador.")
-    before = {"price_cents": plan.price_cents, "is_active": plan.is_active, "is_public": plan.is_public}
+    before = {
+        "price_cents": plan.price_cents, "is_active": plan.is_active, "is_public": plan.is_public,
+        "capabilities": plans.capabilities(plan),
+    }
     plan.name = name
     plan.description = str(form.get("description") or "").strip()[:200]
     plan.price_cents = round(float(price_raw.replace(",", ".")) * 100)
     plan.billing_period = BillingPeriod(period)
     plan.features_json = json.dumps(features, ensure_ascii=False)
     plan.limits_json = json.dumps(limits)
+    plan.capabilities_json = json.dumps(capabilities)
     plan.is_active = form.get("is_active") == "on"
     plan.is_public = form.get("is_public") == "on"
     if plans.is_admin_plan(plan):
@@ -445,7 +450,10 @@ async def admin_update_plan(
     db.commit()
     audit(
         db, admin, "plan_updated", target_type="plan", target_id=plan.id,
-        detail={"code": plan.code, "before": before, "after": {"price_cents": plan.price_cents, "is_active": plan.is_active, "is_public": plan.is_public}},
+        detail={"code": plan.code, "before": before, "after": {
+            "price_cents": plan.price_cents, "is_active": plan.is_active, "is_public": plan.is_public,
+            "capabilities": plans.capabilities(plan),
+        }},
     )
     return _back("/admin/planos", ok=f"Plano {plan.name} atualizado.")
 

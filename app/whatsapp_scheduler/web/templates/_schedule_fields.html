@@ -27,7 +27,7 @@
 
 <div class="field">
   <label>Mensagens</label>
-  {{ message_sequence_editor(form.messages) }}
+  {{ message_sequence_editor(form.messages, form.attach, form.media) }}
 </div>
 
 <details class="advanced" {{ 'open' if form.advanced_open }}>

@@ -114,6 +114,19 @@ class Settings(BaseSettings):
     session_record_retention_days: int = 30
     auth_token_retention_days: int = 7
 
+    # ------------------------------------------------------------------ #
+    # Anexos de mensagens programadas (foto/vídeo/áudio/PDF — ver media.py)
+    # ------------------------------------------------------------------ #
+    # Pasta dos arquivos CIFRADOS. Vazio = "media/" ao lado do banco (DB_PATH),
+    # ou seja, dentro do volume ./data.
+    media_dir: str = ""
+    # Tamanho máximo por arquivo (16 MB = limite do WhatsApp para foto/vídeo/áudio).
+    media_max_bytes: int = 16 * 1024 * 1024
+    # Upload que não virou agendamento (formulário abandonado) é apagado depois disto.
+    media_draft_ttl_minutes: int = 120
+    # Enviar mídia demora mais que texto (upload pro WhatsApp, conversão de áudio).
+    media_send_timeout: float = 180.0
+
     # WAHA: armazenamento de conversas do engine NOWEB (desligado por padrão —
     # com ele ligado o WAHA grava chats/contatos/mensagens em store.sqlite3).
     waha_noweb_store_enabled: bool = False

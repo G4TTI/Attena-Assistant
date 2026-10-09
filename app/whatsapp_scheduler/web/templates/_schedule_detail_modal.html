@@ -1,4 +1,4 @@
-{% from "_components.html" import icon, status_icon, message_text %}
+{% from "_components.html" import icon, status_icon, message_content %}
 {% set phone = g.recipient_phone %}
 <div class="modal-backdrop">
   <div class="modal">
@@ -29,7 +29,7 @@
           {% for m in g.messages %}
           <li>
             <span class="msg-num">{{ loop.index }}</span>
-            <span class="msg-text">{{ message_text(m.text, m.status) }}</span>
+            <span class="msg-text">{{ message_content(m) }}</span>
             <div class="msg-meta">
               <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
               <span>{{ m.when_local.strftime('%d/%m/%Y · %H:%M:%S') }}</span>

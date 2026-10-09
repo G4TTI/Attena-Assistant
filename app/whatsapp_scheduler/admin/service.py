@@ -659,6 +659,7 @@ def plan_rows(db: Session) -> list[dict]:
             "plan": p,
             "features": plans.features(p),
             "limits": plans.limits(p),
+            "capabilities": plans.capabilities(p),
             "active": stats.get(p.id, {}).get("active", 0),
             "manual": stats.get(p.id, {}).get("manual", 0),
             "mrr_cents": stats.get(p.id, {}).get("mrr_cents", 0),

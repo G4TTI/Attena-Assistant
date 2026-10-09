@@ -133,7 +133,8 @@ def test_billing_profiles_empty_removed_filled_encrypted(migrated):
 def test_migration_is_recorded_and_idempotent(migrated):
     with get_engine().connect() as conn:
         versions = [r[0] for r in conn.execute(text("SELECT version FROM schema_migrations"))]
-    assert versions == ["2026.09.29-v1.4-privacy"]
+    assert versions == [version for version, _ in migrations.MIGRATIONS]
+    assert versions[0] == "2026.09.29-v1.4-privacy"
     init_db()  # de novo: nada a fazer, nada quebra
     assert migrations.run_migrations(get_engine()) == []
 

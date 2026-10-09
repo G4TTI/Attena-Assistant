@@ -71,7 +71,7 @@
       </div>
       <div class="field">
         <label>Mensagens</label>
-        {{ message_sequence_editor(sf.messages) }}
+        {{ message_sequence_editor(sf.messages, sf.attach, sf.media) }}
       </div>
       <details class="advanced" {{ 'open' if sf.advanced_open }}>
         <summary>Opções avançadas</summary>

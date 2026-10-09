@@ -182,6 +182,25 @@ def unseal(ciphertext: str, nonce: str, key_version: int, *, aad: str) -> str:
         raise DecryptionError("falha ao decifrar (chave errada, dado adulterado ou de outra linha)") from exc
 
 
+def seal_bytes(data: bytes, *, aad: str) -> tuple[bytes, Sealed]:
+    """Como `seal`, para conteúdo binário (arquivos). Devolve o ciphertext cru
+    (que vai para o disco) e o nonce/versão (que vão para o banco)."""
+    ring = _keyring()
+    nonce = os.urandom(_NONCE_BYTES)
+    ct = ring.ciphers[ring.active_version].encrypt(nonce, data, aad.encode("utf-8"))
+    return ct, Sealed(ciphertext="", nonce=_b64(nonce), key_version=ring.active_version)
+
+
+def unseal_bytes(ciphertext: bytes, nonce: str, key_version: int, *, aad: str) -> bytes:
+    cipher = _keyring().ciphers.get(int(key_version))
+    if cipher is None:
+        raise DecryptionError(f"a chave versão {key_version} não está configurada")
+    try:
+        return cipher.decrypt(_unb64(nonce), ciphertext, aad.encode("utf-8"))
+    except (InvalidTag, ValueError, binascii.Error) as exc:
+        raise DecryptionError("falha ao decifrar (chave errada, dado adulterado ou de outra linha)") from exc
+
+
 def encrypt_field(plaintext: str | None, *, aad: str) -> str | None:
     """Envelope de uma coluna só: "v<versão>:<nonce b64>:<ciphertext b64>"."""
     if plaintext is None:
@@ -340,6 +359,38 @@ def automation_message(message, *, safe: bool = False) -> str | None:
             aad=_aad("automation_messages.message", message.id),
         ),
         "automation_messages.message", message.id, safe,
+    )
+
+
+# ---- Anexo de mensagem programada (`MediaAttachment`) ----------------------- #
+# O arquivo em si fica no disco (media.py grava/lê); aqui só a cifra. O nome
+# original ("exame-joao.pdf") também é conteúdo do usuário e vai cifrado.
+def seal_media_file(media, data: bytes) -> bytes:
+    """Cifra o arquivo e grava nonce/versão na linha. Devolve o que vai pro disco."""
+    ciphertext, sealed = seal_bytes(data, aad=_aad("media_attachments.file", media.id))
+    media.encryption_nonce = sealed.nonce
+    media.encryption_key_version = sealed.key_version
+    media.content_purged_at = None
+    return ciphertext
+
+
+def open_media_file(media, ciphertext: bytes) -> bytes:
+    if not media.encryption_nonce:
+        raise DecryptionError("anexo sem nonce (já expurgado)")
+    return unseal_bytes(
+        ciphertext, media.encryption_nonce, media.encryption_key_version or 0,
+        aad=_aad("media_attachments.file", media.id),
+    )
+
+
+def seal_media_filename(media, filename: str) -> None:
+    media.filename_encrypted = encrypt_field(filename, aad=_aad("media_attachments.filename", media.id))
+
+
+def media_filename(media, *, safe: bool = False) -> str | None:
+    return _safe(
+        lambda: decrypt_field(media.filename_encrypted, aad=_aad("media_attachments.filename", media.id)),
+        "media_attachments.filename", media.id, safe,
     )
 
 

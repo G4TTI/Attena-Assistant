@@ -5,18 +5,21 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, col, select
+from starlette.datastructures import UploadFile
 
-from .. import app_settings, auth, plans, privacy, schedule_views, timing, whatsapp_service
+from .. import app_settings, auth, media, plans, privacy, schedule_views, timing, whatsapp_service
 from ..chatsvc import cached_chat_name, get_history, list_chats, send_now
 from ..clock import utcnow
+from ..config import settings
 from ..db import get_session
 from ..errors import ValidationError
-from ..models import Schedule, ScheduleSource, User
+from ..models import MediaAttachment, Schedule, ScheduleSource, User
 from ..recipients import RecipientError, normalize_recipient
 from ..recurrence import utc_to_local
 from ..service import (
@@ -156,6 +159,9 @@ def _schedule_form_ctx(db: Session, current_user: User, **overrides: object) -> 
         "recipients": [],
         "recipient_label": None,
         "messages": [""],
+        # Anexo de cada mensagem (MediaInfo ou None, alinhado com `messages`) e se o plano libera anexos.
+        "media": [],
+        "attach": media.attach_config(db, current_user),
         "send_date": send_date,
         "send_time": send_time,
         "min_date": utc_to_local(utcnow(), tz_name).strftime("%Y-%m-%d"),
@@ -169,6 +175,13 @@ def _schedule_form_ctx(db: Session, current_user: User, **overrides: object) -> 
     }
     form.update(overrides)
     return form
+
+
+def _media_list(db: Session, current_user: User, media_ids: list[str]) -> list:
+    """Anexos já enviados de um formulário reexibido (erro de validação), na ordem
+    das mensagens — o usuário não precisa mandar o arquivo de novo."""
+    found = media.infos(db, current_user.id, media_ids)
+    return [found.get(m) if m else None for m in media_ids]
 
 
 def _table_ctx(
@@ -273,12 +286,18 @@ async def ui_schedules(
 
 def _form_state_from_input(
     db: Session, current_user: User, *, recipients: list[dict], texts: list[str], send_date: str, send_time: str,
-    whatsapp_session_id: str, recurrence: str, **extra: object,
+    whatsapp_session_id: str, recurrence: str, media_ids: list[str] | None = None, **extra: object,
 ) -> dict:
     return _schedule_form_ctx(
         db, current_user, recipients=recipients, messages=texts or [""], send_date=send_date, send_time=send_time,
-        whatsapp_session_id=whatsapp_session_id, recurrence=recurrence, advanced_open=bool(recurrence), **extra,
+        whatsapp_session_id=whatsapp_session_id, recurrence=recurrence, advanced_open=bool(recurrence),
+        media=_media_list(db, current_user, media_ids or []), **extra,
     )
+
+
+def _message_count(texts: list[str], media_ids: list[str]) -> int:
+    """Quantas mensagens o formulário tem (texto e/ou anexo) — pro limite do plano."""
+    return max(1, sum(1 for i, t in enumerate(texts) if t.strip() or (i < len(media_ids) and media_ids[i])))
 
 
 @router.post("/ui/schedules", response_class=HTMLResponse)
@@ -290,6 +309,7 @@ async def ui_create(
     recipient_names: list[str] = Form([]),
     recipient: str = Form(""),
     messages: list[str] = Form([]),
+    media_ids: list[str] = Form([]),
     text: str = Form(""),
     send_date: str = Form(""),
     send_time: str = Form(""),
@@ -310,7 +330,7 @@ async def ui_create(
             raise ValidationError("Conecte um WhatsApp antes de criar um agendamento.")
         chats = unique_chats(picked)
         start = _start_from_form(send_date, send_time, send_at)
-        plans.check_limit(db, current_user, "pending_messages", adding=len(chats) * max(1, len([t for t in texts if t.strip()])))
+        plans.check_limit(db, current_user, "pending_messages", adding=len(chats) * _message_count(texts, media_ids))
         await whatsapp_service.require_session_ready(request.app.state.waha, wa_session)
 
         def _create_all() -> None:
@@ -328,13 +348,14 @@ async def ui_create(
                     recurrence=recurrence or None,
                     allow_past=False,
                     dedupe=True,
+                    media_ids=media_ids,
                 )
 
         await asyncio.to_thread(_create_all)
     except ValidationError as exc:
         form = _form_state_from_input(
             db, current_user, recipients=picked, texts=texts, send_date=send_date, send_time=send_time,
-            whatsapp_session_id=whatsapp_session_id, recurrence=recurrence, error=str(exc),
+            whatsapp_session_id=whatsapp_session_id, recurrence=recurrence, media_ids=media_ids, error=str(exc),
         )
         return templates.TemplateResponse("_schedule_form.html", {"request": request, "form": form})
 
@@ -383,6 +404,7 @@ def _edit_form_ctx(db: Session, current_user: User, view: schedule_views.GroupVi
         swap="innerHTML",
         recipient_label=view.recipient,
         messages=[m.text or "" for m in view.messages],
+        media=[m.media for m in view.messages],
         send_date=group.start_local.strftime("%Y-%m-%d"),
         send_time=group.start_local.strftime("%H:%M"),
         whatsapp_session_id=wa.id if wa else "",
@@ -419,6 +441,7 @@ async def ui_schedule_update(
     request: Request,
     group_id: str,
     messages: list[str] = Form([]),
+    media_ids: list[str] = Form([]),
     send_date: str = Form(""),
     send_time: str = Form(""),
     whatsapp_session_id: str = Form(""),
@@ -436,12 +459,13 @@ async def ui_schedule_update(
         await whatsapp_service.require_session_ready(request.app.state.waha, wa_session)
         await asyncio.to_thread(
             update_sequence, db, group_id, user_id=current_user.id, session=wa_session.session_name,
-            messages=messages, start=start, recurrence=recurrence or None,
+            messages=messages, start=start, recurrence=recurrence or None, media_ids=media_ids,
         )
     except ValidationError as exc:
         form = _edit_form_ctx(
             db, current_user, view, messages=messages or [""], send_date=send_date, send_time=send_time,
-            whatsapp_session_id=whatsapp_session_id, recurrence=recurrence, advanced_open=bool(recurrence), error=str(exc),
+            whatsapp_session_id=whatsapp_session_id, recurrence=recurrence, advanced_open=bool(recurrence),
+            media=_media_list(db, current_user, media_ids), error=str(exc),
         )
         return templates.TemplateResponse("_schedule_edit_modal.html", {"request": request, "g": view, "form": form})
     return templates.TemplateResponse(
@@ -491,6 +515,74 @@ async def ui_run_now(
     _owned_group_view(db, group_id, current_user)  # 404 se não for do usuário
     run_group_now(db, group_id, user_id=current_user.id)
     return _table_response(request, db, current_user)
+
+
+# ---- Anexos (foto/vídeo/áudio/PDF) ------------------------------------------ #
+def _media_error(message: str, status_code: int) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": message}, status_code=status_code)
+
+
+@router.post("/ui/media")
+async def ui_media_upload(
+    request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+) -> JSONResponse:
+    """Recebe UM arquivo assim que o usuário o escolhe no formulário (o
+    agendamento manda depois só o id). Recurso de plano: sem ele, nada é lido."""
+    try:
+        plans.require_capability(db, current_user, plans.MEDIA_MESSAGES)
+    except plans.PlanFeatureUnavailable as exc:
+        return _media_error(str(exc), 403)
+    # Recusa pelo tamanho declarado antes de ler o corpo (folga pro envelope multipart).
+    if int(request.headers.get("content-length") or 0) > settings.media_max_bytes + 64 * 1024:
+        return _media_error(f"O arquivo passa do limite de {media.max_size_label()}.", 413)
+    try:
+        form = await request.form(max_files=1, max_fields=2)
+    except Exception:  # noqa: BLE001 - corpo malformado/limite do parser: mesma resposta
+        return _media_error("Não consegui ler o arquivo enviado.", 400)
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        return _media_error("Escolha um arquivo.", 400)
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(1024 * 1024):
+        total += len(chunk)
+        if total > settings.media_max_bytes:
+            return _media_error(f"O arquivo passa do limite de {media.max_size_label()}.", 413)
+        chunks.append(chunk)
+    try:
+        row = await asyncio.to_thread(
+            media.store_upload, db, current_user, data=b"".join(chunks), filename=upload.filename or "",
+            declared_type=upload.content_type or "",
+        )
+    except ValidationError as exc:
+        return _media_error(str(exc), 422)
+    finally:
+        chunks.clear()
+        await upload.close()
+    info = media.info(row)
+    return JSONResponse(
+        {"ok": True, "id": info.id, "kind": info.kind, "kind_label": info.kind_label, "name": info.name, "size": info.size_label}
+    )
+
+
+@router.get("/ui/media/{media_id}")
+async def ui_media_file(
+    media_id: str, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
+) -> Response:
+    """O anexo decifrado, só para o DONO (miniatura/pré-visualização). Depois que a
+    mensagem termina o arquivo não existe mais: 404."""
+    row = db.get(MediaAttachment, media_id)
+    if row is None or row.user_id != current_user.id or not row.storage_key:
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    try:
+        data = await asyncio.to_thread(media.load_bytes, row)
+    except (media.MediaUnavailable, privacy.DecryptionError):
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.") from None
+    name = privacy.media_filename(row, safe=True) or "arquivo"
+    return Response(
+        content=data, media_type=row.mimetype,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(name)}"},
+    )
 
 
 # ---- Conversas -------------------------------------------------------------- #
@@ -849,6 +941,7 @@ async def ui_chat_schedule(
     session_id: str,
     chat: str = Form(...),
     messages: list[str] = Form([]),
+    media_ids: list[str] = Form([]),
     text: str = Form(""),
     send_date: str = Form(""),
     send_time: str = Form(""),
@@ -866,7 +959,7 @@ async def ui_chat_schedule(
     texts = messages if messages else ([text] if text.strip() else [])
     try:
         start = _start_from_form(send_date, send_time, send_at)
-        plans.check_limit(db, current_user, "pending_messages", adding=max(1, len([t for t in texts if t.strip()])))
+        plans.check_limit(db, current_user, "pending_messages", adding=_message_count(texts, media_ids))
         await whatsapp_service.require_session_ready(request.app.state.waha, wa_session)
         # Nome do contato como a tela o mostrou (só exibição; vai cifrado junto com o destinatário).
         name = recipient_name.strip()[:120] or cached_chat_name(wa_session.session_name, chat)
@@ -884,18 +977,20 @@ async def ui_chat_schedule(
             recurrence=recurrence or None,
             allow_past=False,
             dedupe=True,
+            media_ids=media_ids,
         )
     except ValidationError as exc:
         form = _chat_schedule_form(
             db, current_user, messages=texts or [""], send_date=send_date or _form_start_values(None, tz_name)[0],
             send_time=send_time or _form_start_values(None, tz_name)[1], recurrence=recurrence,
             advanced_open=bool(recurrence), whatsapp_session_id=wa_session.id,
+            media=_media_list(db, current_user, media_ids),
         )
         form["open"] = True
         return await _render_chat_view(
             request, db, current_user, session_id, chat, ok=f"erro:{exc}", schedule_form=form
         )
-    count = len([t for t in texts if t.strip()])
+    count = _message_count(texts, media_ids)
     form = _chat_schedule_form(
         db, current_user, send_date=start.strftime("%Y-%m-%d"), send_time=start.strftime("%H:%M"),
         whatsapp_session_id=wa_session.id,

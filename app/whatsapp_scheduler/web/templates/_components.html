@@ -34,6 +34,18 @@
 <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"></path><path d="M10 11v6M14 11v6"></path><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>
 {%- elif name == 'list' -%}
 <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><circle cx="4.5" cy="6" r="1"></circle><circle cx="4.5" cy="12" r="1"></circle><circle cx="4.5" cy="18" r="1"></circle></svg>
+{%- elif name == 'paperclip' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"></path></svg>
+{%- elif name == 'image' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"></rect><circle cx="9" cy="9.5" r="1.6"></circle><path d="M21 16l-5-5-8 9"></path></svg>
+{%- elif name == 'video' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2.5"></rect><path d="M16 10.5l5-3v9l-5-3z"></path></svg>
+{%- elif name == 'audio' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg>
+{%- elif name == 'document' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5M9 13h6M9 17h4"></path></svg>
+{%- elif name == 'lock' -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
 {%- elif name == 'edit' -%}
 <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
 {%- endif -%}
@@ -44,6 +56,30 @@
 {% macro message_text(text, status) -%}
 {%- if text is not none -%}{{ text }}
 {%- else -%}<span class="content-removed">{% if status == 'sent' %}Conteúdo apagado após o envio{% elif status == 'canceled' %}Conteúdo apagado no cancelamento{% else %}Conteúdo apagado (mensagem encerrada){% endif %}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{# Conteúdo de uma mensagem programada: anexo (se houver) + texto/legenda. `m` é um
+   schedule_views.MessageView. Depois que a mensagem termina, o anexo também é apagado. #}
+{% macro message_content(m) -%}
+{%- if m.media -%}
+<span class="msg-media{{ ' removed' if not m.media.available }}" data-kind="{{ m.media.kind }}">
+  {%- if m.media.available and m.media.is_image -%}
+  <a href="/ui/media/{{ m.media.id }}" target="_blank" rel="noopener" class="msg-media-thumb" title="Abrir {{ m.media.name }}"><img src="/ui/media/{{ m.media.id }}" alt="" loading="lazy"></a>
+  {%- else -%}
+  <span class="msg-media-icon">{{ icon(m.media.kind, 15) }}</span>
+  {%- endif -%}
+  <span class="msg-media-info">
+    {%- if m.media.available -%}
+    <a href="/ui/media/{{ m.media.id }}" target="_blank" rel="noopener" class="msg-media-name">{{ m.media.name }}</a>
+    <span class="msg-media-meta">{{ m.media.kind_label }} · {{ m.media.size_label }}</span>
+    {%- else -%}
+    <span class="content-removed">{{ m.media.kind_label }} apagad{{ 'a' if m.media.kind == 'image' else 'o' }} {% if m.status == 'sent' %}após o envio{% elif m.status == 'canceled' %}no cancelamento{% else %}(mensagem encerrada){% endif %}</span>
+    {%- endif -%}
+  </span>
+</span>
+{%- if m.text %}{{ m.text }}{% endif -%}
+{%- else -%}{{ message_text(m.text, m.status) }}
 {%- endif -%}
 {%- endmacro %}
 
@@ -110,7 +146,40 @@
 {% endmacro %}
 
 {# ---------------- Lista de mensagens: adicionar / editar / excluir / ordenar ---------------- #}
-{% macro _message_block(text='', number='•') %}
+{# attach: None = sem anexos (automações do Calendário); senão media.attach_config(). media: MediaInfo
+   já anexado a esta mensagem (formulário reexibido / edição). O <input name="media_ids"> existe em TODA
+   mensagem quando há anexos, pra o servidor parear media_ids[i] com messages[i]. #}
+{% macro _attach_box(attach, media=none) %}
+<div class="msg-attach{{ ' has-file' if media }}" data-kind="{{ media.kind if media else '' }}">
+  <input type="hidden" name="media_ids" value="{{ media.id if media else '' }}">
+  {% if attach.enabled %}
+  <div class="attach-chip" {{ 'hidden' if not media }}>
+    <span class="attach-thumb">
+      <img alt="" {% if media and media.is_image %}src="/ui/media/{{ media.id }}"{% else %}hidden{% endif %}>
+      <span data-k="video">{{ icon('video', 18) }}</span><span data-k="audio">{{ icon('audio', 18) }}</span><span data-k="document">{{ icon('document', 18) }}</span>
+    </span>
+    <span class="attach-info">
+      <strong class="attach-name">{{ media.name if media else '' }}</strong>
+      <span class="attach-meta">{% if media %}{{ media.kind_label }} · {{ media.size_label }}{% endif %}</span>
+    </span>
+    <button type="button" class="icon-btn sq cancel" title="Remover anexo" aria-label="Remover anexo" onclick="removeMediaAttachment(this)">{{ icon('x', 13) }}</button>
+  </div>
+  <button type="button" class="ghost attach-btn" onclick="this.nextElementSibling.click()" {{ 'hidden' if media }}>
+    {{ icon('paperclip', 14) }} Anexar foto, vídeo, áudio ou PDF
+  </button>
+  <input type="file" class="attach-input" accept="{{ attach.accept }}" onchange="attachMediaPicked(this)" hidden>
+  <p class="attach-status" role="status" hidden></p>
+  <p class="attach-hint">Até {{ attach.max_label }}. O texto acima vira a legenda — no áudio, que não tem legenda no WhatsApp, ele sai logo depois, como outra mensagem.</p>
+  {% else %}
+  <a class="attach-btn locked" href="/planos" title="Agendar fotos, vídeos, áudios e PDFs é um recurso do plano {{ attach.plan_name or 'superior' }}">
+    {{ icon('paperclip', 14) }} Anexar foto, vídeo, áudio ou PDF
+    <span class="plan-badge">{{ icon('lock', 11) }} {{ attach.plan_name or 'Plano superior' }}</span>
+  </a>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro _message_block(text='', number='•', attach=none, media=none) %}
 <div class="message-block">
   <div class="message-block-hd">
     <span class="msg-num">{{ number }}</span>
@@ -119,16 +188,17 @@
     <button type="button" class="icon-btn sq msg-move-down" title="Mover pra baixo" aria-label="Mover pra baixo" onclick="moveMessageBlock(this, 1)">{{ icon('down', 13) }}</button>
     <button type="button" class="icon-btn sq cancel" title="Excluir mensagem" aria-label="Excluir mensagem" onclick="removeMessageBlock(this)">{{ icon('trash', 13) }}</button>
   </div>
-  <textarea name="messages" required maxlength="4096" placeholder="Texto que será enviado…">{{ text }}</textarea>
+  <textarea name="messages" {{ 'required' if not media }} maxlength="4096" placeholder="{{ 'Legenda (opcional)…' if media else 'Texto que será enviado…' }}">{{ text }}</textarea>
+  {% if attach %}{{ _attach_box(attach, media) }}{% endif %}
 </div>
 {% endmacro %}
 
-{% macro message_sequence_editor(messages) %}
+{% macro message_sequence_editor(messages, attach=none, media=none) %}
 <div class="message-composer">
   <div class="message-list">
-    {% for text in (messages or ['']) %}{{ _message_block(text, loop.index) }}{% endfor %}
+    {% for text in (messages or ['']) %}{{ _message_block(text, loop.index, attach, (media or [])[loop.index0] if (media or []) | length > loop.index0 else none) }}{% endfor %}
   </div>
-  <template class="message-block-template">{{ _message_block('', '•') }}</template>
+  <template class="message-block-template">{{ _message_block('', '•', attach) }}</template>
   <button type="button" class="ghost add-message-btn" onclick="addMessageBlock(this)">{{ icon('plus', 14) }} Adicionar mensagem</button>
 </div>
 {% endmacro %}

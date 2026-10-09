@@ -49,6 +49,9 @@ quando precisa: entregar uma mensagem no WhatsApp ou mostrá-la ao próprio dono
 | Destinatário (chatId/telefone) | `schedules.recipient_phone_encrypted`, `schedule_groups.recipient_encrypted` | **AES-256-GCM** | até o agendamento terminar |
 | Hash do destinatário | `*.recipient_phone_hash` | **HMAC-SHA256** por usuário | fim do agendamento + **30 dias** |
 | Texto das automações do Calendário | `automation_messages.message_ciphertext` | **AES-256-GCM** | enquanto alguma entrega da automação estiver ativa |
+| Anexo de mensagem programada (foto, vídeo, áudio, PDF) | arquivo em `data/media/<id>.bin` + `media_attachments.encryption_nonce`/`encryption_key_version` | **AES-256-GCM** (arquivo inteiro, AAD `attena:media_attachments.file:<id>`), permissão `600` | até a última mensagem que o usa terminar (ver §6) |
+| Nome original do anexo | `media_attachments.filename_encrypted` | **AES-256-GCM** | idem |
+| Tipo, tamanho e datas do anexo | `media_attachments` | metadados | indefinido |
 | Id da mensagem no WAHA (embute telefone) | `dispatches.waha_message_hash` | **HMAC** | + 30 dias após o fim |
 | Status/horários/tentativas/código de erro | `dispatches` | metadados | indefinido (métricas) |
 | Tokens Google OAuth | `calendar_connections.*_token_enc` | **Fernet** (`TOKEN_ENCRYPTION_KEY`) | até desconectar (aí apagados e revogados) |
@@ -63,8 +66,10 @@ quando precisa: entregar uma mensagem no WhatsApp ou mostrá-la ao próprio dono
 
 - **Mensagens recebidas** (0 dias) — nem no banco, nem em arquivo, nem em log.
 - **Histórico de conversas** (0 dias) — a tabela `cached_messages` da v1.3 foi removida.
-- **Mídias** (imagem, áudio, vídeo, documento) — nunca baixadas (`downloadMedia=false`,
-  `WAHA_API_DOWNLOAD_MEDIA=false`).
+- **Mídias recebidas ou do histórico** (imagem, áudio, vídeo, documento) — nunca
+  baixadas (`downloadMedia=false`, `WAHA_API_DOWNLOAD_MEDIA=false`). A única mídia que
+  o Attena guarda é a que o PRÓPRIO usuário anexa a uma mensagem programada — cifrada
+  e só até ser enviada (§3, §6).
 - **Agenda de contatos do WhatsApp** — consultada ao vivo, só em memória.
 - **Fotos de perfil** — são URLs do próprio WhatsApp que o navegador carrega direto.
 - **Conteúdo de mensagem enviada/cancelada/falha/ignorada** — apagado ao terminar.
@@ -92,7 +97,7 @@ leitura e a cada tick do scheduler (30 s). Reiniciar o processo apaga tudo.
 - **Chaves versionadas:** `DATA_ENCRYPTION_KEYS="1:<b64>,2:<b64>"`. Dado novo usa a
   maior versão (ou `DATA_ENCRYPTION_ACTIVE_VERSION`); as anteriores só decifram.
   Rotação: adicionar versão nova → reiniciar → `python -m whatsapp_scheduler.cli rotate-keys`
-  → depois de conferir, remover a versão antiga.
+  (recifra também os arquivos de anexo) → depois de conferir, remover a versão antiga.
 - **Índice cego:** HMAC-SHA256 com chave própria (`DATA_HASH_KEY`), sobre
   `"recipient" | user_id | chatId`. Não é SHA-256 puro (sem a chave não dá para
   testar números por força bruta) e o mesmo número gera hashes diferentes em contas
@@ -130,6 +135,22 @@ criação ──► PENDING (cifrada: texto + destinatário)
   Google cancela as entregas e apaga os textos.
 - **Conta suspensa:** as mensagens não saem (status `skipped`, código
   `account_suspended`) e o conteúdo é expurgado.
+- **Anexos** (recurso de plano `media_messages`, ver `media.py`):
+  1. o arquivo sobe sozinho quando o usuário o escolhe (`POST /ui/media`): o tipo é
+     verificado pelos **bytes** (JPG, PNG, MP4/MOV/3GP/WEBM, MP3/M4A/AAC/OGG/WAV, PDF;
+     SVG, GIF e executáveis são recusados), limite `MEDIA_MAX_BYTES` (16 MB), e ele é
+     gravado **já cifrado** — nunca em texto puro no disco;
+  2. até ser agendado, é um rascunho: some em `MEDIA_DRAFT_TTL_MINUTES` (2 h) se o
+     formulário for abandonado (no máximo 30 rascunhos por usuário);
+  3. no envio, o worker lê o arquivo, decifra **em memória**, manda ao WAHA em base64
+     (nunca por URL) e descarta a referência;
+  4. quando a última mensagem que usa o anexo termina, o arquivo é apagado do disco e
+     o nome/nonce viram NULL. Exceção: anexo enviado nos primeiros 5 minutos após o
+     upload fica até o `privacy_cleanup` seguinte (carência que protege agendamentos
+     para vários destinatários, criados em commits separados). Tirar o anexo numa
+     edição o apaga na hora;
+  5. só o dono vê a miniatura/abre o arquivo (`GET /ui/media/<id>`, `no-store`); o
+     pacote `admin/` não chama nada que decifre arquivo ou nome (teste estático).
 - Histórico operacional que sobra: ids, dono, horários, status, tentativas,
   `failure_code` e um texto de erro sanitizado. Métricas saem daí.
 
@@ -143,6 +164,8 @@ Roda no boot e a cada `PRIVACY_CLEANUP_SECONDS` (padrão 1 h), e pelo CLI
 | mensagem encerrada ainda com ciphertext/destinatário | apaga |
 | agendamento sem mensagem ativa ainda com destinatário cifrado | apaga |
 | texto de automação sem entrega ativa (após 10 min de carência) | apaga |
+| anexo sem mensagem ativa (já usado, após 5 min de carência) ou rascunho com +2 h | apaga arquivo + nome |
+| arquivo na pasta de anexos sem linha correspondente (+1 h) | apaga |
 | hash de destinatário / id WAHA de algo encerrado há +30 dias | apaga (NULL) |
 | IP/navegador de login e de sessão com +30 dias | apaga |
 | registro de login com +180 dias | exclui |
@@ -181,6 +204,13 @@ Mitigações aplicadas na v1.4:
 - desconectar um WhatsApp no Attena agora faz **logout e apaga a sessão no WAHA**
   (credenciais e perfil local saem do volume);
 - rotação de logs do Docker (10 MB × 3) nos dois containers.
+
+**Envio de mídia:** o WAHA Core 2026.8 envia foto, PDF e áudio (convertido para
+mensagem de voz OGG/Opus pelo ffmpeg dele) em qualquer engine. **Vídeo no WEBJS exige a
+imagem `devlikeapro/waha:chrome`** (o Chromium da imagem padrão não tem os codecs);
+sem ela o Attena manda o vídeo como documento — a mensagem não se perde, mas o
+destinatário baixa em vez de assistir no balão. Para vídeo "de verdade", use
+`WAHA_IMAGE=devlikeapro/waha:chrome` no `.env`.
 
 Recomendações: trate `./waha/sessions` e a `WAHA_API_KEY` como segredos de produção;
 não inclua `waha/sessions` em backups externos sem criptografia; avalie NOWEB (sem
@@ -270,6 +300,9 @@ plano do catálogo. Tela: Admin › Auditoria.
 
 - O banco (`data/app.db`) não contém conversas nem conteúdo em texto puro: backups
   herdam isso. Conteúdo ativo, destinatários, faturamento e notas saem **cifrados**.
+- `data/media/` guarda só anexos de mensagens ainda pendentes, cifrados com a mesma
+  chave de dados: um backup dela sem a chave é inútil; restaurar o banco sem ela faz as
+  mensagens com anexo falharem com "conteúdo indisponível" (nunca saem sem o arquivo).
 - **Guarde as chaves separadas dos backups.** Backup + chave juntos = conteúdo legível.
   Backup sem a chave = inútil para restaurar mensagens pendentes (por isso guarde a
   chave também, offline, em outro lugar).

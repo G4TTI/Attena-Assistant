@@ -286,6 +286,34 @@
     .msg-num { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-size:11px; font-weight:700; flex-shrink:0; }
     .message-block-hd .field-label { flex:1; font-weight:600; font-size:12px; color:var(--mut); }
     .message-block textarea { min-height:56px; }
+
+    /* ---------------- Anexo de uma mensagem (foto/vídeo/áudio/PDF — recurso de plano) ---------------- */
+    .msg-attach { margin-top:8px; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+    .msg-attach .attach-btn { padding:6px 11px; font-size:12.5px; }
+    .attach-btn.locked { display:inline-flex; align-items:center; gap:7px; padding:6px 11px; border:1px dashed var(--bd2); border-radius:9px; color:var(--mut); font-size:12.5px; text-decoration:none; }
+    .attach-btn.locked:hover { border-color:var(--warn); color:var(--fg); }
+    .plan-badge { display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:600; color:var(--warn); background:color-mix(in oklab, var(--warn) 14%, transparent); }
+    .attach-chip { display:flex; align-items:center; gap:10px; width:100%; padding:7px 8px 7px 7px; border:1px solid var(--bd); border-radius:10px; background:var(--card); }
+    .attach-chip[hidden], .attach-btn[hidden], .attach-status[hidden] { display:none; }
+    .attach-thumb { width:44px; height:44px; flex-shrink:0; border-radius:8px; background:var(--soft); color:var(--accent-d); display:flex; align-items:center; justify-content:center; overflow:hidden; }
+    .attach-thumb img { width:100%; height:100%; object-fit:cover; }
+    .attach-thumb img[hidden], .attach-thumb [data-k] { display:none; }
+    .msg-attach[data-kind=video] [data-k=video], .msg-attach[data-kind=audio] [data-k=audio], .msg-attach[data-kind=document] [data-k=document] { display:inline-flex; }
+    .attach-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+    .attach-name { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .attach-meta { font-size:11.5px; color:var(--mut); }
+    .attach-status { margin:0; font-size:12px; color:var(--mut); }
+    .attach-status.err { color:var(--err); }
+    .attach-hint { margin:0; font-size:11.5px; color:var(--mut); }
+    .msg-attach:not(.has-file) .attach-hint { display:none; }
+    /* Anexo nas listas (detalhe, painel, bolha da conversa) */
+    .msg-media { display:flex; align-items:center; gap:9px; margin-bottom:4px; white-space:normal; }
+    .msg-media-thumb img { display:block; width:64px; height:64px; object-fit:cover; border-radius:8px; }
+    .msg-media-icon { width:34px; height:34px; border-radius:8px; background:var(--soft); color:var(--accent-d); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .msg-media.removed .msg-media-icon { color:var(--mut); background:transparent; border:1px dashed var(--bd2); }
+    .msg-media-info { display:flex; flex-direction:column; min-width:0; }
+    .msg-media-name { font-weight:600; font-size:13px; overflow-wrap:anywhere; }
+    .msg-media-meta { font-size:11.5px; color:var(--mut); }
     .automation-message-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
     .automation-message-list li { display:flex; align-items:baseline; gap:8px; font-size:13px; padding:6px 10px; background:var(--bg); border-radius:8px; }
     .automation-message-list .msg-num { background:var(--mut); }
@@ -1199,6 +1227,79 @@
       if(last) last.focus();
       refreshForm(list);
     }
+    /* ---- Anexo (foto/vídeo/áudio/PDF): o arquivo sobe sozinho ao ser escolhido
+       (POST /ui/media, cifrado no servidor) e o formulário leva só o id em media_ids ---- */
+    function attachMediaPicked(input){
+      var file = input.files && input.files[0];
+      if(!file) return;
+      var box = input.closest('.msg-attach');
+      var status = box.querySelector('.attach-status');
+      var btn = box.querySelector('.attach-btn');
+      var form = box.closest('form');
+      var submit = form && form.querySelector('[type=submit]');
+      var fd = new FormData();
+      fd.append('file', file);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/ui/media');
+      status.hidden = false; status.className = 'attach-status'; status.textContent = 'Enviando ' + file.name + '…';
+      btn.disabled = true;
+      /* Não agendar com um anexo pela metade (conta os uploads em andamento no formulário). */
+      if(form) form._uploads = (form._uploads || 0) + 1;
+      if(submit) submit.disabled = true;
+      function done(){
+        btn.disabled = false; input.value = '';
+        if(form) form._uploads = Math.max(0, (form._uploads || 1) - 1);
+        if(!submit || (form && form._uploads)) return;
+        submit.disabled = false;
+        /* ...mas WhatsApp desconectado continua travando o envio (updateWhatsappHint). */
+        var wa = form && form.querySelector('select.wa-picker');
+        if(wa) updateWhatsappHint(wa);
+      }
+      xhr.upload.onprogress = function(e){
+        if(e.lengthComputable) status.textContent = 'Enviando ' + file.name + '… ' + Math.round(e.loaded * 100 / e.total) + '%';
+      };
+      xhr.onload = function(){
+        var data = null;
+        try { data = JSON.parse(xhr.responseText); } catch(_e) {}
+        if(xhr.status === 200 && data && data.ok){ status.hidden = true; setMediaAttachment(box, data); }
+        else { status.className = 'attach-status err'; status.textContent = (data && data.error) || 'Não foi possível enviar o arquivo.'; }
+        done();
+      };
+      xhr.onerror = function(){ status.className = 'attach-status err'; status.textContent = 'Falha de conexão ao enviar o arquivo.'; done(); };
+      xhr.send(fd);
+    }
+    function setMediaAttachment(box, data){
+      box.querySelector('input[name=media_ids]').value = data ? data.id : '';
+      box.classList.toggle('has-file', !!data);
+      box.setAttribute('data-kind', data ? data.kind : '');
+      var chip = box.querySelector('.attach-chip');
+      var btn = box.querySelector('.attach-btn');
+      if(chip) chip.hidden = !data;
+      if(btn) btn.hidden = !!data;
+      if(data && chip){
+        chip.querySelector('.attach-name').textContent = data.name;
+        chip.querySelector('.attach-meta').textContent = data.kind_label + ' · ' + data.size;
+        var img = chip.querySelector('.attach-thumb img');
+        if(data.kind === 'image'){ img.src = '/ui/media/' + data.id; img.hidden = false; }
+        else { img.removeAttribute('src'); img.hidden = true; }
+      }
+      syncMessageRequired(box.closest('.message-block'));
+      var form = box.closest('form');
+      if(form) updateFormSummary(form);
+    }
+    function removeMediaAttachment(btn){ setMediaAttachment(btn.closest('.msg-attach'), null); }
+    /* Com anexo o texto é opcional (vira a legenda; no áudio, sai logo depois). */
+    function syncMessageRequired(block){
+      if(!block) return;
+      var ta = block.querySelector('textarea[name=messages]');
+      var box = block.querySelector('.msg-attach');
+      var kind = box ? box.getAttribute('data-kind') : '';
+      if(!ta) return;
+      ta.required = !kind;
+      ta.placeholder = !kind ? 'Texto que será enviado…' :
+        (kind === 'audio' ? 'Texto opcional — sai logo depois do áudio…' : 'Legenda (opcional)…');
+    }
+
     function removeMessageBlock(btn){
       var list = btn.closest('.message-list');
       if(list.querySelectorAll('.message-block').length <= 1) return; // sempre ao menos 1 mensagem
@@ -1243,6 +1344,7 @@
       if(picker) renderChips(picker);
       var list = form.querySelector('.message-list');
       if(list) renumberMessages(list);
+      form.querySelectorAll('.message-block').forEach(syncMessageRequired);
       form.querySelectorAll('select.wa-picker').forEach(updateWhatsappHint);
       if(form.querySelector('.offset-grid')) offsetPickerChanged(form);
       updateFormSummary(form);
@@ -1263,12 +1365,13 @@
         var wa = form.querySelector('[name=whatsapp_session_id]');
         var waOpt = wa && wa.options[wa.selectedIndex];
         var msgs = form.querySelectorAll('.message-block textarea').length;
+        var files = Array.prototype.filter.call(form.querySelectorAll('.message-list input[name=media_ids]'), function(i){ return i.value; }).length;
         var d = form.querySelector('[name=send_date]'), t = form.querySelector('[name=send_time]');
         var when = (d && d.value && t && t.value) ? (fmtDateBR(d.value) + ' às ' + t.value) : '—';
         var set = function(key, text){ var el = box.querySelector('[data-f=' + key + ']'); if(el) el.textContent = text; };
         set('recipient', fixed || (labels.length ? labels.join(', ') : '—'));
         set('whatsapp', form.getAttribute('data-wa-name') || (waOpt && waOpt.value ? (waOpt.getAttribute('data-name') || waOpt.textContent.trim()) : '—'));
-        set('messages', msgs + (msgs === 1 ? ' mensagem' : ' mensagens'));
+        set('messages', msgs + (msgs === 1 ? ' mensagem' : ' mensagens') + (files ? ' · ' + files + (files === 1 ? ' anexo' : ' anexos') : ''));
         set('when', when);
       }
       var summary = form.querySelector('.automation-preview-summary');

@@ -2,7 +2,7 @@
 
 Regra: nenhum outro módulo compara código de plano ("if plan == 'plus'"). Quem
 precisa saber o que o usuário pode fazer pergunta aqui (`entitlements`,
-`check_limit`). O catálogo vive na tabela `plans` e é editável em Admin >
+`check_limit`, `has_capability`). O catálogo vive na tabela `plans` e é editável em Admin >
 Planos; `seed_default_plans` só cria um catálogo inicial quando a tabela está
 vazia — os preços semeados são PROVISÓRIOS e devem ser revistos pelo dono.
 """
@@ -36,6 +36,13 @@ LIMIT_LABELS: dict[str, str] = {
     "calendar_connections": "Contas do Google Agenda",
 }
 
+# Recursos liberados por plano (código -> rótulo). Diferente dos limites, um
+# recurso SEMPRE vale (não depende de ENFORCE_PLAN_LIMITS): quem não tem, não usa.
+MEDIA_MESSAGES = "media_messages"
+CAPABILITY_LABELS: dict[str, str] = {
+    MEDIA_MESSAGES: "Agendamento de fotos, vídeos, áudios e PDFs",
+}
+
 PERIOD_LABELS = {BillingPeriod.monthly: "mês", BillingPeriod.yearly: "ano"}
 
 # Plano interno que dá acesso ao painel administrativo. Nunca é vendido (inativo
@@ -48,6 +55,7 @@ _ADMIN_PLAN = {
     "price_cents": 0,
     "features": ["Acesso ao painel administrativo e CRM", "Sem limites de uso"],
     "limits": {"whatsapp_connections": None, "pending_messages": None, "calendar_connections": None},
+    "capabilities": list(CAPABILITY_LABELS),
     "sort_order": 100,
 }
 
@@ -76,8 +84,12 @@ _DEFAULT_CATALOG = [
         "name": "Pro",
         "description": "Para equipes, clínicas e academias.",
         "price_cents": 5990,
-        "features": ["Tudo do Plus", "WhatsApps e mensagens sem limite prático", "Atendimento dedicado"],
+        "features": [
+            "Tudo do Plus", CAPABILITY_LABELS[MEDIA_MESSAGES], "WhatsApps e mensagens sem limite prático",
+            "Atendimento dedicado",
+        ],
         "limits": {"whatsapp_connections": 10, "pending_messages": None, "calendar_connections": 10},
+        "capabilities": [MEDIA_MESSAGES],
         "sort_order": 20,
     },
 ]
@@ -85,6 +97,10 @@ _DEFAULT_CATALOG = [
 
 class PlanLimitReached(ValidationError):
     """Limite do plano atingido (só levantado com ENFORCE_PLAN_LIMITS=true)."""
+
+
+class PlanFeatureUnavailable(ValidationError):
+    """O plano do usuário não inclui o recurso pedido."""
 
 
 def seed_default_plans(db: Session) -> int:
@@ -100,6 +116,7 @@ def seed_default_plans(db: Session) -> int:
                 price_cents=item["price_cents"],
                 features_json=json.dumps(item["features"], ensure_ascii=False),
                 limits_json=json.dumps(item["limits"]),
+                capabilities_json=json.dumps(item.get("capabilities", [])),
                 is_default=item.get("is_default", False),
                 sort_order=item["sort_order"],
             )
@@ -120,6 +137,7 @@ def ensure_admin_plan(db: Session) -> Plan:
             limits_json=json.dumps(_ADMIN_PLAN["limits"]), sort_order=_ADMIN_PLAN["sort_order"],
         )
     plan.price_cents, plan.is_active, plan.is_public, plan.is_default = 0, False, False, False
+    plan.capabilities_json = json.dumps(list(CAPABILITY_LABELS))  # administrador usa tudo
     db.add(plan)
     db.commit()
     db.refresh(plan)
@@ -149,6 +167,14 @@ def limits(plan: Plan) -> dict[str, int | None]:
     if not isinstance(data, dict):
         return {}
     return {k: (int(v) if v is not None else None) for k, v in data.items() if k in LIMIT_LABELS}
+
+
+def capabilities(plan: Plan) -> list[str]:
+    try:
+        data = json.loads(plan.capabilities_json or "[]")
+    except ValueError:
+        return []
+    return [str(x) for x in data if str(x) in CAPABILITY_LABELS] if isinstance(data, list) else []
 
 
 def format_price(cents: int, currency: str = "BRL") -> str:
@@ -208,6 +234,7 @@ class Entitlements:
     plan: Plan | None
     limits: dict[str, int | None]
     features: list[str]
+    capabilities: list[str]
 
     def limit(self, key: str) -> int | None:
         return self.limits.get(key)
@@ -215,7 +242,38 @@ class Entitlements:
 
 def entitlements(db: Session, user: User) -> Entitlements:
     plan = current_plan(db, user)
-    return Entitlements(plan=plan, limits=limits(plan) if plan else {}, features=features(plan) if plan else [])
+    return Entitlements(
+        plan=plan,
+        limits=limits(plan) if plan else {},
+        features=features(plan) if plan else [],
+        capabilities=capabilities(plan) if plan else [],
+    )
+
+
+def has_capability(db: Session, user: User, key: str) -> bool:
+    """O plano atual do usuário libera o recurso `key`? Admins sempre podem."""
+    if user.role in ADMIN_ROLES:
+        return True
+    plan = current_plan(db, user)
+    return plan is not None and key in capabilities(plan)
+
+
+def upgrade_plan_for(db: Session, key: str) -> Plan | None:
+    """O plano mais barato, à venda e visível, que libera `key` (o "assine o X")."""
+    for plan in sorted(list_plans(db, public_only=True), key=lambda p: (p.price_cents, p.sort_order)):
+        if plan.is_active and key in capabilities(plan):
+            return plan
+    return None
+
+
+def require_capability(db: Session, user: User, key: str) -> None:
+    if has_capability(db, user, key):
+        return
+    target = upgrade_plan_for(db, key)
+    where = f"do plano {target.name}" if target else "de um plano superior"
+    raise PlanFeatureUnavailable(
+        f"{CAPABILITY_LABELS.get(key, key)} é um recurso {where}. Veja as opções em Planos."
+    )
 
 
 def usage(db: Session, user: User) -> dict[str, int]:

@@ -28,7 +28,7 @@ import sys
 
 from sqlmodel import Session, col, select
 
-from . import auth, privacy, retention
+from . import auth, media, privacy, retention
 from .admin.access import revoke_admin
 from .auth_service import create_email_verification_link, create_password_reset_link, setup_owner
 from .config import settings
@@ -37,6 +37,7 @@ from .models import (
     AutomationMessage,
     BillingProfile,
     CrmNote,
+    MediaAttachment,
     Schedule,
     ScheduleGroup,
     User,
@@ -115,7 +116,7 @@ def _rotate_sealed(obj, open_fn, seal_fn) -> bool:
 
 
 def cmd_rotate_keys(_args) -> None:
-    counts = {"schedules": 0, "groups": 0, "automation_messages": 0, "billing": 0, "crm_notes": 0}
+    counts = {"schedules": 0, "groups": 0, "automation_messages": 0, "media": 0, "billing": 0, "crm_notes": 0}
     with Session(get_engine()) as db:
         for s in db.exec(select(Schedule)).all():
             changed = _rotate_sealed(s, privacy.schedule_message, privacy.seal_schedule_message)
@@ -140,6 +141,10 @@ def cmd_rotate_keys(_args) -> None:
             if _rotate_sealed(m, privacy.automation_message, privacy.seal_automation_message):
                 db.add(m)
                 counts["automation_messages"] += 1
+        for m in db.exec(select(MediaAttachment).where(col(MediaAttachment.storage_key).is_not(None))).all():
+            if media.rotate_file(m):
+                db.add(m)
+                counts["media"] += 1
         for b in db.exec(select(BillingProfile)).all():
             changed = False
             for field in ("full_name", "cpf", "phone", "postal_code", "address", "address_number", "address_complement", "city"):
@@ -187,6 +192,17 @@ def cmd_privacy_report(_args) -> None:
                 select(func.count()).select_from(Schedule)
                 .where(~retention.schedule_active_clause())
                 .where(col(Schedule.message_ciphertext).is_not(None))
+            ),
+            "anexos guardados (cifrados)": count(
+                select(func.count()).select_from(MediaAttachment).where(col(MediaAttachment.storage_key).is_not(None))
+            ),
+            "anexos de mensagens encerradas ainda guardados (deveria ser 0, salvo os dos últimos minutos)": count(
+                select(func.count()).select_from(MediaAttachment)
+                .where(col(MediaAttachment.storage_key).is_not(None))
+                .where(col(MediaAttachment.id).in_(select(Schedule.media_id).where(col(Schedule.media_id).is_not(None))))
+                .where(col(MediaAttachment.id).not_in(
+                    select(Schedule.media_id).where(col(Schedule.media_id).is_not(None)).where(retention.schedule_active_clause())
+                ))
             ),
             "destinatários cifrados (agendamentos)": count(
                 select(func.count()).select_from(ScheduleGroup).where(col(ScheduleGroup.recipient_encrypted).is_not(None))
