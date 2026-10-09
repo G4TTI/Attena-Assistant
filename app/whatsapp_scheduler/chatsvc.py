@@ -44,11 +44,22 @@ def _cache_for(session: str) -> dict:
     return _chat_cache.setdefault(session, {"at": 0.0, "data": []})
 
 
-def _fmt_ts(ts: int) -> str:
+def cached_chat_name(session: str, chat_id: str) -> str | None:
+    """Nome do contato na lista de conversas JÁ em cache (nunca vai à rede) —
+    usado pra dar um nome legível ao agendamento feito de dentro da conversa.
+    A lista costuma estar quente: a tela de Conversas acabou de carregá-la."""
+    for chat in _cache_for(session)["data"]:
+        if chat["id"] == chat_id:
+            name = (chat.get("name") or "").strip()
+            return name if name and name != chat_id.split("@")[0] else None
+    return None
+
+
+def _fmt_ts(ts: int, tz_name: str) -> str:
     if not ts:
         return ""
-    dt = datetime.fromtimestamp(ts, tz=ZoneInfo(settings.default_timezone))
-    today = datetime.now(tz=ZoneInfo(settings.default_timezone)).date()
+    dt = datetime.fromtimestamp(ts, tz=ZoneInfo(tz_name))
+    today = datetime.now(tz=ZoneInfo(tz_name)).date()
     if dt.date() == today:
         return dt.strftime("%H:%M")
     return dt.strftime("%d/%m %H:%M")
@@ -63,7 +74,7 @@ def _preview(msg: dict) -> str:
     return ""
 
 
-def _normalize_chat(c: dict) -> dict:
+def _normalize_chat(c: dict, tz_name: str) -> dict:
     cid = str(c.get("id") or "")
     last = c.get("lastMessage") or {}
     return {
@@ -73,24 +84,24 @@ def _normalize_chat(c: dict) -> dict:
         "is_group": cid.endswith("@g.us"),
         "last_preview": _preview(last),
         "last_ts": last.get("timestamp") or 0,
-        "last_when": _fmt_ts(last.get("timestamp") or 0),
+        "last_when": _fmt_ts(last.get("timestamp") or 0, tz_name),
         "last_from_me": bool(last.get("fromMe")),
     }
 
 
-async def list_chats(waha: WahaClient, session: str, *, force: bool = False) -> list[dict]:
+async def list_chats(waha: WahaClient, session: str, tz_name: str, *, force: bool = False) -> list[dict]:
     cache = _cache_for(session)
     now = time.monotonic()
     if not force and cache["data"] and now - cache["at"] < settings.chat_list_cache_seconds:
         return cache["data"]
     raw = await waha.get_chats_overview(session, settings.chat_list_limit, timeout=settings.chat_list_timeout)
-    chats = [_normalize_chat(c) for c in raw if c.get("id")]
+    chats = [_normalize_chat(c, tz_name) for c in raw if c.get("id")]
     chats.sort(key=lambda c: c["last_ts"], reverse=True)
     cache.update(at=now, data=chats)
     return chats
 
 
-def _row_to_msg(m: CachedMessage) -> dict:
+def _row_to_msg(m: CachedMessage, tz_name: str) -> dict:
     text = (m.body or "").strip()
     if not text:
         text = _MEDIA_LABEL.get(m.msg_type, "[mídia]" if m.has_media else "")
@@ -98,7 +109,7 @@ def _row_to_msg(m: CachedMessage) -> dict:
         "id": m.message_id,
         "from_me": m.from_me,
         "ts": m.ts,
-        "when": _fmt_ts(m.ts),
+        "when": _fmt_ts(m.ts, tz_name),
         "text": text,
         "type": m.msg_type,
         "is_note": not text and not m.has_media,
@@ -125,7 +136,7 @@ def _cached_rows(db: Session, user_id: str, chat_id: str) -> list[CachedMessage]
 
 
 async def get_history(
-    db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, *, force: bool = False
+    db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, tz_name: str, *, force: bool = False
 ) -> ChatHistory:
     rows = _cached_rows(db, user_id, chat_id)
     last_sync = max((r.synced_at for r in rows), default=None)
@@ -133,7 +144,7 @@ async def get_history(
         (utcnow() - last_sync).total_seconds() < settings.chat_messages_cache_seconds
     )
     if rows and not force and fresh:
-        return ChatHistory([_row_to_msg(r) for r in rows], from_cache=True, synced_at=last_sync)
+        return ChatHistory([_row_to_msg(r, tz_name) for r in rows], from_cache=True, synced_at=last_sync)
 
     try:
         raw = await waha.get_messages(
@@ -146,7 +157,7 @@ async def get_history(
         logger.warning("falha ao buscar histórico de %s: %s", chat_id, exc)
         if rows:
             return ChatHistory(
-                [_row_to_msg(r) for r in rows], from_cache=True, synced_at=last_sync, error=str(exc)
+                [_row_to_msg(r, tz_name) for r in rows], from_cache=True, synced_at=last_sync, error=str(exc)
             )
         return ChatHistory([], from_cache=False, synced_at=None, error=str(exc))
 
@@ -168,7 +179,7 @@ async def get_history(
         db.add(row)
     db.commit()
     rows = _cached_rows(db, user_id, chat_id)
-    return ChatHistory([_row_to_msg(r) for r in rows], from_cache=False, synced_at=now)
+    return ChatHistory([_row_to_msg(r, tz_name) for r in rows], from_cache=False, synced_at=now)
 
 
 async def send_now(db: Session, waha: WahaClient, user_id: str, session: str, chat_id: str, text: str) -> dict:

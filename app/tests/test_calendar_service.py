@@ -20,11 +20,13 @@ from whatsapp_scheduler.models import (
     Event,
     EventAutomation,
     EventSource,
+    EventStatus,
     EventSyncStatus,
     OffsetDirection,
     OffsetUnit,
     Schedule,
 )
+from whatsapp_scheduler.clock import utcnow as _real_utcnow
 from whatsapp_scheduler.service import ValidationError, create_schedule
 
 FROZEN = datetime(2026, 6, 1, 12, 0, 0)
@@ -413,7 +415,7 @@ def test_disconnect_cancels_pending_but_preserves_sent_history(test_user):
 # --------------------------------------------------------------------------- #
 def test_month_grid_always_has_42_cells(frozen_clock, test_user):
     with Session(get_engine()) as db:
-        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9, "America/Sao_Paulo")
     assert len(weeks) == 6
     for week in weeks:
         assert len(week) == 7
@@ -437,7 +439,7 @@ def test_month_grid_places_event_on_correct_local_day(frozen_clock, test_user):
         db.add(event)
         db.commit()
 
-        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9, "America/Sao_Paulo")
 
     day15 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-09-15")
     assert [e.title for e in day15["events"]] == ["Consulta"]
@@ -462,12 +464,157 @@ def test_month_grid_buckets_by_event_own_timezone_not_default(frozen_clock, test
         db.add(event)
         db.commit()
 
-        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9)
+        weeks = calendar_service.month_grid(db, test_user.id, 2026, 9, "America/Sao_Paulo")
 
     day1 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-09-01")
     assert [e.title for e in day1["events"]] == ["Tokyo meeting"]
     aug31 = next(day for week in weeks for day in week if day["date"].isoformat() == "2026-08-31")
     assert aug31["events"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Visão diária (botão "Hoje", v1.3 itens 27-31)
+# --------------------------------------------------------------------------- #
+def test_day_events_returns_only_events_of_that_local_day(frozen_clock, test_user):
+    with Session(get_engine()) as db:
+        same_day = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Reunião",
+            start_utc=datetime(2026, 9, 15, 17, 0), end_utc=datetime(2026, 9, 15, 18, 0),
+            timezone="America/Sao_Paulo",
+        )
+        other_day = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Amanhã",
+            start_utc=datetime(2026, 9, 16, 17, 0), end_utc=datetime(2026, 9, 16, 18, 0),
+            timezone="America/Sao_Paulo",
+        )
+        db.add(same_day)
+        db.add(other_day)
+        db.commit()
+
+        events = calendar_service.day_events(db, test_user.id, date(2026, 9, 15), "America/Sao_Paulo")
+
+    assert [e.title for e in events] == ["Reunião"]
+
+
+def test_day_events_buckets_by_event_own_timezone_not_the_requested_one(frozen_clock, test_user):
+    # Mesmo evento do teste de month_grid acima: 2026-08-31 15:30 UTC cai em
+    # 2026-09-01 na timezone PRÓPRIA do evento (Asia/Tokyo), mesmo pedindo o
+    # dia com outra timezone.
+    with Session(get_engine()) as db:
+        event = Event(
+            user_id=test_user.id, source=EventSource.google, title="Tokyo meeting",
+            start_utc=datetime(2026, 8, 31, 15, 30), end_utc=datetime(2026, 8, 31, 16, 30),
+            timezone="Asia/Tokyo",
+        )
+        db.add(event)
+        db.commit()
+
+        sep1 = calendar_service.day_events(db, test_user.id, date(2026, 9, 1), "America/Sao_Paulo")
+        aug31 = calendar_service.day_events(db, test_user.id, date(2026, 8, 31), "America/Sao_Paulo")
+
+    assert [e.title for e in sep1] == ["Tokyo meeting"]
+    assert aug31 == []
+
+
+def test_day_events_ordered_chronologically(frozen_clock, test_user):
+    with Session(get_engine()) as db:
+        late = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Tarde",
+            start_utc=datetime(2026, 9, 15, 21, 0), end_utc=datetime(2026, 9, 15, 22, 0), timezone="America/Sao_Paulo",
+        )
+        early = Event(
+            user_id=test_user.id, source=EventSource.internal, title="Manhã",
+            start_utc=datetime(2026, 9, 15, 13, 0), end_utc=datetime(2026, 9, 15, 14, 0), timezone="America/Sao_Paulo",
+        )
+        db.add(late)
+        db.add(early)
+        db.commit()
+
+        events = calendar_service.day_events(db, test_user.id, date(2026, 9, 15), "America/Sao_Paulo")
+
+    assert [e.title for e in events] == ["Manhã", "Tarde"]
+
+
+# --------------------------------------------------------------------------- #
+# similar_events — "repetir esta automação" (v1.3)
+#
+# Usa o relógio real (não `frozen_clock`): `calendar_service.py` faz
+# `from .clock import utcnow`, uma referência de nome ligada em tempo de
+# import — o monkeypatch de `frozen_clock` em `whatsapp_scheduler.clock.
+# utcnow` não alcança essa referência já vinculada, então `similar_events`
+# (que usa `now` pra limitar a janela futura) sempre vê o horário real.
+# --------------------------------------------------------------------------- #
+def _make_event(*, user_id: str, title: str, start, status=EventStatus.confirmed, recurring_event_id=None, source=EventSource.internal) -> Event:
+    with Session(get_engine()) as db:
+        event = Event(
+            user_id=user_id, source=source, title=title, start_utc=start, end_utc=start + timedelta(hours=1),
+            timezone="America/Sao_Paulo", status=status, recurring_event_id=recurring_event_id,
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+        return event
+
+
+def test_similar_events_matches_by_recurring_event_id_when_present(test_user):
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula de yoga", start=now + timedelta(days=1), recurring_event_id="series-1", source=EventSource.google)
+    b = _make_event(user_id=test_user.id, title="Aula de yoga", start=now + timedelta(days=8), recurring_event_id="series-1", source=EventSource.google)
+    # mesmo título, série DIFERENTE — não deveria casar quando recurring_event_id existe.
+    _make_event(user_id=test_user.id, title="Aula de yoga", start=now + timedelta(days=15), recurring_event_id="series-2", source=EventSource.google)
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert [e.id for e in matches] == [b.id]
+
+
+def test_similar_events_falls_back_to_title_match_for_internal_events(test_user):
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=1))
+    b = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=8))
+    _make_event(user_id=test_user.id, title="Aula Ana", start=now + timedelta(days=8))
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert [e.id for e in matches] == [b.id]
+
+
+def test_similar_events_excludes_past_and_cancelled(test_user):
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=1))
+    _make_event(user_id=test_user.id, title="Aula Tales", start=now - timedelta(days=8))  # passado
+    _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=8), status=EventStatus.cancelled)
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert matches == []
+
+
+def test_similar_events_never_crosses_users(test_user):
+    with Session(get_engine()) as db:
+        from whatsapp_scheduler.auth import hash_password
+        from whatsapp_scheduler.models import User
+
+        other = User(name="Outro", email="similar-other@example.com", password_hash=hash_password("testpass123"))
+        db.add(other)
+        db.commit()
+        db.refresh(other)
+
+    now = _real_utcnow()
+    a = _make_event(user_id=test_user.id, title="Aula Tales", start=now + timedelta(days=1))
+    _make_event(user_id=other.id, title="Aula Tales", start=now + timedelta(days=8))
+
+    with Session(get_engine()) as db:
+        event_a = db.get(Event, a.id)
+        matches = calendar_service.similar_events(db, event_a, test_user.id)
+
+    assert matches == []
 
 
 # --------------------------------------------------------------------------- #
@@ -853,6 +1000,48 @@ async def test_delete_internal_event_keeps_local_row_when_google_delete_fails(mo
 
     with Session(get_engine()) as db:
         assert db.get(Event, event_id) is not None  # não excluído localmente
+
+
+async def test_delete_internal_event_google_failure_leaves_automations_intact(monkeypatch, fake_google, frozen_clock, test_user):
+    """Bug: as automações eram canceladas e apagadas ANTES da chamada ao
+    Google — se o Google falhasse, o usuário lia "o evento não foi excluído"
+    mas o evento ficava sem as automações."""
+    monkeypatch.setattr(calendar_service, "get_provider", lambda key: fake_google)
+    with Session(get_engine()) as db:
+        _, cal = make_google_calendar(db, test_user.id)
+        event = await calendar_service.create_internal_event(
+            db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=5),
+            end_local=FROZEN + timedelta(hours=6), timezone_name="America/Sao_Paulo",
+            target_calendar_id=cal.id,
+        )
+        event_id = event.id
+        calendar_service.create_event_automation(
+            db, event_id=event_id, user_id=test_user.id, waha_session=test_user.waha_session,
+            recipients=["5511999998888"], messages=["Lembrete"],
+            offset_amount=1, offset_unit="hours", offset_direction="before",
+        )
+
+    fake_google.delete_event_error = CalendarProviderError("500 boom")
+    with Session(get_engine()) as db:
+        with pytest.raises(ValidationError):
+            await calendar_service.delete_internal_event(db, event_id, user_id=test_user.id, also_delete_google=True)
+
+    with Session(get_engine()) as db:
+        assert len(db.exec(select(Automation).where(col(Automation.event_id) == event_id)).all()) == 1
+        assert all(s.enabled for s in db.exec(select(Schedule).where(col(Schedule.user_id) == test_user.id)).all())
+
+
+async def test_create_internal_event_with_unavailable_target_calendar_creates_nothing(test_user):
+    """Bug: o evento era gravado ANTES de validar o calendário de destino —
+    um calendário inválido dava erro na tela mas deixava o evento criado."""
+    with Session(get_engine()) as db:
+        with pytest.raises(ValidationError):
+            await calendar_service.create_internal_event(
+                db, user_id=test_user.id, title="Consulta", start_local=FROZEN + timedelta(hours=2),
+                end_local=FROZEN + timedelta(hours=3), timezone_name="America/Sao_Paulo",
+                target_calendar_id="calendario-que-nao-existe",
+            )
+        assert db.exec(select(Event).where(col(Event.user_id) == test_user.id)).all() == []
 
 
 async def test_delete_internal_event_app_only_leaves_google_event_alone(monkeypatch, fake_google, frozen_clock, test_user):

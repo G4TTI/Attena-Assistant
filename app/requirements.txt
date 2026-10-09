@@ -1,6 +1,6 @@
 fastapi>=0.115,<0.117
 uvicorn[standard]>=0.30,<0.35
-sqlmodel>=0.0.22,<0.1
+sqlmodel>=0.0.22,<=0.0.42  # 0.0.47 exige datetimes com timezone e quebra o scheduler
 httpx>=0.27,<0.29
 croniter>=3.0,<6.0
 phonenumbers>=8.13

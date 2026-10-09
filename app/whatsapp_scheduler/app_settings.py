@@ -16,10 +16,21 @@ from sqlmodel import Session
 
 from .clock import utcnow
 from .config import settings
-from .models import AppSetting
+from .models import AppSetting, User
 from .service import ValidationError
 
 _TIMEZONE_KEY = "default_timezone"
+
+
+def user_timezone(user: User) -> str:
+    """Fuso horário efetivo de UM usuário (v1.3 — Parte 35): `User.timezone`
+    quando o usuário já escolheu o seu (cadastro/onboarding/Preferências);
+    `settings.default_timezone` só serve de fallback pra conta que ainda não
+    escolheu nenhum. Nunca usar `settings.default_timezone` sozinho num
+    request autenticado — isso é o bug corrigido aqui: antes, mudar o fuso em
+    Preferências mudava `settings.default_timezone` (mutável, global do
+    processo) e afetava TODOS os usuários ao mesmo tempo."""
+    return user.timezone or settings.default_timezone
 
 
 def load_from_db(db: Session) -> None:

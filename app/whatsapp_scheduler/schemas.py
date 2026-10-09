@@ -55,6 +55,8 @@ class ScheduleRead(BaseModel):
     enabled: bool
     max_attempts: int
     created_at: datetime
+    group_id: str | None = None
+    position: int = 0
     next_dispatch: DispatchRead | None = None
     dispatches: list[DispatchRead] = []
 
@@ -75,6 +77,8 @@ class ScheduleRead(BaseModel):
             enabled=s.enabled,
             max_attempts=s.max_attempts,
             created_at=s.created_at,
+            group_id=s.group_id,
+            position=s.position,
             next_dispatch=DispatchRead.of(pending[0]) if pending else None,
             dispatches=[DispatchRead.of(d) for d in sorted(dispatches, key=lambda d: d.scheduled_at_utc, reverse=True)],
         )

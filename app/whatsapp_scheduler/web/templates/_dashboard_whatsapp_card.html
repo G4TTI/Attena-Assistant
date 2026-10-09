@@ -1,29 +1,25 @@
-{% set status = (session.status if session else None) %}
+{% set MAX_ROWS = 3 %}
 <div class="dash-status-row">
   <span class="dash-status-name">WhatsApp</span>
-  {% if session_error or status not in ("WORKING",) %}
-    {% if status in ("SCAN_QR_CODE", "STARTING") %}
-    <span class="pill pending">🟡 {{ status }}</span>
-    {% else %}
-    <span class="pill failed_status">🔴 Desconectado</span>
-    {% endif %}
-  {% else %}
-  <span class="pill working">🟢 Conectado</span>
-  {% endif %}
+  <a class="ghost-link" href="/configuracoes?tab=conexoes" style="padding:3px 10px;font-size:12px">gerenciar</a>
 </div>
-{% if status == "WORKING" and session and session.me %}
-<p class="muted" style="margin:4px 0 0">+{{ session.me.id.split('@')[0] }} · WAHA · {{ status }}</p>
-{% elif session_error %}
-<p class="muted" style="margin:4px 0 0">{{ session_error }}</p>
+{% if not whatsapp_rows %}
+<p class="muted" style="margin:4px 0 0">Nenhum WhatsApp conectado.</p>
 {% else %}
-<p class="muted" style="margin:4px 0 0">{{ status or "sessão parada" }}</p>
-{% endif %}
-{% if start_error %}
-<p class="muted" style="color:var(--err);margin:4px 0 0">{{ start_error }}</p>
-{% endif %}
-{% if status != "WORKING" %}
-<button type="button" class="ghost" style="margin-top:10px"
-        hx-post="/ui/dashboard/whatsapp-card/reconnect" hx-target="#dashboard-whatsapp-card" hx-swap="innerHTML">
-  <span class="hide-loading">Reconectar</span><span class="spin">reconectando…</span>
-</button>
+  {% for row in whatsapp_rows[:MAX_ROWS] %}
+  {% set status = (row.status.status if row.status else None) %}
+  <div class="dash-status-row" style="margin-top:4px">
+    <span class="muted" style="font-size:12.5px">{{ row.session.name }}</span>
+    {% if status == "WORKING" %}
+    <span class="pill working">🟢 conectado</span>
+    {% elif status in ("SCAN_QR_CODE", "STARTING") %}
+    <span class="pill pending">🟡 conectando</span>
+    {% else %}
+    <span class="pill failed_status">🔴 desconectado</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if whatsapp_rows|length > MAX_ROWS %}
+  <p class="muted" style="margin:4px 0 0">+{{ whatsapp_rows|length - MAX_ROWS }} outra(s) — veja em WhatsApps.</p>
+  {% endif %}
 {% endif %}

@@ -1,0 +1,16 @@
+{# <option>s do seletor "Enviar através de" com o status ao vivo de cada WhatsApp do usuário. #}
+{% if not options %}
+<option value="" disabled selected>Nenhum WhatsApp conectado</option>
+{% endif %}
+{% for o in options %}
+<option value="{{ o.id }}" data-name="{{ o.name }}" data-level="{{ o.level }}" {{ 'selected' if o.id == chosen }}>
+  {{- {'ok': '🟢', 'warn': '🟡', 'err': '🔴'}.get(o.level, '⚪') }} {{ o.name }}
+  {%- if o.phone %} · {{ o.phone }}{% elif o.level != 'ok' %} · {{ o.status_text }}{% endif -%}
+</option>
+{% endfor %}
+{# Aviso fixo quando não há nenhum WhatsApp pronto (o aviso do selecionado é do JS). #}
+<p id="{{ control }}-hint" class="hint wa-hint {{ 'err' if options and not any_ready }}" hx-swap-oob="true"
+   data-static="{{ '1' if (not options) or (not any_ready) else '' }}" {% if options and any_ready %}hidden{% endif %}>
+  {% if not options %}Nenhum WhatsApp conectado — <a href="/configuracoes?tab=conexoes">conecte um</a> antes de agendar.
+  {% elif not any_ready %}Nenhum dos seus WhatsApps está conectado agora. Reconecte um em <a href="/configuracoes?tab=conexoes">Configurações → Conexões</a> para agendar.{% endif %}
+</p>

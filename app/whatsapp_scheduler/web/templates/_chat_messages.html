@@ -1,3 +1,4 @@
+{% from "_components.html" import status_icon %}
 {% if hist.error and not hist.messages %}
   <div class="alert err">Não consegui buscar o histórico: {{ hist.error }}</div>
 {% elif not hist.messages %}
@@ -9,7 +10,7 @@
   {% for m in hist.messages %}
     <div class="bubble {{ 'me' if m.from_me else 'them' }}">
       <div class="text">{{ m.text or '—' }}</div>
-      <div class="meta">{{ m.when }}</div>
+      <div class="meta">{% if m.id in sent_ids %}<span class="from-schedule" title="Enviada por um agendamento">{{ status_icon('check', 11) }} agendada</span>{% endif %}{{ m.when }}</div>
     </div>
   {% endfor %}
   <div class="muted" style="text-align:center;margin-top:6px">

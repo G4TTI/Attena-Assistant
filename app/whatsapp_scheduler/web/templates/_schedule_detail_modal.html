@@ -1,0 +1,73 @@
+{% from "_components.html" import icon, status_icon %}
+{% set phone = g.group.chat_id.split('@')[0] %}
+<div class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <h2>Agendamento</h2>
+        <p class="detail-when">{{ g.when_local.strftime('%d/%m/%Y') }} às {{ g.when_local.strftime('%H:%M') }}</p>
+        <p class="sub">Fuso horário: {{ tz_label }}</p>
+      </div>
+      <button type="button" class="icon-btn ghost sm" aria-label="Fechar" onclick="closeModal()">{{ icon('x', 13) }}</button>
+    </div>
+    <div class="modal-bd">
+      {% if notice %}<div class="alert err" style="margin-bottom:14px">{{ notice }}</div>{% endif %}
+
+      <div class="detail-block">
+        <h3 class="section-label">Destinatário</h3>
+        <div><strong>{{ g.recipient }}</strong>{% if g.group.chat_id.endswith('@g.us') %} <span class="muted">· grupo</span>{% elif phone.isdigit() and g.recipient != '+' ~ phone %} <span class="muted">· +{{ phone }}</span>{% endif %}</div>
+      </div>
+
+      <div class="detail-block">
+        <h3 class="section-label">WhatsApp</h3>
+        <div>{{ g.whatsapp_label }}</div>
+      </div>
+
+      <div class="detail-block">
+        <h3 class="section-label">Mensagens</h3>
+        <ol class="msg-detail-list">
+          {% for m in g.messages %}
+          <li>
+            <span class="msg-num">{{ loop.index }}</span>
+            <span class="msg-text">{{ m.text }}</span>
+            <div class="msg-meta">
+              <span class="st {{ m.status }}">{{ status_icon(m.status, 12) }} {{ m.label }}</span>
+              <span>{{ m.when_local.strftime('%d/%m/%Y · %H:%M:%S') }}</span>
+              {% if m.error and m.status in ('failed', 'skipped', 'scheduled') %}<span class="msg-err">{{ m.error }}</span>{% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+
+      {% if g.recurrence %}
+      <div class="detail-block">
+        <h3 class="section-label">Recorrência</h3>
+        <code>{{ g.recurrence }}</code>
+      </div>
+      {% endif %}
+
+      <div class="detail-block">
+        <h3 class="section-label">Status</h3>
+        <span class="pill {{ g.pill }}">{{ g.label }}</span>
+      </div>
+    </div>
+    <div class="modal-ft spread">
+      <div>
+        {% if g.can_cancel %}
+        <button type="button" class="danger" hx-post="/ui/schedules/{{ g.id }}/cancel" hx-target="#modal-root" hx-swap="innerHTML"
+                hx-confirm="Cancelar este agendamento? As mensagens que ainda não foram enviadas não serão enviadas.">Cancelar</button>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        {% if g.is_open %}
+        <button type="button" class="ghost" title="Enviar agora (teste)"
+                hx-post="/ui/schedules/{{ g.id }}/run-now" hx-target="#modal-root" hx-swap="innerHTML">Enviar agora</button>
+        {% endif %}
+        {% if g.editable %}
+        <button type="button" hx-get="/ui/schedules/{{ g.id }}/edit" hx-target="#modal-root">{{ icon('edit', 14) }} Editar</button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

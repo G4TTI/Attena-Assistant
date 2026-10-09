@@ -67,6 +67,12 @@ def hash_token(raw_token: str) -> str:
 
 
 def client_ip(request: Request) -> str | None:
+    if settings.client_ip_header:
+        forwarded = request.headers.get(settings.client_ip_header, "")
+        # X-Forwarded-For pode trazer "cliente, proxy1, proxy2": o primeiro é o visitante.
+        first = forwarded.split(",")[0].strip()[:64]
+        if first:
+            return first
     return request.client.host if request.client else None
 
 
@@ -182,7 +188,9 @@ def get_current_user_optional(request: Request, db: Session = Depends(get_sessio
 def require_user_web(request: Request, db: Session = Depends(get_session)) -> User:
     user = get_current_user_optional(request, db)
     if user is None:
-        raise NotAuthenticated(next_path=request.url.path)
+        # Mantém a query string: o callback OAuth depende de ?code=&state= depois do login.
+        next_path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        raise NotAuthenticated(next_path=next_path)
     return user
 
 

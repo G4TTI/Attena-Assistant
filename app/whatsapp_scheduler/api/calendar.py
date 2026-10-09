@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from .. import auth, calendar_service
+from .. import app_settings, auth, calendar_service, timing, whatsapp_service
 from ..calendar_schemas import AutomationRead, CalendarRead, ConnectionRead, EventRead
 from ..db import get_session
 from ..models import User
@@ -82,22 +82,34 @@ def create_automation(
     offset_amount: int = Body(...),
     offset_unit: str = Body(...),
     offset_direction: str = Body(...),
+    whatsapp_session_id: str = Body(...),
+    custom_interval: str | None = Body(None),
     timezone_name: str | None = Body(None),
     db: Session = Depends(get_session),
     current_user: User = Depends(auth.require_user_api),
 ) -> AutomationRead:
+    wa_session = whatsapp_service.get_session(db, whatsapp_session_id, current_user.id)
+    if wa_session is None:
+        raise HTTPException(status_code=422, detail="WhatsApp inválido ou de outro usuário.")
     try:
+        # `custom_interval` ("1:45") = Intervalo "Personalizado": vira minutos
+        # pela mesma regra do formulário (`timing.build_offset_rule`).
+        if custom_interval:
+            rule = timing.build_offset_rule(offset_direction, timing.CUSTOM_INTERVAL_VALUE, custom_interval)
+            offset_amount, offset_unit = rule.amount, rule.unit
         automation = calendar_service.create_event_automation(
             db,
             event_id=event_id,
             user_id=current_user.id,
-            waha_session=current_user.waha_session,
+            waha_session=wa_session.session_name,
             recipients=recipients,
             messages=messages,
             offset_amount=offset_amount,
             offset_unit=offset_unit,
             offset_direction=offset_direction,
-            timezone_name=timezone_name,
+            custom_interval=custom_interval,
+            # Sempre o fuso do usuário (o mesmo de todas as telas), salvo pedido explícito.
+            timezone_name=timezone_name or app_settings.user_timezone(current_user),
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

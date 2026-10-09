@@ -5,9 +5,7 @@
             hx-target="#calendar-grid" hx-swap="outerHTML" hx-push-url="/calendario?year={{ prev_year }}&month={{ prev_month }}">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
     </button>
-    <button type="button" class="ghost"
-            hx-get="/ui/calendario/grid?year={{ today_year }}&month={{ today_month }}"
-            hx-target="#calendar-grid" hx-swap="outerHTML" hx-push-url="/calendario?year={{ today_year }}&month={{ today_month }}">Hoje</button>
+    <a class="ghost-link" href="/calendario/dia?date={{ today_date }}">Hoje</a>
     <button type="button" class="icon-btn ghost" title="Próximo mês"
             hx-get="/ui/calendario/grid?year={{ next_year }}&month={{ next_month }}"
             hx-target="#calendar-grid" hx-swap="outerHTML" hx-push-url="/calendario?year={{ next_year }}&month={{ next_month }}">

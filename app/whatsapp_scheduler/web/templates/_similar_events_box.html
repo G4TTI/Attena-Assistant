@@ -1,0 +1,7 @@
+<div class="repeat-box"
+     hx-get="/ui/calendario/events/{{ event.id }}/similar-events?repeat_choice=sim&search=1"
+     hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+  <span class="spinner-row" style="margin-top:0">
+    <span class="spinner-dot"></span> Buscando quando este evento se repete…
+  </span>
+</div>

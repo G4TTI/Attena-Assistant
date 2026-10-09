@@ -1,0 +1,24 @@
+{% from "_components.html" import icon %}
+<div class="modal-backdrop">
+  <div class="modal modal-lg">
+    <div class="modal-hd">
+      <div>
+        <h2>Editar agendamento</h2>
+        <p class="sub">Só é possível editar antes de o envio começar.</p>
+      </div>
+      <button type="button" class="icon-btn ghost sm" aria-label="Fechar" onclick="closeModal()">{{ icon('x', 13) }}</button>
+    </div>
+    <form class="schedule-form" id="schedule-edit-form" data-recipient-label="{{ form.recipient_label }}"
+          hx-post="{{ form.action }}" hx-target="{{ form.target }}" hx-swap="{{ form.swap }}"
+          oninput="updateFormSummary(this)" onchange="updateFormSummary(this)">
+      <div class="modal-bd schedule-form">
+        {% include "_schedule_fields.html" %}
+      </div>
+      <div class="modal-ft">
+        <button type="button" class="ghost" onclick="closeModal()">Voltar</button>
+        <button type="submit" hx-disabled-elt="this">Salvar alterações</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>initScheduleForm(document.getElementById('schedule-edit-form'));</script>

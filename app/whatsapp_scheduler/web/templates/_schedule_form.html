@@ -1,0 +1,17 @@
+{% from "_components.html" import icon %}
+<div class="card form-card" id="schedule-form-wrap">
+  <div class="card-hd">
+    {{ icon('plus', 16) }}
+    <h2>Novo agendamento</h2>
+  </div>
+  <form class="schedule-form" hx-post="{{ form.action }}" hx-target="{{ form.target }}" hx-swap="{{ form.swap }}"
+        oninput="updateFormSummary(this)" onchange="updateFormSummary(this)">
+    <div class="card-bd schedule-form">
+      {% include "_schedule_fields.html" %}
+    </div>
+    <div class="card-ft" style="justify-content:flex-end">
+      <button type="submit" hx-disabled-elt="this">Agendar</button>
+    </div>
+  </form>
+</div>
+<script>(function(){var f=document.querySelector('#schedule-form-wrap form');function go(){initScheduleForm(f);}if(typeof initScheduleForm==='function')go();else document.addEventListener('DOMContentLoaded',go);})();</script>

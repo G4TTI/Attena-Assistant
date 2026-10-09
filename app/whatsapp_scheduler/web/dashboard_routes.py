@@ -14,13 +14,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session
 
-from .. import auth, calendar_service, dashboard_service
-from ..config import settings
+from .. import app_settings, auth, calendar_service, dashboard_service, whatsapp_service
 from ..db import get_session
 from ..models import Event, User
 from ..recurrence import utc_to_local
-from ..waha import WahaError
-from .routes import _session_ctx, templates
+from .routes import templates
 
 router = APIRouter(tags=["ui-dashboard"])
 
@@ -37,23 +35,22 @@ def _format_date_long_pt(d: date) -> str:
     return f"{d.day} de {_MONTHS_PT_LOWER[d.month - 1]} de {d.year}"
 
 
-def _greeting_name(session: dict | None) -> str | None:
-    """Primeiro nome do perfil do WhatsApp conectado (session.me.pushName) —
-    dado real da sessão WAHA, não um nome fixo."""
-    if not isinstance(session, dict):
-        return None
-    me = session.get("me")
-    if not isinstance(me, dict):
-        return None
-    push_name = me.get("pushName")
-    if not isinstance(push_name, str) or not push_name.strip():
-        return None
-    return push_name.strip().split(" ")[0]
+def _greeting_name(whatsapp_rows: list[dict]) -> str | None:
+    """Primeiro nome do perfil da primeira conexão WhatsApp conectada
+    (session.me.pushName) — dado real da sessão WAHA, não um nome fixo."""
+    for row in whatsapp_rows:
+        info = row.get("status")
+        if not isinstance(info, dict):
+            continue
+        me = info.get("me")
+        push_name = me.get("pushName") if isinstance(me, dict) else None
+        if isinstance(push_name, str) and push_name.strip():
+            return push_name.strip().split(" ")[0]
+    return None
 
 
 def _event_row(event: Event) -> dict:
-    tz = event.timezone or settings.default_timezone
-    local = utc_to_local(event.start_utc, tz)
+    local = utc_to_local(event.start_utc, event.timezone)
     return {"event": event, "local": local, "year": local.year, "month": local.month}
 
 
@@ -63,12 +60,13 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
     30s (`/ui/dashboard/summary`), pra status refletir o estado atual sem
     precisar de um mecanismo de push separado."""
     user_id = current_user.id
-    today = dashboard_service.today_local_date()
-    today_events = dashboard_service.today_events(db, user_id, today=today)
+    tz_name = app_settings.user_timezone(current_user)
+    today = dashboard_service.today_local_date(tz_name)
+    today_events = dashboard_service.today_events(db, user_id, tz_name, today=today)
     scheduled = dashboard_service.scheduled_dispatches(db, user_id)
-    sent_today = dashboard_service.sent_count_on(db, user_id, today)
-    sent_yesterday = dashboard_service.sent_count_on(db, user_id, today - timedelta(days=1))
-    failed_today = dashboard_service.failed_count_on(db, user_id, today)
+    sent_today = dashboard_service.sent_count_on(db, user_id, today, tz_name)
+    sent_yesterday = dashboard_service.sent_count_on(db, user_id, today - timedelta(days=1), tz_name)
+    failed_today = dashboard_service.failed_count_on(db, user_id, today, tz_name)
     next_dispatch = scheduled[0] if scheduled else None
     next_upcoming = dashboard_service.upcoming_events(db, user_id, limit=1)
 
@@ -81,20 +79,23 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
         "today_events_upcoming_count": dashboard_service.upcoming_today_count(today_events),
         "scheduled_count": len(scheduled),
         "next_dispatch_local": (
-            utc_to_local(next_dispatch.scheduled_at_utc, settings.default_timezone) if next_dispatch else None
+            utc_to_local(next_dispatch.scheduled_at_utc, tz_name) if next_dispatch else None
         ),
         "sent_today_count": sent_today,
         "sent_change_pct": sent_change_pct,
         "failed_today_count": failed_today,
         "upcoming_events": [_event_row(e) for e in dashboard_service.upcoming_events(db, user_id, limit=5)],
-        "upcoming_dispatches": dashboard_service.upcoming_dispatch_rows(db, user_id, limit=5),
+        "upcoming_dispatches": dashboard_service.upcoming_dispatch_rows(db, user_id, limit=5, tz_name=tz_name),
         "recent_activity": dashboard_service.recent_activity(db, user_id, limit=6),
         "today_date": today.isoformat(),
         "cal_year": today.year,
         "cal_month": today.month,
         "next_event_for_automation": _event_row(next_upcoming[0]) if next_upcoming else None,
         "connection": dashboard_service.primary_calendar_connection(db, user_id),
-        **(await _session_ctx(request, current_user)),
+        "whatsapp_rows": await whatsapp_service.status_rows(
+            request.app.state.waha, whatsapp_service.list_sessions(db, user_id)
+        ),
+        "is_new_user": not dashboard_service.has_any_activity(db, user_id),
     }
 
 
@@ -102,15 +103,14 @@ async def _summary_ctx(request: Request, db: Session, current_user: User) -> dic
 async def page_dashboard(
     request: Request, db: Session = Depends(get_session), current_user: User = Depends(auth.require_user_web)
 ) -> HTMLResponse:
-    today = dashboard_service.today_local_date()
+    today = dashboard_service.today_local_date(app_settings.user_timezone(current_user))
     summary = await _summary_ctx(request, db, current_user)
     ctx = {
         "request": request,
         "nav": "dashboard",
-        "waha_session": current_user.waha_session,
         "current_user": current_user,
         "today_label": _format_date_long_pt(today),
-        "greeting_name": _greeting_name(summary.get("session")),
+        "greeting_name": _greeting_name(summary.get("whatsapp_rows", [])),
         **summary,
     }
     return templates.TemplateResponse("dashboard.html", ctx)
@@ -122,21 +122,6 @@ async def ui_dashboard_summary(
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         "_dashboard_summary.html", {"request": request, **(await _summary_ctx(request, db, current_user))}
-    )
-
-
-@router.post("/ui/dashboard/whatsapp-card/reconnect", response_class=HTMLResponse)
-async def ui_dashboard_whatsapp_reconnect(
-    request: Request, current_user: User = Depends(auth.require_user_web)
-) -> HTMLResponse:
-    start_error = None
-    try:
-        await request.app.state.waha.restart_session(current_user.waha_session)
-    except WahaError as exc:
-        start_error = str(exc)
-    return templates.TemplateResponse(
-        "_dashboard_whatsapp_card.html",
-        {"request": request, "start_error": start_error, **(await _session_ctx(request, current_user))},
     )
 
 

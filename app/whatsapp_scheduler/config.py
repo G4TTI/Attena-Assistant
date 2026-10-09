@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # Tentativas por janela para login/cadastro/esqueci-senha (ver ratelimit.py).
     rate_limit_max_attempts: int = 5
     rate_limit_window_seconds: int = 300
+    # Header com o IP real do visitante quando o app roda atrás de proxy/túnel
+    # (ex.: "CF-Connecting-IP" no Cloudflare). Vazio = usa o IP da conexão TCP.
+    # Só habilite se o app NÃO for alcançável direto de fora — senão qualquer
+    # um forja o header e burla o rate limit. Sem isto, todos os visitantes de
+    # um túnel/Docker parecem o mesmo IP e dividem o mesmo limite de cadastro.
+    client_ip_header: str = ""
 
     # WAHA
     waha_base_url: str = "http://localhost:3000"
