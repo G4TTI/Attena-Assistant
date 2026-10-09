@@ -3,6 +3,16 @@
 Agendador de mensagens de WhatsApp multiusuário (FastAPI + SQLModel/SQLite +
 HTMX) com integração ao Google Agenda. O envio passa pelo WAHA.
 
+## Documentação técnica (about.md)
+
+Siga `docs/DOCUMENTATION_POLICY.md` (vale também para subagentes). Em resumo:
+no início, leia o `about.md` da raiz e abra só os `docs/about/<dominio>/about.md`
+afetados (nada é carregado automaticamente); confira a revisão-base de cada
+documento e confirme no código o que importar; o código é evidência do que está
+implementado, não do que é desejado. Ao concluir uma mudança funcional, atualize
+só os domínios impactados e regenere o inventário
+(`python3 -I docs/about/build_inventory.py`). Não diga que testou o que só leu.
+
 ## Branches e versões
 
 - O trabalho atual é no branch `feature/v1.4-criptografia` (a partir de
