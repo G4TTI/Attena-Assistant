@@ -432,13 +432,13 @@ async def _send_one(waha: WahaClient, dispatch_id: str) -> bool:
                 d.status = DispatchStatus.pending
                 d.scheduled_at_utc = now + timedelta(seconds=delay)
                 logger.warning(
-                    "dispatch %s falhou (tentativa %d/%d, %s), retry em %ds",
-                    dispatch_id, d.attempts, max_attempts, code, delay,
+                    "dispatch %s falhou (tentativa %d/%d, %s), retry em %ds — %s",
+                    dispatch_id, d.attempts, max_attempts, code, delay, err,
                 )
             else:
                 d.status = DispatchStatus.failed
                 _end_if_one_shot(db, d.schedule_id, now)
-                logger.error("dispatch %s falhou definitivamente (%d tentativas, %s)", dispatch_id, d.attempts, code)
+                logger.error("dispatch %s falhou definitivamente (%d tentativas, %s) — %s", dispatch_id, d.attempts, code, err)
         d.updated_at = now
         db.add(d)
         db.commit()

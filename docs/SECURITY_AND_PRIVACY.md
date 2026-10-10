@@ -177,7 +177,8 @@ Roda no boot e a cada `PRIVACY_CLEANUP_SECONDS` (padrão 1 h), e pelo CLI
 
 ## 8. WAHA — o que ele guarda (limitação real, não escondida)
 
-Versão em uso no teste: **WAHA 2026.8.2 CORE, engine WEBJS**. Volume: `./waha/sessions`.
+Versão em uso no teste: **WAHA 2026.9.2 CORE (imagem `chrome-2026.9.2`, Google Chrome), engine
+WEBJS** desde 2026-10-10 (antes: 2026.8.2 com Chromium). Volume: `./waha/sessions`.
 
 1. **O que persiste no volume:** `waha.sqlite3` (configuração das sessões) e, por
    sessão, o **perfil completo do Chromium do WhatsApp Web** (`session-<nome>/Default`):
@@ -205,12 +206,16 @@ Mitigações aplicadas na v1.4:
   (credenciais e perfil local saem do volume);
 - rotação de logs do Docker (10 MB × 3) nos dois containers.
 
-**Envio de mídia:** o WAHA Core 2026.8 envia foto, PDF e áudio (convertido para
-mensagem de voz OGG/Opus pelo ffmpeg dele) em qualquer engine. **Vídeo no WEBJS exige a
-imagem `devlikeapro/waha:chrome`** (o Chromium da imagem padrão não tem os codecs);
-sem ela o Attena manda o vídeo como documento — a mensagem não se perde, mas o
-destinatário baixa em vez de assistir no balão. Para vídeo "de verdade", use
-`WAHA_IMAGE=devlikeapro/waha:chrome` no `.env`.
+**Envio de mídia:** exige **WAHA ≥ 2026.9.1** no engine WEBJS. Desde uma atualização do
+WhatsApp Web (17/09/2026), versões anteriores falham em TODA mídia com HTTP 500 "Data
+passed to getter must include an id property" (texto continua funcionando). Com a
+2026.9.x o WAHA envia foto, PDF e áudio (convertido para mensagem de voz OGG/Opus
+pelo ffmpeg dele). **Vídeo no WEBJS exige a variante `:chrome`** (o Chromium da imagem
+padrão não tem os codecs); sem ela o Attena manda o vídeo como documento — a mensagem
+não se perde, mas o destinatário baixa em vez de assistir no balão. Recomendado:
+`WAHA_IMAGE=devlikeapro/waha:chrome-2026.9.2` (ou mais nova) no `.env`. Quando o WAHA
+recusa um envio, `dispatches.last_error` guarda o motivo curto que ele deu (só o campo
+de erro, sanitizado — o 500 do WAHA ecoa o pedido inteiro, e isso nunca é gravado).
 
 Recomendações: trate `./waha/sessions` e a `WAHA_API_KEY` como segredos de produção;
 não inclua `waha/sessions` em backups externos sem criptografia; avalie NOWEB (sem

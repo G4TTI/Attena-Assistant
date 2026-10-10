@@ -18,11 +18,35 @@ from .config import settings
 
 class WahaError(RuntimeError):
     """Falha ao falar com o WAHA. `status_code` só vem preenchido quando o
-    WAHA chegou a responder (HTTP >= 400) — erro de conexão/timeout fica `None`."""
+    WAHA chegou a responder (HTTP >= 400) — erro de conexão/timeout fica `None`.
+    `reason`: o motivo curto que o WAHA deu (ver `_error_reason`), ou vazio."""
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(self, message: str, status_code: int | None = None, reason: str = "") -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.reason = reason
+
+
+_REASON_MAX = 160
+
+
+def _error_reason(resp: httpx.Response) -> str:
+    """Só a 1ª linha do campo de erro da resposta (`exception.message`,
+    `message` ou `error`). O 500 do WAHA ecoa o corpo inteiro do pedido —
+    destinatário, legenda e o arquivo em base64 — e isso nunca entra aqui."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    exc = data.get("exception")
+    text = exc.get("message") if isinstance(exc, dict) else (data.get("message") or data.get("error"))
+    if isinstance(text, list):
+        text = "; ".join(str(item) for item in text)
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    return " ".join(text.strip().splitlines()[0].split())[:_REASON_MAX]
 
 
 def extract_message_id(payload: Any) -> str | None:
@@ -39,7 +63,7 @@ def extract_message_id(payload: Any) -> str | None:
 
 def _video_unsupported(exc: WahaError) -> bool:
     """O WAHA recusou o vídeo por limitação do engine/navegador (não por erro do pedido)."""
-    text = str(exc).lower()
+    text = (exc.reason or str(exc)).lower()
     return exc.status_code in (422, 501) and ("chrome" in text or "not implemented" in text)
 
 
@@ -65,13 +89,15 @@ class WahaClient:
         except httpx.HTTPError as exc:
             raise WahaError(f"Falha de conexão com o WAHA: {exc}") from exc
         if resp.status_code >= 400:
-            # Só para a tela do próprio usuário: nunca é gravado (o scheduler
-            # guarda só um código + texto genérico, ver failures.py) e o log
-            # passa pelo log_sanitizer.
-            body = resp.text[:200]
+            # Mensagem para a tela do próprio usuário e para o log (que passa
+            # pelo log_sanitizer). Resposta JSON: só o motivo, nunca o corpo
+            # (o 500 do WAHA traz o pedido inteiro de volta).
+            reason = _error_reason(resp)
+            detail = reason or ("" if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:200])
             raise WahaError(
-                f"WAHA respondeu {resp.status_code} em {method} {url.split('?')[0]}: {body}",
+                f"WAHA respondeu {resp.status_code} em {method} {url.split('?')[0]}: {detail}",
                 status_code=resp.status_code,
+                reason=reason,
             )
         return resp
 

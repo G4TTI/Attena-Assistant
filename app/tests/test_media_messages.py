@@ -505,6 +505,61 @@ def test_waha_other_video_errors_are_not_masked():
         asyncio.run(_waha_with(handler).send_media("s", CHAT, kind="video", mimetype="video/mp4", filename="v", data=b"v"))
 
 
+def test_waha_500_keeps_only_the_reason_never_the_echoed_request():
+    """O 500 do WAHA devolve o pedido inteiro (destinatário, legenda, arquivo em
+    base64). O erro guarda só o motivo — que é o que permite diagnosticar."""
+    from whatsapp_scheduler import failures
+    from whatsapp_scheduler.waha import WahaError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={
+            "statusCode": 500,
+            "exception": {"message": "Data passed to getter must include an id property\ns (https://static.whatsapp.net/x.js:85)",
+                          "name": "Error", "stack": "Error: ...\n at ..."},
+            "request": {"body": json.loads(request.content)},
+        })
+
+    with pytest.raises(WahaError) as caught:
+        asyncio.run(_waha_with(handler).send_media(
+            "s", CHAT, kind="image", mimetype="image/jpeg", filename="f.jpg", data=JPEG, caption="legenda SEGREDO"))
+    exc = caught.value
+    assert exc.status_code == 500 and exc.reason == "Data passed to getter must include an id property"
+    code, message = failures.classify_waha_error(exc)
+    assert code == failures.WAHA_SERVER_ERROR
+    assert message == "O WAHA respondeu com erro interno (HTTP 500). Motivo: Data passed to getter must include an id property"
+    for leaked in ("SEGREDO", CHAT.split("@")[0], base64.b64encode(JPEG).decode()[:40]):
+        assert leaked not in str(exc) and leaked not in message
+
+
+def test_waha_reason_of_a_rejection_is_sanitized():
+    from whatsapp_scheduler import failures
+    from whatsapp_scheduler.waha import WahaError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"message": ["chatId 5514991110001@c.us inválido"], "error": "Bad Request"})
+
+    with pytest.raises(WahaError) as caught:
+        asyncio.run(_waha_with(handler).send_text("s", CHAT, "oi"))
+    code, message = failures.classify_waha_error(caught.value)
+    assert code == failures.WAHA_REJECTED and "inválido" in message and "5514991110001" not in message
+
+
+def test_failed_media_send_records_the_reason(client, no_grace):
+    from whatsapp_scheduler.waha import WahaError
+
+    give_plan(client.user.id, "pro")
+    media_id = upload(client, JPEG, "foto.jpg").json()["id"]
+    schedule_form(client, messages=["oi"], media_ids=[media_id])
+    client.waha.send_error = WahaError("WAHA respondeu 500", status_code=500, reason="Data passed to getter must include an id property")
+    run_now_and_tick(client)
+    from whatsapp_scheduler.models import Dispatch
+
+    with Session(get_engine()) as db:
+        dispatch = db.exec(select(Dispatch)).first()
+    assert dispatch.failure_code == "waha_server_error"
+    assert dispatch.last_error.endswith("Motivo: Data passed to getter must include an id property")
+
+
 def test_sniff_signatures():
     assert media.sniff(JPEG[:16]) == (MediaKind.image, "image/jpeg")
     assert media.sniff(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) == (MediaKind.image, "image/png")

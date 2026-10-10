@@ -3,7 +3,9 @@
 `Dispatch.last_error` é visto pelo dono da mensagem e (só o código + este texto)
 pelo admin na visão de saúde operacional. Por isso nunca guarda o corpo de uma
 resposta do WAHA (pode ecoar o chatId ou o texto enviado), telefone, token ou
-qualquer outro dado da conversa.
+qualquer outro dado da conversa. Do WAHA entra só o MOTIVO curto que ele deu
+(`WahaError.reason`: a 1ª linha do campo de erro, nunca o corpo ecoado), já
+sanitizado — sem ele, "HTTP 500" sozinho não diz o que corrigir.
 """
 
 from __future__ import annotations
@@ -57,6 +59,10 @@ def classify_waha_error(exc: Exception) -> tuple[str, str]:
         return UNKNOWN, "Erro inesperado ao enviar."
     if status is None:
         return WAHA_UNREACHABLE, "Não foi possível falar com o WAHA (conexão ou tempo esgotado)."
+    reason = redact(getattr(exc, "reason", "") or "")
+    suffix = f" Motivo: {reason}" if reason else ""
     if status >= 500:
-        return WAHA_SERVER_ERROR, f"O WAHA respondeu com erro interno (HTTP {status})."
-    return WAHA_REJECTED, f"O WAHA recusou o envio (HTTP {status}). Verifique o número/chat e a conexão."
+        return WAHA_SERVER_ERROR, sanitize(f"O WAHA respondeu com erro interno (HTTP {status}).{suffix}") or ""
+    return WAHA_REJECTED, sanitize(
+        f"O WAHA recusou o envio (HTTP {status}). Verifique o número/chat e a conexão.{suffix}"
+    ) or ""

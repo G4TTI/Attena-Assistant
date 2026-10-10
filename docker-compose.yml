@@ -1,8 +1,10 @@
 services:
   waha:
-    # Fixe a versão em produção (ex.: WAHA_IMAGE=devlikeapro/waha:latest-2026.8.2):
+    # Fixe a versão em produção (ex.: WAHA_IMAGE=devlikeapro/waha:chrome-2026.9.2):
     # antes da 2026.6.1 o WAHA só aceitava a sessão "default" e nenhum usuário
-    # novo (session_name u_<hex>) conseguia conectar.
+    # novo (session_name u_<hex>) conseguia conectar; antes da 2026.9.1 o engine
+    # WEBJS não enviava NENHUMA mídia (erro "Data passed to getter must include an
+    # id property"). A variante ":chrome" é a que envia vídeo no WEBJS.
     image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
     container_name: ${WAHA_CONTAINER_NAME:-waha-scheduler}
     restart: unless-stopped
