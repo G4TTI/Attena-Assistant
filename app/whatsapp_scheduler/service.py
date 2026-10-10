@@ -657,13 +657,17 @@ def update_sequence(
     db.add(group)
     db.flush()
     _chain_dependencies(db, schedules)
-    # Anexo tirado (ou trocado) na edição: se nenhuma outra mensagem ativa o usa, some já.
-    for media_id in old_media - {item.media_id for item in items}:
+    db.commit()
+    # Anexo tirado (ou trocado) na edição: se nenhuma outra mensagem ativa o usa,
+    # some já — depois do commit, pra um rollback nunca deixar mensagem sem arquivo.
+    dropped = old_media - {item.media_id for item in items}
+    for media_id in dropped:
         row = db.get(MediaAttachment, media_id)
         if row is not None and row.storage_key and not retention.media_in_use(db, media_id):
             retention.purge_media(row, now)
             db.add(row)
-    db.commit()
+    if dropped:
+        db.commit()
 
     for schedule in schedules:
         db.refresh(schedule)

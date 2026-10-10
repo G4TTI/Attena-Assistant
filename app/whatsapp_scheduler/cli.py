@@ -141,9 +141,12 @@ def cmd_rotate_keys(_args) -> None:
             if _rotate_sealed(m, privacy.automation_message, privacy.seal_automation_message):
                 db.add(m)
                 counts["automation_messages"] += 1
+        old_media_files: list[str] = []
         for m in db.exec(select(MediaAttachment).where(col(MediaAttachment.storage_key).is_not(None))).all():
-            if media.rotate_file(m):
+            old_key = media.rotate_file(m)
+            if old_key:
                 db.add(m)
+                old_media_files.append(old_key)
                 counts["media"] += 1
         for b in db.exec(select(BillingProfile)).all():
             changed = False
@@ -163,6 +166,8 @@ def cmd_rotate_keys(_args) -> None:
                 db.add(n)
                 counts["crm_notes"] += 1
         db.commit()
+        for key in old_media_files:  # só depois do commit (ver media.rotate_file)
+            media.delete_file(key)
     print("recifrado com a versão", privacy.active_key_version(), counts)
 
 

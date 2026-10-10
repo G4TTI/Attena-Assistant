@@ -230,7 +230,9 @@ class WahaClient:
         - vídeo que não é MP4 também é convertido;
         - o engine WEBJS só manda vídeo na imagem `devlikeapro/waha:chrome`
           (o Chromium da imagem padrão não tem os codecs). Nesse caso o vídeo
-          sai como DOCUMENTO — a mensagem não se perde, o destinatário baixa e assiste.
+          sai como DOCUMENTO — a mensagem não se perde, o destinatário baixa e assiste;
+        - WEBJS anterior ao WAHA 2026.9.1 falha em TODA mídia (HTTP 500 "Data
+          passed to getter must include an id property") — exige versão nova.
         """
         body: dict[str, Any] = {
             "session": session,

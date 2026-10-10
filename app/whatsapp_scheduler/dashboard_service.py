@@ -18,6 +18,7 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from . import calendar_service, privacy, whatsapp_service
+from .media import KIND_LABELS as MEDIA_KIND_LABELS
 from .clock import utcnow
 from .models import (
     Automation,
@@ -27,6 +28,8 @@ from .models import (
     Event,
     EventSource,
     EventStatus,
+    MediaAttachment,
+    MediaKind,
     OPEN_STATUSES,
     Schedule,
     ScheduleGroup,
@@ -135,6 +138,11 @@ def _group_info(db: Session, schedule: Schedule) -> tuple[int, str]:
     return int(count or 1), (info.display if info is not None else "—")
 
 
+def _media_label(db: Session, schedule: Schedule) -> str | None:
+    attachment = db.get(MediaAttachment, schedule.media_id) if schedule.media_id else None
+    return MEDIA_KIND_LABELS[MediaKind(attachment.kind)] if attachment is not None else None
+
+
 def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5, tz_name: str | None = None) -> list[dict]:
     """`tz_name`: fuso do USUÁRIO — o horário mostrado é sempre nele (o mesmo
     das outras telas), não no fuso guardado em cada schedule."""
@@ -150,6 +158,8 @@ def upcoming_dispatch_rows(db: Session, user_id: str, *, limit: int = 5, tz_name
                 "dispatch": dispatch,
                 "schedule": schedule,
                 "text": privacy.schedule_message(schedule, safe=True),
+                # Mensagem com anexo: só o tipo ("Foto", "PDF"...), nunca o nome do arquivo.
+                "media_label": _media_label(db, schedule),
                 "recipient": recipient,
                 "send_local": utc_to_local(dispatch.scheduled_at_utc, tz_name or schedule.timezone),
                 "message_count": message_count,

@@ -544,12 +544,12 @@ async def ui_media_upload(
         return _media_error("Escolha um arquivo.", 400)
     chunks: list[bytes] = []
     total = 0
-    while chunk := await upload.read(1024 * 1024):
-        total += len(chunk)
-        if total > settings.media_max_bytes:
-            return _media_error(f"O arquivo passa do limite de {media.max_size_label()}.", 413)
-        chunks.append(chunk)
     try:
+        while chunk := await upload.read(1024 * 1024):
+            total += len(chunk)
+            if total > settings.media_max_bytes:
+                return _media_error(f"O arquivo passa do limite de {media.max_size_label()}.", 413)
+            chunks.append(chunk)
         row = await asyncio.to_thread(
             media.store_upload, db, current_user, data=b"".join(chunks), filename=upload.filename or "",
             declared_type=upload.content_type or "",

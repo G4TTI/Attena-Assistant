@@ -560,6 +560,56 @@ def test_failed_media_send_records_the_reason(client, no_grace):
     assert dispatch.last_error.endswith("Motivo: Data passed to getter must include an id property")
 
 
+def test_dashboard_shows_the_attachment_type_of_a_media_only_message(client):
+    give_plan(client.user.id, "pro")
+    media_id = upload(client, PDF, "laudo-secreto.pdf").json()["id"]
+    schedule_form(client, messages=[""], media_ids=[media_id], when=utcnow() - timedelta(hours=3) + timedelta(hours=2))
+    page = client.get("/ui/dashboard/summary").text
+    assert ">PDF</span>" in page and "laudo-secreto" not in page  # só o tipo, nunca o nome do arquivo
+
+
+# --------------------------------------------------------------------------- #
+# Rotação de chave (cli rotate-keys)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def add_key_version(monkeypatch):
+    """Chama-se no meio do teste: a partir daí a chave ativa é a versão 2."""
+    from whatsapp_scheduler import privacy
+
+    def activate() -> None:
+        monkeypatch.setattr(settings, "data_encryption_keys", f"{settings.data_encryption_keys},2:{privacy.generate_key()}")
+        privacy.reset_key_cache()
+
+    yield activate
+    monkeypatch.undo()
+    privacy.reset_key_cache()
+
+
+def test_rotate_keys_reencrypts_attachments_without_overwriting_before_commit(client, add_key_version):
+    from whatsapp_scheduler import cli, privacy
+
+    give_plan(client.user.id, "pro")
+    media_id = upload(client, JPEG, "foto-rotacao.jpg").json()["id"]
+    old_key = media_row(media_id).storage_key
+    add_key_version()
+    assert media_row(media_id).encryption_key_version == 1 and privacy.active_key_version() == 2
+
+    # rotate_file grava o arquivo novo em OUTRO nome e não toca no antigo (só se apaga depois do commit).
+    with Session(get_engine()) as db:
+        row = db.get(MediaAttachment, media_id)
+        returned = media.rotate_file(row)
+        assert returned == old_key and row.storage_key != old_key
+        assert (media.media_root() / old_key).exists() and (media.media_root() / row.storage_key).exists()
+        db.rollback()  # commit "falhou": a linha continua batendo com o arquivo antigo
+    assert media.load_bytes(media_row(media_id)) == JPEG
+
+    cli.cmd_rotate_keys(None)
+    row = media_row(media_id)
+    assert row.encryption_key_version == 2 and row.storage_key != old_key
+    assert media.load_bytes(row) == JPEG and privacy.media_filename(row) == "foto-rotacao.jpg"
+    assert not (media.media_root() / old_key).exists()
+
+
 def test_sniff_signatures():
     assert media.sniff(JPEG[:16]) == (MediaKind.image, "image/jpeg")
     assert media.sniff(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8) == (MediaKind.image, "image/png")

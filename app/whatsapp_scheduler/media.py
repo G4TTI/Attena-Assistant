@@ -24,6 +24,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import exists, func
 from sqlmodel import Session, col, select
@@ -180,16 +181,23 @@ def load_bytes(media: MediaAttachment) -> bytes:
     return privacy.open_media_file(media, ciphertext)
 
 
-def rotate_file(media: MediaAttachment) -> bool:
-    """Recifra arquivo + nome com a chave ativa (`cli rotate-keys`)."""
+def rotate_file(media: MediaAttachment) -> str | None:
+    """Recifra arquivo + nome com a chave ativa (`cli rotate-keys`). O arquivo
+    novo vai para OUTRO nome e a linha passa a apontar para ele; devolve o nome
+    antigo, que quem chamou só apaga DEPOIS do commit. Assim, se o commit
+    falhar, a linha continua batendo com o arquivo antigo (o novo vira órfão e
+    o privacy_cleanup o remove) — nunca fica um nonce que não abre o arquivo."""
     if not media.storage_key or media.encryption_key_version == privacy.active_key_version():
-        return False
+        return None
     data = load_bytes(media)
     name = privacy.media_filename(media)
-    _write(media.storage_key, privacy.seal_media_file(media, data))
+    old_key = media.storage_key
+    new_key = f"{media.id}.{uuid4().hex[:8]}.bin"
+    _write(new_key, privacy.seal_media_file(media, data))
+    media.storage_key = new_key
     if name is not None:
         privacy.seal_media_filename(media, name)
-    return True
+    return old_key
 
 
 # --------------------------------------------------------------------------- #
