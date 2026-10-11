@@ -15,8 +15,8 @@ só os domínios impactados e regenere o inventário
 
 ## Branches e versões
 
-- O trabalho atual é no branch `feature/v1.4-criptografia` (a partir de
-  `feature/v1.3-multiusuario`, tags `1.3.x`).
+- O trabalho atual é no branch `feature/v1.5-midia` (a partir de
+  `feature/v1.4-criptografia`, tag `1.4-criptografia`); a release 1.5 é a tag `1.5`.
 - O `main` está parado na alfa 1.2 e **não** reflete a versão atual.
 - A versão aparece em `app/whatsapp_scheduler/main.py` (`FastAPI(version=...)`)
   e `app/pyproject.toml`; suba as duas juntas.

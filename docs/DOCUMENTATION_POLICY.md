@@ -10,8 +10,8 @@ tarefa afeta sem tratar documento como prova de comportamento.
 |---|---|
 | [`about.md`](../about.md) (raiz) | Índice curto: base revisada, estado de cada domínio, arquivos compartilhados e divergências conhecidas. |
 | `docs/about/<dominio>/about.md` | Um documento por domínio (15 na estrutura inicial). Formato em [`MODELO-about.md`](about/MODELO-about.md). |
-| [`docs/about/build_inventory.py`](about/build_inventory.py) | Gera `INVENTARIO.json` e `ROTAS.md` por análise estática (AST/texto) dos blobs do Git; não importa nem executa o app. |
-| [`docs/about/INVENTARIO.json`](about/INVENTARIO.json), [`docs/about/ROTAS.md`](about/ROTAS.md) | Saídas geradas: arquivos, funções/métodos, classes, rotas, templates e testes de uma revisão. Não editar à mão. |
+| [`docs/about/build_inventory.py`](about/build_inventory.py) | Gera `INVENTARIO.json`, `ROTAS.md` e os anexos `<dominio>/INVENTARIO.md` por análise estática (AST/texto) dos blobs do Git; não importa nem executa o app. Suas tabelas associam cada arquivo, seção ou símbolo a um domínio, e o script falha se algo ficar sem domínio. Ao criar arquivo ou seção nova, atualize essas tabelas. |
+| [`docs/about/INVENTARIO.json`](about/INVENTARIO.json), [`docs/about/ROTAS.md`](about/ROTAS.md), `docs/about/<dominio>/INVENTARIO.md` | Saídas geradas: arquivos, funções/métodos, classes, tabelas, rotas, templates (HTMX/JS) e testes de uma revisão, com domínio. Não editar à mão. |
 | [`docs/SECURITY_AND_PRIVACY.md`](SECURITY_AND_PRIVACY.md) | Documento normativo de segurança e privacidade. O about.md de privacidade aponta para ele; não o duplica. |
 | [`CLAUDE.md`](../CLAUDE.md) | Notas operacionais e armadilhas, mais o protocolo curto que remete a esta política. |
 
