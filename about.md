@@ -8,14 +8,17 @@ abra só os domínios que a tarefa afeta e confirme no código o que for importa
 ## Base
 
 - Revisão documentada: `ab4ce63a72b8ef1f4cf127a7c5f0ee36b05f4fdc`
-  (`feature/v1.4-criptografia`, 2026-10-09). É um commit **local, ainda sem push**.
-- Release de referência: tag `1.4-criptografia` =
+  (2026-10-09), contida na release 1.5 (tag `1.5`, branch `feature/v1.5-midia`).
+- Release anterior: tag `1.4-criptografia` =
   `ca99e374f3ad2368eb4bd0366ab7fb13a7516d34` (= `origin/feature/v1.4-criptografia`).
 - Diferença `ca99e37..ab4ce63` (1 commit, lido no diff): agendamento de mídia —
   foto/vídeo/áudio/PDF, recurso de plano (`media.py`, tabela `media_attachments`,
   `Schedule.media_id`, migração `2026.10.09-media-messages`, rotas `/ui/media*`,
   `waha.py`, `privacy.py`, `retention.py`, templates e testes). Ver
   [Agendamentos](docs/about/agendamentos/about.md).
+- Depois de `ab4ce63`, até a release 1.5: `de332a0` e `5aa5ec8` (correções do
+  envio de mídia, já registradas em Agendamentos), esta documentação e a versão
+  1.5.0 (`9ea5dce`).
 - `main` e `origin/main` estão 31 commits atrás de `ca99e37` e **não** refletem a
   versão atual.
 
@@ -63,11 +66,15 @@ Cada regra é descrita no domínio dono; os demais apontam para ele.
 ## Inventário estático
 
 Gerado por [`docs/about/build_inventory.py`](docs/about/build_inventory.py) sobre
-`ab4ce63` (AST, sem importar o app): 171 arquivos rastreados, 64 módulos Python
-do app, 835 funções/métodos e 115 classes do app, 30 tabelas SQLModel, 137 rotas
-declaradas (23 em `/api/`), 60 templates com 64 funções JS nomeadas, 32 arquivos
-de teste com 466 funções `test_*`, 0 divergências de integridade. Detalhes em
-[`INVENTARIO.json`](docs/about/INVENTARIO.json) e [`ROTAS.md`](docs/about/ROTAS.md).
+`9ea5dce` (versão 1.5.0; AST, sem importar o app): 192 arquivos rastreados (170
+fora da documentação), 64 módulos Python do app, 837 funções/métodos e 115
+classes do app, 30 tabelas SQLModel, 137 rotas declaradas (23 em `/api/`) mais 4
+rotas automáticas do FastAPI, 60 templates com 64 funções JS nomeadas, 32
+arquivos de teste com 471 funções `test_*`, 0 divergências de integridade. Todo
+item tem domínio (o script falha se faltar). Detalhes em
+[`INVENTARIO.json`](docs/about/INVENTARIO.json), [`ROTAS.md`](docs/about/ROTAS.md)
+e no anexo `INVENTARIO.md` de cada domínio (ex.:
+[agendamentos](docs/about/agendamentos/INVENTARIO.md)).
 
 ## Divergências conhecidas
 
